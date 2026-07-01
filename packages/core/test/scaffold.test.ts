@@ -56,6 +56,7 @@ describe("initBrain", () => {
     expect(attrs).toContain("INDEX.md merge=union");
     const ignore = await fs.readFile(path.join(dir, ".gitignore"), "utf8");
     expect(ignore).toContain("index/");
+    expect(ignore).toContain("staging/"); // per-user review queue, never synced (ADR-0008)
     expect(ignore).toContain("*.db");
     await expect(fs.stat(path.join(dir, "COMMONS.md"))).resolves.toBeDefined();
   });

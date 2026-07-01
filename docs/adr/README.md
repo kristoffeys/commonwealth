@@ -15,6 +15,7 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 | [0005](0005-search-and-embeddings.md)         | Search: SQLite FTS5 now, pluggable embeddings later       | Accepted |
 | [0006](0006-sync-resident-daemon.md)          | Sync architecture: resident daemon                        | Accepted |
 | [0007](0007-curation-review-gate.md)          | Curation & review gate: in-repo staging queue             | Accepted |
+| [0008](0008-curation-locality.md)             | Curation locality: staging is per-user local, canon syncs | Accepted |
 
 ## Process
 
