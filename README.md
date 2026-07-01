@@ -59,8 +59,8 @@ pnpm test           # 127 tests
 ```
 
 > Not yet published to npm — for now the tools run from the built `dist/` in this repo.
-> A `commons init` CLI, published binaries, and auto-provisioning arrive in later
-> milestones (see the roadmap).
+> `commons init` and the plugin's auto-provisioning already work from the built repo;
+> npm-published binaries are a later milestone (see the roadmap).
 
 ### 1. Create a brain
 
