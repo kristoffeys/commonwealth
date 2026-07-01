@@ -6,6 +6,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# vendored plugin runtime (platform-local; rebuild with packages/plugin/scripts/bundle.mjs)
+packages/plugin/vendor/
+
 # test / coverage
 coverage/
 

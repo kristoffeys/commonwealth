@@ -38,12 +38,12 @@ function printUsage(): void {
       "Usage:",
       "  commonwealth init [--brain <dir>] [--yes] [--reseed] [--auto-adr] [--remote <url>]",
       "                    [--sync <dir,dir,...>] [--seed-repo <dir,dir,...>]",
-      "                    [--no-scope] [--no-seed] [--no-mcp] [--no-daemon] [--no-build]",
+      "                    [--no-scope] [--no-seed] [--no-plugin] [--no-daemon] [--no-build]",
       "",
       "`init` is a single idempotent command: it builds the workspace (if needed), creates or",
       "joins the brain, syncs one or more folders into it (allowlist + a global-registry mapping",
-      "with a ~/.commonwealth/brains/<name> symlink), seeds it from one or more repos, registers",
-      "the MCP server, and starts the sync daemon. Run in a",
+      "with a ~/.commonwealth/brains/<name> symlink), seeds it from one or more repos, installs",
+      "the Commonwealth plugin (global MCP + session hooks), and starts the sync daemon. Run in a",
       "terminal without --yes for an interactive wizard that scans for and lets you multi-select",
       "folders/repos; with --yes (or non-interactively) it uses defaults + flags and never prompts.",
       "",
@@ -57,7 +57,7 @@ function printUsage(): void {
       "  --seed-repo <dir,...>  Repos to seed from now (default: the --sync folders)",
       "  --no-scope             Skip adding folders to the capture allowlist",
       "  --no-seed       Create the brain but skip gathering/staging seed candidates",
-      "  --no-mcp        Skip registering the MCP server with the claude CLI",
+      "  --no-plugin     Skip installing the Commonwealth plugin (alias: --no-mcp)",
       "  --no-daemon     Skip starting the sync daemon",
       "  --no-build      Skip the workspace build even if dist artifacts are missing",
       "",
@@ -97,10 +97,18 @@ export async function run(argv: string[]): Promise<number> {
   }
 
   // parseArgs has no native negation; consume --no-* flags first and derive the gates.
-  const negations = ["--no-scope", "--no-seed", "--no-mcp", "--no-daemon", "--no-build"];
+  // `--no-plugin` is the canonical gate; `--no-mcp` is a backward-compatible alias.
+  const negations = [
+    "--no-scope",
+    "--no-seed",
+    "--no-plugin",
+    "--no-mcp",
+    "--no-daemon",
+    "--no-build",
+  ];
   const scope = !rest.includes("--no-scope");
   const seed = !rest.includes("--no-seed");
-  const mcp = !rest.includes("--no-mcp");
+  const plugin = !rest.includes("--no-plugin") && !rest.includes("--no-mcp");
   const daemon = !rest.includes("--no-daemon");
   const build = !rest.includes("--no-build");
   const positional = rest.filter((a) => !negations.includes(a));
@@ -160,7 +168,7 @@ export async function run(argv: string[]): Promise<number> {
         repoRoot,
         scope: true,
         seed: true,
-        mcp: claudePresent,
+        plugin: claudePresent,
         daemon: true,
         autoAdr: false,
       };
@@ -185,7 +193,7 @@ export async function run(argv: string[]): Promise<number> {
         yes: true,
         reseed: values.reseed,
         seed,
-        mcp,
+        plugin,
         daemon,
         build,
         scope,
@@ -203,7 +211,7 @@ export async function run(argv: string[]): Promise<number> {
         `staged=${result.staged} scopedFolders=${result.scopedFolders} ` +
         `mappedFolders=${result.mappedFolders} seededRepos=${result.seededRepos} ` +
         `scope=${result.scope} autoAdr=${result.autoAdr} ` +
-        `remote=${result.remote} mcp=${result.mcp} daemon=${result.daemon} ` +
+        `remote=${result.remote} plugin=${result.plugin} daemon=${result.daemon} ` +
         `scopeConfig=${result.scopeConfigPath}\n`,
     );
     return 0;

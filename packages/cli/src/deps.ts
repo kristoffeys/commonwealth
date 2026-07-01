@@ -154,8 +154,44 @@ function hasExecutable(name: string): boolean {
 }
 
 /**
+ * True if `claude <args>` (a list/plural command) reports an entry named `name`. Prefers the
+ * structured `--json` output (exact `id`/`name`/`plugin` match) so an unrelated entry whose text
+ * merely contains `name` cannot be mistaken for ours; falls back to a whole-word text scan when
+ * `--json` is unavailable. Never throws — an unresolvable claude means "not present".
+ */
+function hasClaudeEntry(args: string[], name: string): boolean {
+  const json = spawnSync("claude", [...args, "--json"], { encoding: "utf8" });
+  if (json.status === 0 && json.stdout) {
+    try {
+      const parsed: unknown = JSON.parse(json.stdout);
+      const rows = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray((parsed as { plugins?: unknown }).plugins)
+          ? (parsed as { plugins: unknown[] }).plugins
+          : [];
+      return rows.some((row) => {
+        if (typeof row !== "object" || row === null) return false;
+        const r = row as { id?: unknown; name?: unknown; plugin?: unknown };
+        return (
+          r.id === name ||
+          r.name === name ||
+          r.plugin === name ||
+          (typeof r.id === "string" && r.id.split("@")[0] === name)
+        );
+      });
+    } catch {
+      // fall through to the text scan
+    }
+  }
+  const text = spawnSync("claude", args, { encoding: "utf8" });
+  const out = `${text.stdout ?? ""}${text.stderr ?? ""}`;
+  return text.status === 0 && new RegExp(`(^|\\s)${name}(\\s|@|$)`, "m").test(out);
+}
+
+/**
  * Wire the real {@link OnboardDeps}: a dist-presence check that triggers `pnpm -r build` + the
- * plugin bundle, `runInit` for the brain core, an idempotent `claude mcp add`, and a detached
+ * plugin bundle, `runInit` for the brain core, an idempotent plugin install via the repo
+ * marketplace (`claude plugin marketplace add` + `claude plugin install`), and a detached
  * sync daemon. Every step degrades to a `skipped` note rather than throwing, so a missing
  * `pnpm`/`claude` never aborts onboarding. Pure orchestration lives in {@link runOnboard}.
  *
@@ -285,33 +321,68 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
     return { set: true };
   };
 
-  const registerMcp = async (
-    brainDir: string,
-  ): Promise<{ registered: boolean; skipped?: string }> => {
+  /**
+   * Install the Commonwealth plugin at USER scope via the repo marketplace (ADR-0012),
+   * replacing the old raw local-scope `claude mcp add`. Steps, all best-effort and
+   * idempotent, NONE throwing:
+   *   a) refresh the vendored plugin bundle (so the plugin's vendor/ is up to date);
+   *   b) `claude plugin marketplace add <repoRoot>` — skipped if a `commonwealth` marketplace
+   *      is already configured (checked via `marketplace list`);
+   *   c) `claude plugin install commonwealth@commonwealth` — skipped if already installed
+   *      (checked via `plugin list`);
+   *   d) remove a STALE raw `commonwealth` MCP registration (`claude mcp remove -s local`) so
+   *      it doesn't shadow the plugin's `commonwealth-brain` server.
+   * The brain is resolved per repo by the plugin + its SessionStart hook, so no brain dir is
+   * pinned here.
+   */
+  const installPlugin = async (): Promise<{ installed: boolean; skipped?: string }> => {
     if (!hasExecutable("claude")) {
-      return { registered: false, skipped: "claude CLI not found" };
+      return { installed: false, skipped: "claude CLI not found" };
     }
-    const get = spawnSync("claude", ["mcp", "get", "commonwealth"], { stdio: "ignore" });
-    if (get.status === 0) return { registered: false, skipped: "already registered" };
 
-    const add = spawnSync(
-      "claude",
-      [
-        "mcp",
-        "add",
-        "commonwealth",
-        "--env",
-        `COMMONWEALTH_BRAIN_DIR=${brainDir}`,
-        "--",
-        "node",
-        distEntry("mcp"),
-      ],
-      { stdio: "inherit" },
-    );
-    if (add.error || add.status !== 0) {
-      return { registered: false, skipped: `claude mcp add failed (code ${add.status ?? "null"})` };
+    // (a) Refresh the vendored bundle so the installed plugin runs the current build.
+    const bundle = path.join(repoRoot, "packages", "plugin", "scripts", "bundle.mjs");
+    if (existsSync(bundle)) {
+      const res = spawnSync("node", [bundle], { cwd: repoRoot, stdio: "inherit" });
+      if (res.status !== 0)
+        log(`Plugin bundle exited with code ${res.status ?? "null"} (ignored).`);
     }
-    return { registered: true };
+
+    // (b) Register the repo as a marketplace unless a `commonwealth` marketplace already exists.
+    if (!hasClaudeEntry(["plugin", "marketplace", "list"], "commonwealth")) {
+      const add = spawnSync("claude", ["plugin", "marketplace", "add", repoRoot], {
+        stdio: "inherit",
+      });
+      if (add.error || add.status !== 0) {
+        return {
+          installed: false,
+          skipped: `claude plugin marketplace add failed (code ${add.status ?? "null"})`,
+        };
+      }
+    }
+
+    // (c) Install the plugin unless it is already installed.
+    if (!hasClaudeEntry(["plugin", "list"], "commonwealth")) {
+      const install = spawnSync(
+        "claude",
+        ["plugin", "install", "commonwealth@commonwealth"],
+        { stdio: "inherit" },
+      );
+      if (install.error || install.status !== 0) {
+        return {
+          installed: false,
+          skipped: `claude plugin install failed (code ${install.status ?? "null"})`,
+        };
+      }
+    }
+
+    // (d) Clean up any stale raw local-scope MCP registration so it can't shadow the plugin.
+    const staleGet = spawnSync("claude", ["mcp", "get", "commonwealth"], { stdio: "ignore" });
+    if (staleGet.status === 0) {
+      spawnSync("claude", ["mcp", "remove", "commonwealth", "-s", "local"], { stdio: "ignore" });
+    }
+
+    return { installed: true };
   };
 
   const startDaemon = async (
@@ -434,7 +505,7 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
     ensureUserConfig,
     setAutoAdr,
     setRemote,
-    registerMcp,
+    installPlugin,
     startDaemon,
     confirm: promptConfirm,
     log,

@@ -35,14 +35,26 @@ Claude Code ──MCP──▶ @commonwealth/mcp ──▶ @commonwealth/core �
 
 ## Install as a Claude Code plugin
 
-The `@commonwealth/plugin` bundles the MCP server + lifecycle hooks, so a session auto-loads
-relevant brain context at start and captures learnings at end — **scope-gated** (personal
-projects excluded) and routed through the review queue.
+The **supported install is the plugin** (ADR-0012). The `@commonwealth/plugin` bundles the MCP
+server + lifecycle hooks and installs at **user scope (global)**, so the `commonwealth-brain`
+tools (`search`/`read`/`remember`/…) and the auto-bridge are available in **every** session —
+not just the directory you installed from. A session auto-loads relevant brain context at start
+and captures learnings at end — **scope-gated** (personal projects excluded) and routed through
+the review queue.
+
+Add this repo as a marketplace, then install the plugin:
 
 ```bash
-node packages/plugin/scripts/bundle.mjs   # vendors the built CLIs into the plugin (self-contained)
-# then add the packages/plugin dir to Claude Code (local plugin dir or a git marketplace)
+claude plugin marketplace add kristoffeys/commonwealth   # or a path/fork/mirror of this repo
+claude plugin install commonwealth@commonwealth
 ```
+
+**Per-repo routing is dynamic.** There is no baked-in brain: the SessionStart hook resolves the
+real session cwd → its brain via the registry (ADR-0011), and the MCP server independently
+resolves its brain via `@commonwealth/core.resolveBrainDir` — so one global install serves every
+repo and each session talks to the right brain. `commonwealth init` performs this install for you
+(and wires the registry mapping); it replaced the old raw local-scope `claude mcp add`, which was
+invisible outside its install dir and pinned one brain.
 
 For a team, an admin auto-provisions it to everyone via Claude Code **managed settings**
 (`extraKnownMarketplaces` + `enabledPlugins`) — see [`packages/plugin/README.md`](packages/plugin/README.md).
@@ -140,16 +152,18 @@ git remote add origin git@github.com:you/my-brain.git
 
 ### 2. Read/write the brain from Claude Code (MCP) (done by `init`)
 
-`init` runs the registration below for you. To do it manually, point the MCP server at
-your brain:
+`init` installs the plugin for you (global, user scope), which registers the
+`commonwealth-brain` MCP server. To do it manually, add the marketplace and install the plugin:
 
 ```bash
-claude mcp add commonwealth \
-  --env COMMONWEALTH_BRAIN_DIR="$HOME/my-brain" \
-  -- node "/path/to/Commonwealth/packages/mcp/dist/index.js"
+claude plugin marketplace add kristoffeys/commonwealth
+claude plugin install commonwealth@commonwealth
 ```
 
-Then, in a Claude Code session, the brain is available through these tools:
+The server resolves its brain per repo via the registry (ADR-0011); to pin one brain for a
+one-off standalone run you can still `export COMMONWEALTH_BRAIN_DIR="$HOME/my-brain"` before
+launching Claude Code (it takes precedence). Then, in a Claude Code session, the brain is
+available through these tools:
 
 | Tool              | What it does                                               |
 | ----------------- | ---------------------------------------------------------- |

@@ -7,7 +7,7 @@ const DEFAULTS: WizardDefaults = {
   repoRoot: "/home/me/projects/thisrepo",
   scope: true,
   seed: true,
-  mcp: true,
+  plugin: true,
   daemon: true,
   autoAdr: false,
 };
@@ -73,7 +73,7 @@ describe("runWizard", () => {
     const { prompter } = fakePrompter({
       texts: ["/my/brain", "/p", ""], // brain, scanDir, remote
       selects: ["all", "1,3"], // sync=all, seed=alpha+gamma
-      confirms: [true, true, false, true], // mcp, daemon, autoAdr, proceed
+      confirms: [true, true, false, true], // plugin, daemon, autoAdr, proceed
     });
     const { deps } = fakeScan(repos);
 
@@ -84,7 +84,7 @@ describe("runWizard", () => {
     expect(outcome.opts?.seedRepos).toEqual(["/p/alpha", "/p/gamma"]);
     expect(outcome.opts?.brain).toBe("/my/brain");
     expect(outcome.opts?.yes).toBe(true);
-    expect(outcome.opts?.mcp).toBe(true);
+    expect(outcome.opts?.plugin).toBe(true);
     expect(outcome.opts?.daemon).toBe(true);
     expect(outcome.opts?.autoAdr).toBe(false);
     expect(outcome.opts?.seed).toBe(true);
@@ -147,7 +147,7 @@ describe("runWizard", () => {
   it("declined final Proceed? -> abort with no opts", async () => {
     const { prompter } = fakePrompter({
       texts: ["/b", "/p", ""],
-      confirms: [true, true, false, false], // mcp, daemon, autoAdr, proceed=false
+      confirms: [true, true, false, false], // plugin, daemon, autoAdr, proceed=false
     });
     const { deps } = fakeScan([]);
     const outcome = await runWizard(DEFAULTS, prompter, deps);
