@@ -6,32 +6,38 @@ on:
   pull_request:
 
 jobs:
-  build:
+  # Runtime + tests on every supported Node (catches version-specific breakage, e.g. a
+  # regex that only newer engines accept). Kept off lint/format, which are version-sensitive.
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  # Lint + Prettier are pinned to one Node version: prettier's markdown-table alignment
+  # depends on unicode-width data that varies across Node versions, so checking on a single
+  # version keeps formatting deterministic for contributors.
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: pnpm/action-setup@v4
-
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
-
-      - name: Install
-        run: pnpm install --frozen-lockfile
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Lint
-        run: pnpm lint
-
-      - name: Format check
-        run: pnpm format:check
-
-      - name: Test
-        run: pnpm test
-
-      - name: Build
-        run: pnpm build
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm format:check
