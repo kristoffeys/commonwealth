@@ -20,6 +20,8 @@ Commons is that layer, made multiplayer:
   acting and writes back what it learns.
 - **Conflict-free by design.** One fact per file with collision-proof names, so
   concurrent writers union-merge instead of clobbering each other.
+- **Secrets never sync.** Credentials (API keys, tokens, private keys, `.env`-style
+  assignments) are detected and blocked at capture and scrubbed pre-commit.
 - **Open source** (Apache-2.0). Distribution and trust wedge in a crowded market.
 
 ## How it fits together

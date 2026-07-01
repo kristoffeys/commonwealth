@@ -1,4 +1,10 @@
-import { isFeatureEnabled, listNotes, type NewNoteInput, type Note } from "@commons/core";
+import {
+  hasSecrets,
+  isFeatureEnabled,
+  listNotes,
+  type NewNoteInput,
+  type Note,
+} from "@commons/core";
 import { listStaged, stageNote } from "./staging.js";
 
 /** Minimum trimmed body length for a candidate to clear the relevance gate. */
@@ -121,6 +127,13 @@ export async function curate(
   const autoAdr = await isFeatureEnabled(brainDir, "autoAdr");
 
   for (const candidate of candidates) {
+    // Secret gate (#16): never stage a candidate carrying a credential. Reject before
+    // assess/dedupe so a secret-bearing note is neither staged nor folded into `existing`.
+    if (hasSecrets(`${candidate.title}\n${candidate.body}`)) {
+      result.rejected.push({ candidate, reason: "contains-secret" });
+      continue;
+    }
+
     // Gate decisions before the normal assess/dedupe path; a dropped decision is not staged
     // and does not count against dedupe (it never enters `existing`).
     if (candidate.kind === "decision" && !autoAdr) {

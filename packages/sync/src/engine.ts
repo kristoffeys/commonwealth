@@ -1,7 +1,7 @@
 import { buildIndex, regenerateDerived } from "@commons/core";
 import { resolveConflictsAsSiblings, type ResolvedConflict } from "./conflict.js";
 import {
-  commitAll,
+  commitAllExceptSecrets,
   conflictedPaths,
   hasRemote,
   isRebasing,
@@ -27,6 +27,11 @@ export interface SyncSummary {
   pushed: boolean;
   /** Same-file conflicts that were resolved as siblings this pass. */
   conflicts: ResolvedConflict[];
+  /**
+   * Repo-relative note paths withheld from the local commit because they contained a
+   * secret (#16). They remain modified/uncommitted in the working tree for the user to fix.
+   */
+  secretsBlocked: string[];
 }
 
 /** Safety valve so a pathological rebase can't spin forever. */
@@ -56,7 +61,12 @@ export class SyncEngine {
     const dir = this.brainDir;
 
     // 1. Commit local changes first, so the rebase replays them onto teammates' work.
-    const committed = await commitAll(dir, "commons: sync local changes");
+    //    Scrub secrets pre-commit (#16): note files carrying a credential are unstaged and
+    //    left uncommitted, so a leaked secret is never committed or pushed.
+    const { committed, secretsBlocked } = await commitAllExceptSecrets(
+      dir,
+      "commons: sync local changes",
+    );
 
     // 2. Pull with rebase; resolve any same-file conflicts as siblings, then finish.
     const remote = await hasRemote(dir);
@@ -85,7 +95,12 @@ export class SyncEngine {
     await regenerateDerived(dir);
 
     // 4. Commit derived changes (COMMONS.md / INDEX.md) if regeneration moved anything.
-    await commitAll(dir, "commons: regenerate derived index");
+    //    Re-scrub: `add -A` here would otherwise re-stage a secret note left in the working
+    //    tree by step 1, so route this commit through the same guard and merge the results.
+    const derived = await commitAllExceptSecrets(dir, "commons: regenerate derived index");
+    for (const p of derived.secretsBlocked) {
+      if (!secretsBlocked.includes(p)) secretsBlocked.push(p);
+    }
 
     // 5. Push only when the branch is actually ahead of its upstream — so an idle poll
     //    doesn't hit the remote every interval, while still pushing commits made outside
@@ -96,6 +111,6 @@ export class SyncEngine {
       pushed = true;
     }
 
-    return { committed, pulled, pushed, conflicts };
+    return { committed, pulled, pushed, conflicts, secretsBlocked };
   }
 }
