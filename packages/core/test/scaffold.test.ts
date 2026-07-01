@@ -98,7 +98,20 @@ describe("initBrain", () => {
   it("leaves an existing .git untouched (a clone keeps its history)", async () => {
     // Simulate a caller that set up its own repo before scaffolding (the sync fixtures do).
     execFileSync("git", ["init", "-q", "-b", "main", dir]);
-    execFileSync("git", ["-c", "user.name=x", "-c", "user.email=x@y", "commit", "--allow-empty", "-qm", "pre-existing"], { cwd: dir });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=x",
+        "-c",
+        "user.email=x@y",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "pre-existing",
+      ],
+      { cwd: dir },
+    );
     await initBrain(dir, { name: "acme-brain" });
     // initBrain did not add a second commit of its own on top of the caller's history.
     const count = execFileSync("git", ["rev-list", "--count", "HEAD"], { cwd: dir })

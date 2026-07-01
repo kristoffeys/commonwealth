@@ -42,15 +42,9 @@ const GITATTRIBUTES = ["COMMONWEALTH.md merge=union", "**/INDEX.md merge=union",
 
 // `staging/` is the per-user review queue — local only, never synced (ADR-0008).
 // `.DS_Store` — macOS drops one into every browsed folder; it must never enter the brain.
-const GITIGNORE = [
-  "index/",
-  "staging/",
-  "*.db",
-  "*.db-shm",
-  "*.db-wal",
-  ".DS_Store",
-  "",
-].join("\n");
+const GITIGNORE = ["index/", "staging/", "*.db", "*.db-shm", "*.db-wal", ".DS_Store", ""].join(
+  "\n",
+);
 
 /**
  * Make `dir` a git repository with an initial scaffold commit, so the brain is operational
@@ -78,9 +72,13 @@ async function initGitRepo(dir: string): Promise<void> {
     } catch {
       identity = ["-c", "user.name=Commonwealth", "-c", "user.email=commonwealth@localhost"];
     }
-    await pexec("git", [...identity, "commit", "-q", "-m", "Initialize Commonwealth brain scaffold"], {
-      cwd: dir,
-    });
+    await pexec(
+      "git",
+      [...identity, "commit", "-q", "-m", "Initialize Commonwealth brain scaffold"],
+      {
+        cwd: dir,
+      },
+    );
   } catch {
     // git missing / too old / commit failed — leave the scaffolded files as-is.
   }
