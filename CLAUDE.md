@@ -26,8 +26,12 @@ AI reads before acting and writes back to. Open source (Apache-2.0). Read `READM
    overwrite. (ADR-0003)
 3. **Prefer create/supersede over in-place edits.** `status` + `superseded_by`, not
    deletion. Git keeps history; superseding keeps the reasoning visible.
-4. **Curation is review-gated.** Auto-captured knowledge is proposed, then approved
-   (PR / review queue) before it becomes canon. Junk must never auto-land.
+4. **Curation is gated, and review-*capable*.** Auto-captured knowledge always passes the
+   scope + dedup + secret gates and is proposed via the `staging/` queue. Whether it then
+   needs manual approval is the per-brain `autoPromote` flag (ADR-0014): **default on** →
+   captured notes promote straight to canon (curation gating still runs; only the manual
+   review step is skipped); set it `false` to require `/commonwealth:promote`. The queue,
+   `promote`/`reject`, and PR-review path all remain.
 
 ## Stack & layout (ADR-0002)
 
