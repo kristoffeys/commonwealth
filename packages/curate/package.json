@@ -1,0 +1,22 @@
+{
+  "name": "@commons/curate",
+  "version": "0.0.0",
+  "description": "Capture, curation engine (dedupe/relevance), in-repo review queue, and relevance selection",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "commons-curate": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@commons/core": "workspace:*"
+  }
+}

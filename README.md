@@ -92,15 +92,29 @@ The daemon commits + pushes on change, pulls on a poll interval, rebuilds the se
 index, and — on a genuine same-file conflict — keeps **both** versions as sibling notes
 (never overwrites) with a conflict record for review.
 
+### 4. Review auto-captured knowledge
+
+Curated notes land in a `staging/` queue (never straight to canon). Review and promote
+them with the `commons-curate` CLI:
+
+```bash
+node /path/to/team-second-brain/packages/curate/dist/index.js list --dir "$HOME/my-brain"
+#   approve <id...> | reject <id...> | approve-all
+```
+
+The curation engine dedupes near-identical notes and drops trivial ones before they
+reach the queue; approval moves a note into canon. (Automatic capture at session end and
+relevance-gated injection at session start arrive with the M4 plugin.)
+
 ## Packages
 
-| Package            | Status | What it is                                                                                              |
-| ------------------ | ------ | ------------------------------------------------------------------------------------------------------- |
-| `@commons/core`    | ✅     | Schema (4 note kinds), atomic note IO, brain scaffold, FTS5 index + derived `COMMONS.md`/`INDEX.md`     |
-| `@commons/mcp`     | ✅     | MCP server exposing a brain to Claude Code (`commons-mcp`)                                              |
-| `@commons/sync`    | ✅     | Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings (`commons-sync`) |
-| Claude Code plugin | ⏳     | Auto-provisioning + lifecycle hooks (roadmap M4)                                                        |
-| Curation agent     | ⏳     | Capture → curate → review → propagate (roadmap M3)                                                      |
+| Package            | Status | What it is                                                                                               |
+| ------------------ | ------ | -------------------------------------------------------------------------------------------------------- |
+| `@commons/core`    | ✅     | Schema (4 note kinds), atomic note IO, brain scaffold, FTS5 index + derived `COMMONS.md`/`INDEX.md`      |
+| `@commons/mcp`     | ✅     | MCP server exposing a brain to Claude Code (`commons-mcp`)                                               |
+| `@commons/sync`    | ✅     | Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings (`commons-sync`)  |
+| `@commons/curate`  | ✅     | Curation engine (dedupe/relevance) + in-repo review queue (`commons-curate`); capture/inject hooks in M4 |
+| Claude Code plugin | ⏳     | Auto-provisioning + lifecycle hooks (roadmap M4)                                                         |
 
 ## Development
 
@@ -128,10 +142,10 @@ Conventions and non-negotiable design principles live in
 
 ## Status
 
-Early build. **M0** (substrate) and **M1** (MCP server) and **M2** (resident sync
-daemon) are done; **M3** (the auto-bridge: capture → curate → review → propagate) is
-next. Dogfood partner: **Antenna** (a potential first user). This repo is itself the
-first brain.
+Early build. **M0** (substrate), **M1** (MCP server), **M2** (resident sync daemon), and
+**M3** (curation engine + in-repo review queue) are done; **M4** (the Claude Code plugin
+— auto-provisioning + the capture/inject lifecycle hooks) is next. Dogfood partner:
+**Antenna** (a potential first user). This repo is itself the first brain.
 
 ## License
 
