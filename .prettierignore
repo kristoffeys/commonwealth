@@ -2,3 +2,9 @@ dist/
 coverage/
 pnpm-lock.yaml
 LICENSE
+
+# Markdown: prettier aligns tables by unicode width, which varies across Node
+# versions and makes emoji tables fail CI nondeterministically. Docs are not
+# prettier-enforced.
+*.md
+**/*.md
