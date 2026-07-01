@@ -4,7 +4,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "**/coverage/**", "**/node_modules/**"],
+    ignores: ["**/dist/**", "**/coverage/**", "**/node_modules/**", "**/vendor/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -14,6 +14,21 @@ export default tseslint.config(
         "warn",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
+    },
+  },
+  {
+    // Plain-ESM Node scripts (plugin hooks + bundle): run under `node` with no build step,
+    // so they need Node's runtime globals (process, Buffer, console, URL, …).
+    files: ["**/*.mjs"],
+    languageOptions: {
+      globals: {
+        process: "readonly",
+        Buffer: "readonly",
+        console: "readonly",
+        URL: "readonly",
+        __dirname: "readonly",
+        __filename: "readonly",
+      },
     },
   },
 );

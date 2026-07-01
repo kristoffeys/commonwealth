@@ -1,0 +1,11 @@
+{
+  "name": "@commons/plugin",
+  "private": true,
+  "version": "0.0.0",
+  "description": "The Commons Claude Code plugin: MCP server registration, lifecycle hooks, brain registry, and /commons commands",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "bundle": "node scripts/bundle.mjs"
+  }
+}
