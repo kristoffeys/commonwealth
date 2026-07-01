@@ -94,6 +94,22 @@ describe("runInit", () => {
     expect(result.brainDir).toBe("/x/brain");
   });
 
+  it("seed=false: creates brain + marker but skips gathering and staging", async () => {
+    const deps = makeDeps({
+      gather: vi.fn(async () => ({ candidates: candidates(3), bySource: ZERO_SOURCE })),
+    });
+
+    const result = await runInit("/repo", { brain: "/b", seed: false }, deps);
+
+    expect(deps.createBrain).toHaveBeenCalledTimes(1);
+    expect(deps.writeMarker).toHaveBeenCalledWith("/repo", "/b");
+    expect(deps.gather).not.toHaveBeenCalled();
+    expect(deps.stage).not.toHaveBeenCalled();
+    expect(result.mode).toBe("skipped");
+    expect(result.staged).toBe(0);
+    expect(result.gathered).toBe(0);
+  });
+
   it("--reseed: ignores an existing brain and takes the NEW path", async () => {
     const one = candidates(1);
     const deps = makeDeps({
