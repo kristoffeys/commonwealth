@@ -1,4 +1,4 @@
-import { listNotes, type NewNoteInput, type Note } from "@commons/core";
+import { isFeatureEnabled, listNotes, type NewNoteInput, type Note } from "@commons/core";
 import { listStaged, stageNote } from "./staging.js";
 
 /** Minimum trimmed body length for a candidate to clear the relevance gate. */
@@ -117,7 +117,17 @@ export async function curate(
 
   const result: CurateResult = { staged: [], rejected: [] };
 
+  // auto-ADR gate (ADR-0009 #33): decisions only flow through when the team has opted in.
+  const autoAdr = await isFeatureEnabled(brainDir, "autoAdr");
+
   for (const candidate of candidates) {
+    // Gate decisions before the normal assess/dedupe path; a dropped decision is not staged
+    // and does not count against dedupe (it never enters `existing`).
+    if (candidate.kind === "decision" && !autoAdr) {
+      result.rejected.push({ candidate, reason: "auto-adr-disabled" });
+      continue;
+    }
+
     const assessment = curator.assess(candidate, existing);
     if (!assessment.accept) {
       result.rejected.push({

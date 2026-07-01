@@ -40,7 +40,7 @@ git clone https://github.com/kristoffeys/team-second-brain.git
 cd team-second-brain
 pnpm install
 pnpm build          # builds @commons/core, @commons/mcp, @commons/sync
-pnpm test           # 66 tests
+pnpm test           # 75 tests
 ```
 
 > Not yet published to npm — for now the tools run from the built `dist/` in this repo.
@@ -132,8 +132,17 @@ Commons has two config layers, deliberately separate:
 | `~/.commons/config.json`       | per-user, per-machine | no                | the folder **scope** allow/deny (above)               |
 | `<brain>/.commons/config.json` | shared with the brain | yes (in the repo) | brain **name**, remotes, and global **feature flags** |
 
-Brain-level feature flags (e.g. an optional `autoAdr` that auto-writes decision records
-into the brain) are on the roadmap (M4).
+Brain-level **feature flags** are toggled with the CLI and sync with the brain:
+
+```bash
+CURATE="node /path/to/team-second-brain/packages/curate/dist/index.js"
+$CURATE feature list --dir "$HOME/my-brain"
+$CURATE feature enable autoAdr --dir "$HOME/my-brain"   # opt in per team
+```
+
+`autoAdr` (default **off**): when on, captured **decisions** are auto-recorded as
+ADR-style `decision` notes in the brain (they still pass the review queue and respect the
+scope filter). When off, decision candidates are dropped.
 
 ## Packages
 

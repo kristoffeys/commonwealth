@@ -6,16 +6,17 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 
 ## Index
 
-| ADR                                           | Title                                                     | Status   |
-| --------------------------------------------- | --------------------------------------------------------- | -------- |
-| [0001](0001-record-architecture-decisions.md) | Record architecture decisions                             | Accepted |
-| [0002](0002-implementation-stack.md)          | Implementation stack: TypeScript + Node + pnpm monorepo   | Accepted |
-| [0003](0003-concurrency-model.md)             | Concurrency: atomic files + union merge + derived indexes | Accepted |
-| [0004](0004-license-apache-2.md)              | License: Apache-2.0                                       | Accepted |
-| [0005](0005-search-and-embeddings.md)         | Search: SQLite FTS5 now, pluggable embeddings later       | Accepted |
-| [0006](0006-sync-resident-daemon.md)          | Sync architecture: resident daemon                        | Accepted |
-| [0007](0007-curation-review-gate.md)          | Curation & review gate: in-repo staging queue             | Accepted |
-| [0008](0008-curation-locality.md)             | Curation locality: staging is per-user local, canon syncs | Accepted |
+| ADR                                           | Title                                                        | Status   |
+| --------------------------------------------- | ------------------------------------------------------------ | -------- |
+| [0001](0001-record-architecture-decisions.md) | Record architecture decisions                                | Accepted |
+| [0002](0002-implementation-stack.md)          | Implementation stack: TypeScript + Node + pnpm monorepo      | Accepted |
+| [0003](0003-concurrency-model.md)             | Concurrency: atomic files + union merge + derived indexes    | Accepted |
+| [0004](0004-license-apache-2.md)              | License: Apache-2.0                                          | Accepted |
+| [0005](0005-search-and-embeddings.md)         | Search: SQLite FTS5 now, pluggable embeddings later          | Accepted |
+| [0006](0006-sync-resident-daemon.md)          | Sync architecture: resident daemon                           | Accepted |
+| [0007](0007-curation-review-gate.md)          | Curation & review gate: in-repo staging queue                | Accepted |
+| [0008](0008-curation-locality.md)             | Curation locality: staging is per-user local, canon syncs    | Accepted |
+| [0009](0009-brain-config-feature-flags.md)    | Brain-level config & feature flags (incl. optional auto-ADR) | Accepted |
 
 ## Process
 
