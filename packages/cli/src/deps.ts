@@ -363,11 +363,9 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
 
     // (c) Install the plugin unless it is already installed.
     if (!hasClaudeEntry(["plugin", "list"], "commonwealth")) {
-      const install = spawnSync(
-        "claude",
-        ["plugin", "install", "commonwealth@commonwealth"],
-        { stdio: "inherit" },
-      );
+      const install = spawnSync("claude", ["plugin", "install", "commonwealth@commonwealth"], {
+        stdio: "inherit",
+      });
       if (install.error || install.status !== 0) {
         return {
           installed: false,
