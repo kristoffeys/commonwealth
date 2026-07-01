@@ -28,8 +28,7 @@ Two payoffs:
 
 ## Who it's for
 
-Small, project-based teams (our shape: **Antenna**, ~dozens of people, many concurrent
-client/product projects). Not enterprise-search buyers. Not solo note-takers.
+Small, project-based teams. Not enterprise-search buyers. Not solo note-takers.
 
 ## The competitive landscape (2026)
 
