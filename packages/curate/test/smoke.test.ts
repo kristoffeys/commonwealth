@@ -81,4 +81,60 @@ describe("built binary", () => {
     });
     expect(out.toString().trim()).toBe("in-scope");
   });
+
+  it("resolves the brain via the registry when run without --dir from a mapped cwd (#69)", async () => {
+    // realpath: on macOS `/var` → `/private/var`, and the resolver compares resolved (not
+    // symlink-followed) paths, so the registry prefix must match the cwd the process reports.
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-reg-")),
+    );
+    const brain = path.join(root, "team-brain");
+    const project = path.join(root, "work", "app");
+    await fs.mkdir(project, { recursive: true });
+    const registry = path.join(root, "registry.json");
+    await fs.writeFile(
+      registry,
+      JSON.stringify({ mappings: [{ prefix: path.join(root, "work"), brain }] }),
+    );
+    // Override the registry; ensure no explicit brain env leaks in from the outer process.
+    const env = { ...process.env, COMMONWEALTH_REGISTRY: registry };
+    delete env.COMMONWEALTH_BRAIN_DIR;
+
+    // Stage a note into the brain explicitly, so `list` has something to find.
+    execFileSync(
+      "node",
+      // prettier-ignore
+      [distEntry, "stage", "--dir", brain, "--kind", "memory", "--title", "Registry-resolved fact", "--body", "proves the CLI hit the mapped brain, not the cwd"],
+      { cwd: repoRoot, env, stdio: "pipe" },
+    );
+
+    // From the mapped project dir, `list` with NO --dir must resolve the brain via the registry.
+    const out = execFileSync("node", [distEntry, "list"], {
+      cwd: project,
+      env,
+      stdio: "pipe",
+    }).toString();
+    expect(out).toContain("Registry-resolved fact");
+
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("errors clearly (exit 1) when no brain is configured for the cwd (#69)", async () => {
+    const plain = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-nobrain-"));
+    const env = { ...process.env, COMMONWEALTH_REGISTRY: path.join(plain, "registry.json") };
+    delete env.COMMONWEALTH_BRAIN_DIR;
+
+    let stderr = "";
+    let failed = false;
+    try {
+      execFileSync("node", [distEntry, "list"], { cwd: plain, env, stdio: "pipe" });
+    } catch (err) {
+      failed = true;
+      stderr = String((err as { stderr?: Buffer }).stderr ?? "");
+    }
+    expect(failed).toBe(true);
+    expect(stderr).toContain("no Commonwealth brain configured");
+
+    await fs.rm(plain, { recursive: true, force: true });
+  });
 });

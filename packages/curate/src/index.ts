@@ -1,3 +1,4 @@
+import path from "node:path";
 import { promises as fs } from "node:fs";
 import { parseArgs } from "node:util";
 import {
@@ -6,6 +7,7 @@ import {
   type NewNoteInput,
   NOTE_KINDS,
   type NoteKind,
+  resolveBrainDir,
   setFeature,
 } from "@commonwealth/core";
 import { captureCandidates } from "./capture.js";
@@ -16,10 +18,29 @@ import { approve, approveAll, listPending, reject } from "./review.js";
 import { addAllow, addDeny, isInScope, loadUserConfig } from "./scope.js";
 
 /**
- * Resolve the brain directory: an explicit `--dir`, else `$COMMONWEALTH_BRAIN_DIR`, else cwd.
+ * Resolve the brain directory for a `cwd`, or `null` when none is configured (#69). Order:
+ * an explicit `--dir` → `$COMMONWEALTH_BRAIN_DIR` → `@commonwealth/core`'s registry resolver
+ * against `cwd` (marker → ancestor-brain → user registry). Unlike the old resolver this
+ * consults the registry, so the CLI hits the SAME brain the MCP server and hooks do rather
+ * than silently operating on the current directory.
  */
-function resolveDir(explicit: string | undefined): string {
-  return explicit ?? process.env.COMMONWEALTH_BRAIN_DIR ?? process.cwd();
+async function resolveDir(
+  explicit: string | undefined,
+  cwd = process.cwd(),
+): Promise<string | null> {
+  if (explicit && explicit.length > 0) return path.resolve(explicit);
+  const env = process.env.COMMONWEALTH_BRAIN_DIR;
+  if (env && env.length > 0) return path.resolve(env);
+  return resolveBrainDir(cwd);
+}
+
+/** Message + exit when a brain-requiring command finds no brain for `cwd` (#69). */
+function noBrain(cwd: string): never {
+  console.error(
+    `[commonwealth-curate] no Commonwealth brain configured for ${cwd} — run \`commonwealth init\` ` +
+      `here, add a prefix → brain mapping to ~/.commonwealth/registry.json, or pass --dir <brain>.`,
+  );
+  process.exit(1);
 }
 
 /** Print usage to stderr. */
@@ -133,7 +154,7 @@ async function cmdStage(dir: string, args: string[]): Promise<void> {
  * `context` — emit relevant team-brain context for the session's cwd (what a SessionStart
  * hook injects). Out-of-scope cwds print nothing and exit 0; diagnostics go to stderr.
  */
-async function cmdContext(dir: string, args: string[]): Promise<void> {
+async function cmdContext(explicitDir: string | undefined, args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
     options: {
@@ -149,6 +170,13 @@ async function cmdContext(dir: string, args: string[]): Promise<void> {
   const config = await loadUserConfig();
   if (!isInScope(cwd, config)) {
     console.error(`[commonwealth-curate] ${cwd} is out of scope; injecting nothing`);
+    return;
+  }
+
+  // Resolve the brain from the session cwd via the registry (#69); no brain → inject nothing.
+  const dir = await resolveDir(explicitDir ?? values.dir, cwd);
+  if (dir === null) {
+    console.error(`[commonwealth-curate] no brain for ${cwd}; injecting nothing`);
     return;
   }
 
@@ -185,7 +213,7 @@ async function readStdin(): Promise<string> {
  * in scope. Out-of-scope cwds (personal projects) are silently skipped (exit 0, no stdout).
  * Candidates come from `--from <json-file>` or STDIN.
  */
-async function cmdCapture(dir: string, args: string[]): Promise<void> {
+async function cmdCapture(explicitDir: string | undefined, args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
     options: {
@@ -206,6 +234,13 @@ async function cmdCapture(dir: string, args: string[]): Promise<void> {
       console.error(`[commonwealth-curate] ${cwd} is out of scope; capturing nothing`);
       return;
     }
+  }
+
+  // Resolve the brain from the session cwd via the registry (#69); no brain → capture nothing.
+  const dir = await resolveDir(explicitDir ?? values.dir, cwd);
+  if (dir === null) {
+    console.error(`[commonwealth-curate] no brain for ${cwd}; capturing nothing`);
+    return;
   }
 
   const raw =
@@ -331,36 +366,41 @@ async function main(): Promise<void> {
     // Leave unknown options (e.g. stage's --kind) for the subcommand parser.
     strict: false,
   });
-  const dir = resolveDir(typeof values.dir === "string" ? values.dir : undefined);
+  const explicitDir = typeof values.dir === "string" ? values.dir : undefined;
+  // Brain-requiring commands resolve from the process cwd via the registry; a missing brain is
+  // a clear error rather than a silent fall-through to cwd (#69). `context`/`capture` resolve
+  // from their own `--cwd` (the session dir), and `scope` needs no brain at all.
+  const requireBrain = async (): Promise<string> =>
+    (await resolveDir(explicitDir)) ?? noBrain(process.cwd());
 
   switch (command) {
     case "list":
-      await cmdList(dir);
+      await cmdList(await requireBrain());
       break;
     case "approve":
-      await cmdApprove(dir, positionals);
+      await cmdApprove(await requireBrain(), positionals);
       break;
     case "reject":
-      await cmdReject(dir, positionals);
+      await cmdReject(await requireBrain(), positionals);
       break;
     case "approve-all":
-      await cmdApproveAll(dir);
+      await cmdApproveAll(await requireBrain());
       break;
     case "stage":
       // stage owns its own flags; re-parse the original rest (minus --dir handled above).
-      await cmdStage(dir, rest);
+      await cmdStage(await requireBrain(), rest);
       break;
     case "context":
-      await cmdContext(dir, rest);
+      await cmdContext(explicitDir, rest);
       break;
     case "capture":
-      await cmdCapture(dir, rest);
+      await cmdCapture(explicitDir, rest);
       break;
     case "scope":
       await cmdScope(rest);
       break;
     case "feature":
-      await cmdFeature(dir, rest);
+      await cmdFeature(await requireBrain(), rest);
       break;
     default:
       usage();
