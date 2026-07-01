@@ -10,7 +10,8 @@ Approve one or more **staged** notes into the brain's canonical folders (ADR-000
 is the review gate: staged notes never become canon until promoted. Approved notes are
 written as fresh atomic files and are what actually syncs to the team (ADR-0008).
 
-The brain is resolved from `COMMONWEALTH_BRAIN_DIR` (set by the plugin registry) or cwd.
+The brain is resolved from `COMMONWEALTH_BRAIN_DIR`, else the global registry mapping for the
+current directory (#69).
 
 If the user supplied note ids in `$ARGUMENTS`, approve them:
 

@@ -9,8 +9,8 @@ allowed-tools: Bash
 Manually capture a piece of knowledge into the team brain's **staging review queue**
 (ADR-0007). It is _staged_, not canon — someone approves it later with `/commonwealth promote`.
 
-The note kind defaults to `memory`. The brain is resolved from `COMMONWEALTH_BRAIN_DIR` (set by
-the Commonwealth plugin's registry) or the current directory.
+The note kind defaults to `memory`. The brain is resolved from `COMMONWEALTH_BRAIN_DIR`, else the
+global registry mapping for the current directory (#69).
 
 Stage the following into the brain, choosing an appropriate short title and, if it is a
 clear decision, using `--kind decision` (only staged if the team enabled the `autoAdr`

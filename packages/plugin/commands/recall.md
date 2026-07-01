@@ -10,7 +10,8 @@ Surface relevant knowledge from the team brain for the current work. This is the
 relevance-gated selection the SessionStart hook injects automatically — use it to pull
 context on demand (optionally narrowed by a query).
 
-The brain is resolved from `COMMONWEALTH_BRAIN_DIR` (set by the plugin registry) or cwd. The
+The brain is resolved from `COMMONWEALTH_BRAIN_DIR`, else the global registry mapping for the
+directory passed via `--cwd` (#69). The
 per-user scope filter (ADR-0008) still applies: out-of-scope directories return nothing.
 
 Run the vendored curate CLI's `context` command. If the user gave a query, pass it:

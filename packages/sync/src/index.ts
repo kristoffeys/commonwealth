@@ -1,5 +1,6 @@
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { resolveBrainDir } from "@commonwealth/core";
 import { Daemon, isRunning, readPid } from "./daemon.js";
 import { SyncEngine } from "./engine.js";
 
@@ -10,14 +11,21 @@ import { SyncEngine } from "./engine.js";
  *   status [--dir DIR]                 report whether a daemon is running
  *   stop   [--dir DIR]                 signal a running daemon to exit
  *
- * DIR defaults to $COMMONWEALTH_BRAIN_DIR, else the current working directory. This file
- * carries NO shebang — tsup's banner adds exactly one at build time.
+ * DIR resolves as: `--dir` → `$COMMONWEALTH_BRAIN_DIR` → `@commonwealth/core`'s registry
+ * resolver against the cwd (marker → ancestor-brain → user registry, #69) → `null`. This
+ * file carries NO shebang — tsup's banner adds exactly one at build time.
  */
 
-/** Resolve the brain dir from --dir, else $COMMONWEALTH_BRAIN_DIR, else cwd. */
-function resolveDir(dirFlag: string | undefined): string {
-  const dir = dirFlag ?? process.env.COMMONWEALTH_BRAIN_DIR ?? process.cwd();
-  return path.resolve(dir);
+/**
+ * Resolve the brain dir for the cwd, or `null` when none is configured (#69). Consulting the
+ * registry (not just cwd) means `commonwealth-sync status` reports on the brain the working
+ * directory actually maps to — the same one the MCP server and hooks use.
+ */
+async function resolveDir(dirFlag: string | undefined): Promise<string | null> {
+  if (dirFlag && dirFlag.length > 0) return path.resolve(dirFlag);
+  const env = process.env.COMMONWEALTH_BRAIN_DIR;
+  if (env && env.length > 0) return path.resolve(env);
+  return resolveBrainDir(process.cwd());
 }
 
 async function cmdSync(dir: string): Promise<void> {
@@ -83,7 +91,14 @@ async function main(): Promise<void> {
   });
 
   const sub = positionals[0];
-  const dir = resolveDir(values.dir);
+  const dir = await resolveDir(values.dir);
+  if (dir === null) {
+    console.error(
+      `[commonwealth-sync] no Commonwealth brain configured for ${process.cwd()} — run ` +
+        `\`commonwealth init\` here, add a registry mapping, or pass --dir <brain>.`,
+    );
+    process.exit(1);
+  }
   const interval = values.interval ? Number.parseInt(values.interval, 10) : undefined;
 
   switch (sub) {
