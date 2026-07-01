@@ -73,15 +73,27 @@ node /path/to/Commonwealth/packages/cli/dist/index.js init
 2. **Creates** a brain for this project (or **joins** the one it already belongs to) and
    **seeds** it from your repo's existing knowledge — git history, ADRs, and agent config
    (`CLAUDE.md` / `.cursorrules` / `AGENTS.md`) — into the review queue.
-3. **Registers** the MCP server with the `claude` CLI, pointed at the new brain.
-4. **Starts** the sync daemon for the brain (detached).
+3. **Adds** this folder to the capture allowlist so agents can capture from it.
+4. **Registers** the MCP server with the `claude` CLI, pointed at the new brain.
+5. **Starts** the sync daemon for the brain (detached).
 
-It prints the plan first and asks once for confirmation. Common flags:
+Run in a terminal, `init` is an **interactive wizard**: it asks each choice with a sensible
+default (press Enter to accept) — the brain directory, whether to add this folder to the
+capture allowlist, whether to seed now, whether to register MCP, whether to start the
+daemon, whether to enable auto-ADR, and an optional brain git remote — then a final
+`Proceed?` before making any changes. Declining `Proceed?` prints `Aborted.` and changes
+nothing.
+
+Non-interactively (piped/CI, or with `--yes`) it never prompts: pass `--yes` to run with
+defaults + flags, or the run is a no-op that tells you to re-run in a terminal. Common flags:
 
 ```bash
-init --yes            # non-interactive; skip the plan + seed prompts
+init --yes            # non-interactive; skip the wizard and all prompts (defaults + flags)
 init --brain <dir>    # where to create the brain (default: ~/.commonwealth/brains/<project>)
 init --reseed         # re-seed even if this project already resolves to a brain
+init --auto-adr       # enable auto-ADR capture for the brain
+init --remote <url>   # add <url> as the brain's git origin remote
+init --no-scope       # skip adding this folder to the capture allowlist
 init --no-seed        # create the brain but skip mining/staging candidates
 init --no-mcp         # skip registering the MCP server
 init --no-daemon      # skip starting the sync daemon

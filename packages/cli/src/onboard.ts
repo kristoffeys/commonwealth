@@ -1,9 +1,11 @@
+import { findRepoRoot } from "./init.js";
 import type { InitOptions, InitResult } from "./init.js";
+import type { Prompter } from "./prompt.js";
 
 /**
  * Flags that shape a full `commonwealth init` orchestration. The step gates (`seed`, `mcp`,
- * `daemon`, `build`) default to `true` when omitted; pass `false` to skip that step. This is a
- * type alias (not an interface) so it stays free of empty-interface lint noise.
+ * `daemon`, `build`, `scope`) default to `true` when omitted; pass `false` to skip that step. This
+ * is a type alias (not an interface) so it stays free of empty-interface lint noise.
  */
 export type OnboardOptions = {
   /** Explicit brain directory to create/use instead of the project default. */
@@ -20,6 +22,12 @@ export type OnboardOptions = {
   daemon?: boolean;
   /** Build/bundle the workspace if dist artifacts are missing. Default: true. */
   build?: boolean;
+  /** Add the repo root to the capture allowlist (`scope allow`). Default: true. */
+  scope?: boolean;
+  /** Enable auto-ADR capture for the brain. Default: false. */
+  autoAdr?: boolean;
+  /** Add this URL as the brain's git `origin` remote. Default: undefined (skip). */
+  remote?: string;
 };
 
 /**
@@ -31,6 +39,12 @@ export interface OnboardDeps {
   ensureBuilt(): Promise<{ built: boolean; skipped?: string }>;
   /** Create/seed/join the brain (delegates to `runInit` with real init deps). */
   init(cwd: string, initOpts: InitOptions): Promise<InitResult>;
+  /** Idempotently add `repoRoot` to the capture allowlist (`scope allow`; de-dupes). */
+  configureScope(repoRoot: string): Promise<{ added: boolean; skipped?: string }>;
+  /** Enable/disable auto-ADR capture for `brainDir`. */
+  setAutoAdr(brainDir: string, on: boolean): Promise<{ set: boolean; skipped?: string }>;
+  /** Add `url` as the brain's git `origin` remote unless one already exists. */
+  setRemote(brainDir: string, url: string): Promise<{ set: boolean; skipped?: string }>;
   /** Idempotently register the MCP server for `brainDir` with the `claude` CLI. */
   registerMcp(brainDir: string): Promise<{ registered: boolean; skipped?: string }>;
   /** Start the sync daemon for `brainDir`, or report it already running. */
@@ -53,6 +67,12 @@ export interface OnboardResult {
   built: boolean;
   /** How many candidate notes were staged into the review queue. */
   staged: number;
+  /** Short allowlist status string (e.g. `added`, `skipped`). */
+  scope: string;
+  /** Short auto-ADR status string (e.g. `enabled`, `skipped`). */
+  autoAdr: string;
+  /** Short brain-remote status string (e.g. `set`, `origin exists`, `skipped`). */
+  remote: string;
   /** Short MCP status string (e.g. `registered`, `already registered`, `skipped`). */
   mcp: string;
   /** Short daemon status string (e.g. `started`, `already running`, `skipped`). */
@@ -81,13 +101,20 @@ export async function runOnboard(
 ): Promise<OnboardResult> {
   const doBuild = opts.build !== false;
   const doSeed = opts.seed !== false;
+  const doScope = opts.scope !== false;
+  const doAutoAdr = opts.autoAdr === true;
+  const doRemote = typeof opts.remote === "string" && opts.remote.trim().length > 0;
   const doMcp = opts.mcp !== false;
   const doDaemon = opts.daemon !== false;
 
+  const repoRoot = findRepoRoot(cwd);
   const brainLabel = opts.brain ?? "the project's default brain dir";
   const plan = [
     doBuild ? "build the workspace if needed" : null,
     doSeed ? `create/seed brain at ${brainLabel}` : `create brain at ${brainLabel} (no seed)`,
+    doScope ? "add this folder to the capture allowlist" : null,
+    doAutoAdr ? "enable auto-ADR" : null,
+    doRemote ? `set brain remote to ${opts.remote}` : null,
     doMcp ? "register the MCP server" : null,
     doDaemon ? "start the sync daemon" : null,
   ].filter((step): step is string => step !== null);
@@ -102,6 +129,9 @@ export async function runOnboard(
         mode: "skipped",
         built: false,
         staged: 0,
+        scope: "skipped",
+        autoAdr: "skipped",
+        remote: "skipped",
         mcp: "skipped",
         daemon: "skipped",
       };
@@ -124,6 +154,27 @@ export async function runOnboard(
   });
   const brainDir = initResult.brainDir;
 
+  let scope = "skipped";
+  if (doScope) {
+    const res = await deps.configureScope(repoRoot);
+    scope = res.skipped ?? (res.added ? "added" : "not added");
+    deps.log(`Scope: ${scope}`);
+  }
+
+  let autoAdr = "skipped";
+  if (doAutoAdr) {
+    const res = await deps.setAutoAdr(brainDir, true);
+    autoAdr = res.skipped ?? (res.set ? "enabled" : "not enabled");
+    deps.log(`Auto-ADR: ${autoAdr}`);
+  }
+
+  let remote = "skipped";
+  if (doRemote) {
+    const res = await deps.setRemote(brainDir, opts.remote as string);
+    remote = res.skipped ?? (res.set ? "set" : "not set");
+    deps.log(`Remote: ${remote}`);
+  }
+
   let mcp = "skipped";
   if (doMcp) {
     const res = await deps.registerMcp(brainDir);
@@ -142,9 +193,85 @@ export async function runOnboard(
 
   deps.log(
     `Done. mode=${initResult.mode} brain=${brainDir} staged=${initResult.staged} ` +
-      `mcp=${mcp} daemon=${daemon}. ` +
+      `scope=${scope} autoAdr=${autoAdr} remote=${remote} mcp=${mcp} daemon=${daemon}. ` +
       "Open a Claude session here and ask it something your team knows.",
   );
 
-  return { brainDir, mode: initResult.mode, built, staged: initResult.staged, mcp, daemon };
+  return {
+    brainDir,
+    mode: initResult.mode,
+    built,
+    staged: initResult.staged,
+    scope,
+    autoAdr,
+    remote,
+    mcp,
+    daemon,
+  };
+}
+
+/** The answers a wizard collects, ready to be turned into {@link OnboardOptions}. */
+export interface WizardAnswers {
+  brain: string;
+  scope: boolean;
+  seed: boolean;
+  mcp: boolean;
+  daemon: boolean;
+  autoAdr: boolean;
+  remote: string;
+}
+
+/** Defaults the wizard seeds its prompts with (Enter accepts each). */
+export interface WizardDefaults {
+  brain: string;
+  scope: boolean;
+  seed: boolean;
+  mcp: boolean;
+  daemon: boolean;
+  autoAdr: boolean;
+}
+
+/** What {@link runWizard} produces: the assembled options, or an abort signal. */
+export type WizardOutcome =
+  { proceed: true; opts: OnboardOptions } | { proceed: false; opts: null };
+
+/**
+ * Drive the interactive wizard: ask each choice with a sensible default (Enter accepts), then a
+ * final `Proceed?` confirm. Pure orchestration over a {@link Prompter}, so tests script answers
+ * with a fake and never touch a real TTY. A declined `Proceed?` returns `{ proceed: false }` and
+ * the caller must perform ZERO side effects.
+ *
+ * The returned `opts` carry `yes: true` because the wizard has already confirmed — the caller must
+ * NOT prompt again inside {@link runOnboard}.
+ *
+ * @param defaults Per-prompt defaults (usually derived from environment probing).
+ * @param prompter The interactive prompter.
+ * @returns A {@link WizardOutcome}: the options to run, or an abort.
+ */
+export async function runWizard(
+  defaults: WizardDefaults,
+  prompter: Prompter,
+): Promise<WizardOutcome> {
+  const brain = await prompter.text("Brain directory", defaults.brain);
+  const scope = await prompter.confirm("Add this folder to the capture allowlist?", defaults.scope);
+  const seed = await prompter.confirm("Seed from this repo now?", defaults.seed);
+  const mcp = await prompter.confirm("Register MCP with Claude Code?", defaults.mcp);
+  const daemon = await prompter.confirm("Start the sync daemon?", defaults.daemon);
+  const autoAdr = await prompter.confirm("Enable auto-ADR?", defaults.autoAdr);
+  const remote = await prompter.text("Brain git remote (blank to skip)", "");
+
+  const opts: OnboardOptions = {
+    brain: brain.trim() === "" ? undefined : brain,
+    yes: true,
+    seed,
+    mcp,
+    daemon,
+    scope,
+    autoAdr,
+    remote: remote.trim() === "" ? undefined : remote,
+  };
+
+  const ok = await prompter.confirm("Proceed?", true);
+  if (!ok) return { proceed: false, opts: null };
+  return { proceed: true, opts };
 }

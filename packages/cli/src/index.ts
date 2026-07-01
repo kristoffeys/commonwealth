@@ -1,12 +1,24 @@
+import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { defaultOnboardDeps } from "./deps.js";
-import { runOnboard, type OnboardOptions } from "./onboard.js";
+import { defaultBrainDir, findRepoRoot } from "./init.js";
+import { runOnboard, runWizard, type OnboardOptions, type WizardDefaults } from "./onboard.js";
+import { createReadlinePrompter, isInteractive, type Prompter } from "./prompt.js";
 
 export { runInit, findRepoRoot, defaultBrainDir } from "./init.js";
 export type { InitOptions, InitDeps, InitResult, InitBySource } from "./init.js";
 export { defaultInitDeps, defaultOnboardDeps } from "./deps.js";
-export { runOnboard } from "./onboard.js";
-export type { OnboardOptions, OnboardDeps, OnboardResult } from "./onboard.js";
+export { runOnboard, runWizard } from "./onboard.js";
+export type {
+  OnboardOptions,
+  OnboardDeps,
+  OnboardResult,
+  WizardAnswers,
+  WizardDefaults,
+  WizardOutcome,
+} from "./onboard.js";
+export { isInteractive, createReadlinePrompter, parseConfirm, parseText } from "./prompt.js";
+export type { Prompter } from "./prompt.js";
 
 /** Print `commonwealth` usage to stderr. */
 function printUsage(): void {
@@ -15,16 +27,21 @@ function printUsage(): void {
       "commonwealth — git-backed markdown team-brain",
       "",
       "Usage:",
-      "  commonwealth init [--brain <dir>] [--yes] [--reseed]",
-      "                    [--no-seed] [--no-mcp] [--no-daemon] [--no-build]",
+      "  commonwealth init [--brain <dir>] [--yes] [--reseed] [--auto-adr] [--remote <url>]",
+      "                    [--no-scope] [--no-seed] [--no-mcp] [--no-daemon] [--no-build]",
       "",
       "`init` is a single idempotent command: it builds the workspace (if needed), creates or",
-      "joins the brain and seeds it, registers the MCP server, and starts the sync daemon.",
+      "joins the brain and seeds it, adds this folder to the capture allowlist, registers the",
+      "MCP server, and starts the sync daemon. Run in a terminal without --yes for an interactive",
+      "wizard; with --yes (or non-interactively) it uses defaults + flags and never prompts.",
       "",
       "Options:",
       "  --brain <dir>   Create/use the brain at <dir> (default: ~/.commonwealth/brains/<project>)",
-      "  --yes           Run non-interactively; skip the plan confirmation and seed prompt",
+      "  --yes           Run non-interactively; skip the wizard and all prompts",
       "  --reseed        Re-seed even if this project already resolves to a brain",
+      "  --auto-adr      Enable auto-ADR capture for the brain",
+      "  --remote <url>  Add <url> as the brain's git origin remote",
+      "  --no-scope      Skip adding this folder to the capture allowlist",
       "  --no-seed       Create the brain but skip gathering/staging seed candidates",
       "  --no-mcp        Skip registering the MCP server with the claude CLI",
       "  --no-daemon     Skip starting the sync daemon",
@@ -66,15 +83,21 @@ export async function run(argv: string[]): Promise<number> {
   }
 
   // parseArgs has no native negation; consume --no-* flags first and derive the gates.
+  const negations = ["--no-scope", "--no-seed", "--no-mcp", "--no-daemon", "--no-build"];
+  const scope = !rest.includes("--no-scope");
   const seed = !rest.includes("--no-seed");
   const mcp = !rest.includes("--no-mcp");
   const daemon = !rest.includes("--no-daemon");
   const build = !rest.includes("--no-build");
-  const positional = rest.filter(
-    (a) => a !== "--no-seed" && a !== "--no-mcp" && a !== "--no-daemon" && a !== "--no-build",
-  );
+  const positional = rest.filter((a) => !negations.includes(a));
 
-  let values: { brain?: string; yes?: boolean; reseed?: boolean };
+  let values: {
+    brain?: string;
+    yes?: boolean;
+    reseed?: boolean;
+    "auto-adr"?: boolean;
+    remote?: string;
+  };
   try {
     ({ values } = parseArgs({
       args: positional,
@@ -82,6 +105,8 @@ export async function run(argv: string[]): Promise<number> {
         brain: { type: "string" },
         yes: { type: "boolean", default: false },
         reseed: { type: "boolean", default: false },
+        "auto-adr": { type: "boolean", default: false },
+        remote: { type: "string" },
       },
       allowPositionals: false,
     }));
@@ -91,23 +116,71 @@ export async function run(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const opts: OnboardOptions = {
-    brain: values.brain,
-    yes: values.yes,
-    reseed: values.reseed,
-    seed,
-    mcp,
-    daemon,
-    build,
-  };
+  const cwd = process.cwd();
+  const repoRoot = findRepoRoot(cwd);
+  const claudePresent = hasExecutable("claude");
   const deps = defaultOnboardDeps({ curateEntry: process.env.COMMONWEALTH_CURATE_BIN });
-  const result = await runOnboard(process.cwd(), opts, deps);
 
-  process.stderr.write(
-    `init: mode=${result.mode} brain=${result.brainDir} built=${result.built} ` +
-      `staged=${result.staged} mcp=${result.mcp} daemon=${result.daemon}\n`,
-  );
-  return 0;
+  let opts: OnboardOptions;
+  let prompter: Prompter | null = null;
+
+  try {
+    if (isInteractive() && !values.yes) {
+      // Interactive terminal, no --yes: run the wizard.
+      const defaults: WizardDefaults = {
+        brain: defaultBrainDir(repoRoot),
+        scope: true,
+        seed: true,
+        mcp: claudePresent,
+        daemon: true,
+        autoAdr: false,
+      };
+      prompter = createReadlinePrompter();
+      const outcome = await runWizard(defaults, prompter);
+      if (!outcome.proceed) {
+        process.stderr.write("Aborted.\n");
+        return 0;
+      }
+      // The wizard already confirmed; runOnboard must not prompt again (opts.yes is true).
+      opts = outcome.opts;
+    } else if (!values.yes) {
+      // Non-interactive and no --yes: never hang on stdin, do nothing.
+      process.stderr.write("Non-interactive: re-run in a terminal or pass --yes.\n");
+      return 0;
+    } else {
+      // --yes: defaults + explicit flags, non-interactive.
+      opts = {
+        brain: values.brain,
+        yes: true,
+        reseed: values.reseed,
+        seed,
+        mcp,
+        daemon,
+        build,
+        scope,
+        autoAdr: values["auto-adr"],
+        remote: values.remote,
+      };
+    }
+
+    const result = await runOnboard(cwd, opts, deps);
+
+    process.stderr.write(
+      `init: mode=${result.mode} brain=${result.brainDir} built=${result.built} ` +
+        `staged=${result.staged} scope=${result.scope} autoAdr=${result.autoAdr} ` +
+        `remote=${result.remote} mcp=${result.mcp} daemon=${result.daemon}\n`,
+    );
+    return 0;
+  } finally {
+    prompter?.close();
+  }
+}
+
+/** True if the `<name>` executable resolves on the current PATH. */
+function hasExecutable(name: string): boolean {
+  const probe = process.platform === "win32" ? "where" : "which";
+  const res = spawnSync(probe, [name], { stdio: "ignore" });
+  return res.status === 0;
 }
 
 const isEntrypoint =
