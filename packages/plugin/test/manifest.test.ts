@@ -11,19 +11,31 @@ function readJson(rel: string): unknown {
 }
 
 describe(".claude-plugin/plugin.json", () => {
-  it("is valid JSON naming the plugin 'commonwealth' with mcpServers + hooks", () => {
+  it("is valid JSON naming the plugin 'commonwealth' with mcpServers + hooks as file refs", () => {
     const manifest = readJson(".claude-plugin/plugin.json") as Record<string, unknown>;
     expect(manifest.name).toBe("commonwealth");
     expect(typeof manifest.version).toBe("string");
 
-    const mcp = manifest.mcpServers as Record<string, { command: string; args: string[] }>;
-    expect(mcp["commonwealth-brain"]).toBeDefined();
-    expect(mcp["commonwealth-brain"].command).toBe("node");
-    expect(mcp["commonwealth-brain"].args.join(" ")).toContain("vendor/mcp/index.js");
-    expect(mcp["commonwealth-brain"].args.join(" ")).toContain("${CLAUDE_PLUGIN_ROOT}");
+    // Claude Code loads mcpServers/hooks as STRING paths to files at the plugin root (an inline
+    // mcpServers object is NOT picked up — it silently registers zero MCP servers).
+    expect(typeof manifest.mcpServers).toBe("string");
+    const mcpRel = manifest.mcpServers as string;
+    expect(existsSync(path.join(pluginRoot, mcpRel))).toBe(true);
 
     expect(typeof manifest.hooks).toBe("string");
     expect(manifest.hooks as string).toContain("hooks/hooks.json");
+  });
+
+  it("the referenced .mcp.json declares the commonwealth-brain stdio server", () => {
+    const manifest = readJson(".claude-plugin/plugin.json") as { mcpServers: string };
+    const mcp = readJson(manifest.mcpServers) as {
+      mcpServers: Record<string, { command: string; args: string[] }>;
+    };
+    const server = mcp.mcpServers["commonwealth-brain"];
+    expect(server).toBeDefined();
+    expect(server.command).toBe("node");
+    expect(server.args.join(" ")).toContain("vendor/mcp/index.js");
+    expect(server.args.join(" ")).toContain("${CLAUDE_PLUGIN_ROOT}");
   });
 });
 
