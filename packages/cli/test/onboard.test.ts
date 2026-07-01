@@ -9,6 +9,9 @@ function makeDeps(over: Partial<OnboardDeps> = {}): OnboardDeps {
   return {
     ensureBuilt: vi.fn(async () => ({ built: true })),
     init: vi.fn(async () => INIT_RESULT),
+    configureScope: vi.fn(async () => ({ added: true })),
+    setAutoAdr: vi.fn(async () => ({ set: true })),
+    setRemote: vi.fn(async () => ({ set: true })),
     registerMcp: vi.fn(async () => ({ registered: true })),
     startDaemon: vi.fn(async () => ({ started: true })),
     confirm: vi.fn(async () => true),
@@ -24,6 +27,7 @@ describe("runOnboard", () => {
 
     expect(deps.ensureBuilt).toHaveBeenCalledTimes(1);
     expect(deps.init).toHaveBeenCalledTimes(1);
+    expect(deps.configureScope).toHaveBeenCalledTimes(1);
     expect(deps.registerMcp).toHaveBeenCalledWith("/b");
     expect(deps.startDaemon).toHaveBeenCalledWith("/b");
 
@@ -32,6 +36,9 @@ describe("runOnboard", () => {
       mode: "new",
       built: true,
       staged: 4,
+      scope: "added",
+      autoAdr: "skipped",
+      remote: "skipped",
       mcp: "registered",
       daemon: "started",
     });
@@ -110,7 +117,7 @@ describe("runOnboard", () => {
     expect(result.daemon).toBe("skipped");
   });
 
-  it("runs steps in order: ensureBuilt -> init -> registerMcp -> startDaemon", async () => {
+  it("runs steps in order: ensureBuilt -> init -> scope -> autoAdr -> remote -> mcp -> daemon", async () => {
     const calls: string[] = [];
     const deps = makeDeps({
       ensureBuilt: vi.fn(async () => {
@@ -120,6 +127,18 @@ describe("runOnboard", () => {
       init: vi.fn(async () => {
         calls.push("init");
         return INIT_RESULT;
+      }),
+      configureScope: vi.fn(async () => {
+        calls.push("scope");
+        return { added: true };
+      }),
+      setAutoAdr: vi.fn(async () => {
+        calls.push("autoAdr");
+        return { set: true };
+      }),
+      setRemote: vi.fn(async () => {
+        calls.push("remote");
+        return { set: true };
       }),
       registerMcp: vi.fn(async () => {
         calls.push("mcp");
@@ -131,8 +150,65 @@ describe("runOnboard", () => {
       }),
     });
 
-    await runOnboard("/repo", { yes: true }, deps);
-    expect(calls).toEqual(["build", "init", "mcp", "daemon"]);
+    await runOnboard("/repo", { yes: true, autoAdr: true, remote: "git@x:y.git" }, deps);
+    expect(calls).toEqual(["build", "init", "scope", "autoAdr", "remote", "mcp", "daemon"]);
+  });
+
+  it("scope/autoAdr/remote: runs each when its opt is set, reflects status", async () => {
+    const deps = makeDeps();
+    const result = await runOnboard(
+      "/repo",
+      { yes: true, scope: true, autoAdr: true, remote: "git@x:y.git" },
+      deps,
+    );
+
+    expect(deps.configureScope).toHaveBeenCalledTimes(1);
+    expect(deps.setAutoAdr).toHaveBeenCalledWith("/b", true);
+    expect(deps.setRemote).toHaveBeenCalledWith("/b", "git@x:y.git");
+    expect(result.scope).toBe("added");
+    expect(result.autoAdr).toBe("enabled");
+    expect(result.remote).toBe("set");
+  });
+
+  it("scope/autoAdr/remote: SKIPS each when unset/false; only scope defaults on", async () => {
+    const deps = makeDeps();
+    // autoAdr defaults false, remote defaults undefined; explicitly turn scope off too.
+    const result = await runOnboard("/repo", { yes: true, scope: false }, deps);
+
+    expect(deps.configureScope).not.toHaveBeenCalled();
+    expect(deps.setAutoAdr).not.toHaveBeenCalled();
+    expect(deps.setRemote).not.toHaveBeenCalled();
+    expect(result.scope).toBe("skipped");
+    expect(result.autoAdr).toBe("skipped");
+    expect(result.remote).toBe("skipped");
+  });
+
+  it("remote: an empty/whitespace remote string is treated as skip", async () => {
+    const deps = makeDeps();
+    const result = await runOnboard("/repo", { yes: true, remote: "   " }, deps);
+
+    expect(deps.setRemote).not.toHaveBeenCalled();
+    expect(result.remote).toBe("skipped");
+  });
+
+  it("scope idempotency: an already-added scope surfaces its skipped note", async () => {
+    const deps = makeDeps({
+      configureScope: vi.fn(async () => ({ added: false, skipped: "already allowed" })),
+      setRemote: vi.fn(async () => ({ set: false, skipped: "origin exists" })),
+    });
+    const result = await runOnboard("/repo", { yes: true, remote: "git@x:y.git" }, deps);
+
+    expect(result.scope).toBe("already allowed");
+    expect(result.remote).toBe("origin exists");
+  });
+
+  it("decline (confirm=false): none of the new deps are called either", async () => {
+    const deps = makeDeps({ confirm: vi.fn(async () => false) });
+    await runOnboard("/repo", { brain: "/b", autoAdr: true, remote: "git@x:y.git" }, deps);
+
+    expect(deps.configureScope).not.toHaveBeenCalled();
+    expect(deps.setAutoAdr).not.toHaveBeenCalled();
+    expect(deps.setRemote).not.toHaveBeenCalled();
   });
 
   it("idempotency surfaced: already-registered MCP + already-running daemon reflected without error", async () => {

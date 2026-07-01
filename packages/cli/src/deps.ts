@@ -200,6 +200,63 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
       defaultInitDeps({ assumeYes: initOpts.yes, curateEntry: opts.curateEntry }),
     );
 
+  const configureScope = async (
+    repoRoot: string,
+  ): Promise<{ added: boolean; skipped?: string }> => {
+    let curateEntry: string;
+    try {
+      curateEntry = resolveCurateEntry(opts.curateEntry);
+    } catch (err) {
+      return { added: false, skipped: `commonwealth-curate not found: ${(err as Error).message}` };
+    }
+    const res = spawnSync("node", [curateEntry, "scope", "allow", repoRoot], { stdio: "ignore" });
+    if (res.error || res.status !== 0) {
+      const reason = res.error ? res.error.message : `exit code ${res.status ?? "null"}`;
+      return { added: false, skipped: `scope allow failed (${reason})` };
+    }
+    return { added: true };
+  };
+
+  const setAutoAdr = async (
+    brainDir: string,
+    on: boolean,
+  ): Promise<{ set: boolean; skipped?: string }> => {
+    let curateEntry: string;
+    try {
+      curateEntry = resolveCurateEntry(opts.curateEntry);
+    } catch (err) {
+      return { set: false, skipped: `commonwealth-curate not found: ${(err as Error).message}` };
+    }
+    const verb = on ? "enable" : "disable";
+    const res = spawnSync("node", [curateEntry, "feature", verb, "autoAdr", "--dir", brainDir], {
+      stdio: "ignore",
+    });
+    if (res.error || res.status !== 0) {
+      const reason = res.error ? res.error.message : `exit code ${res.status ?? "null"}`;
+      return { set: false, skipped: `feature ${verb} autoAdr failed (${reason})` };
+    }
+    return { set: true };
+  };
+
+  const setRemote = async (
+    brainDir: string,
+    url: string,
+  ): Promise<{ set: boolean; skipped?: string }> => {
+    const existing = spawnSync("git", ["-C", brainDir, "remote", "get-url", "origin"], {
+      stdio: "ignore",
+    });
+    if (existing.status === 0) return { set: false, skipped: "origin exists" };
+
+    const add = spawnSync("git", ["-C", brainDir, "remote", "add", "origin", url], {
+      stdio: "ignore",
+    });
+    if (add.error || add.status !== 0) {
+      const reason = add.error ? add.error.message : `exit code ${add.status ?? "null"}`;
+      return { set: false, skipped: `git remote add failed (${reason})` };
+    }
+    return { set: true };
+  };
+
   const registerMcp = async (
     brainDir: string,
   ): Promise<{ registered: boolean; skipped?: string }> => {
@@ -258,6 +315,9 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
   return {
     ensureBuilt,
     init,
+    configureScope,
+    setAutoAdr,
+    setRemote,
     registerMcp,
     startDaemon,
     confirm: promptConfirm,
