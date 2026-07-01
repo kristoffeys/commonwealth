@@ -58,6 +58,12 @@ importers:
         specifier: ^7.6.0
         version: 7.6.13
 
+  packages/curate:
+    dependencies:
+      '@commons/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/mcp:
     dependencies:
       '@commons/core':
