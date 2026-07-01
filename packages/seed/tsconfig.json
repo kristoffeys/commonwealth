@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@commons/core": ["../core/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}
