@@ -20,5 +20,5 @@ Run the vendored curate CLI's `context` command. If the user gave a query, pass 
 ```
 
 If `$ARGUMENTS` is empty, omit `--query`. Present the returned markdown bullets to the user.
-For richer, full-text search prefer the `commonwealth-brain` MCP server's `search` / `read`
+For richer, full-text search prefer the `commonwealth` MCP server's `search` / `read`
 tools when available.

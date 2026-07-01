@@ -9,7 +9,7 @@
     {
       "name": "commonwealth",
       "source": "./packages/plugin",
-      "description": "Commonwealth Claude Code plugin: the commonwealth-brain MCP server (global, USER scope) plus SessionStart/SessionEnd hooks that resolve the right brain per repo via the registry.",
+      "description": "Commonwealth Claude Code plugin: the commonwealth MCP server (global, USER scope) plus SessionStart/SessionEnd hooks that resolve the right brain per repo via the registry.",
       "version": "0.0.0"
     }
   ]

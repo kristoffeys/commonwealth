@@ -3,7 +3,7 @@
 The glue that makes Commonwealth "just happen" inside Claude Code. It bundles everything a
 teammate needs and wires the auto-bridge (docs/03-distribution.md):
 
-- **MCP server** `commonwealth-brain` — the `@commonwealth/mcp` server (`search / read / remember /
+- **MCP server** `commonwealth` — the `@commonwealth/mcp` server (`search / read / remember /
 work-state / people`), auto-started by declaring it in the manifest (no manual
   `claude mcp add`).
 - **Lifecycle hooks** — `SessionStart` pulls relevant team-brain context and injects it;
@@ -54,7 +54,7 @@ claude plugin install commonwealth@commonwealth
 
 (Or point the marketplace at a local path / your fork / an internal mirror of this repo.)
 
-The plugin installs globally, so the `commonwealth-brain` MCP server + hooks work in **every**
+The plugin installs globally, so the `commonwealth` MCP server + hooks work in **every**
 session. Per-repo routing is dynamic: the SessionStart hook resolves the real session cwd → its
 brain via the registry, and the MCP server resolves its brain via `@commonwealth/core`'s
 `resolveBrainDir` — no brain is pinned into the registration. This replaced the old raw
