@@ -16,7 +16,7 @@ let dir: string;
 const git = (args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "pipe" });
 
 beforeEach(async () => {
-  dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "commons-concur-")));
+  dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-concur-")));
   git(["init", "-q", "-b", "main"]);
   git(["config", "user.email", "t@example.com"]);
   git(["config", "user.name", "Test"]);

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { initBrain } from "@commons/core";
+import { initBrain } from "@commonwealth/core";
 
 /** Run a git command in `cwd`, returning trimmed stdout. */
 export function git(cwd: string, args: string[]): string {
@@ -31,7 +31,7 @@ export interface Fixture {
  * Alice inits the brain, commits, and pushes; bob clones it. Both identities are set.
  */
 export async function makeFixture(): Promise<Fixture> {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "commons-sync-")));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-sync-")));
   const remote = path.join(root, "remote.git");
   const alice = path.join(root, "alice");
   const bob = path.join(root, "bob");

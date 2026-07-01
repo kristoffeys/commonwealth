@@ -25,13 +25,13 @@ async function main() {
   }
   const result = await sessionEnd(input, realDeps());
   if (result && result.skipped) {
-    console.error("[commons] session-end: out of scope or no brain; captured nothing");
+    console.error("[commonwealth] session-end: out of scope or no brain; captured nothing");
   } else if (result && typeof result.captured === "number") {
-    console.error(`[commons] session-end: staged ${result.captured} candidate note(s)`);
+    console.error(`[commonwealth] session-end: staged ${result.captured} candidate note(s)`);
   }
 }
 
 main().catch((err) => {
-  console.error("[commons] session-end hook error:", err instanceof Error ? err.message : err);
+  console.error("[commonwealth] session-end hook error:", err instanceof Error ? err.message : err);
   process.exit(0);
 });

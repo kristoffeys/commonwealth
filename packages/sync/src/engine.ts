@@ -1,4 +1,4 @@
-import { buildIndex, regenerateDerived } from "@commons/core";
+import { buildIndex, regenerateDerived } from "@commonwealth/core";
 import { resolveConflictsAsSiblings, type ResolvedConflict } from "./conflict.js";
 import {
   commitAllExceptSecrets,
@@ -65,7 +65,7 @@ export class SyncEngine {
     //    left uncommitted, so a leaked secret is never committed or pushed.
     const { committed, secretsBlocked } = await commitAllExceptSecrets(
       dir,
-      "commons: sync local changes",
+      "commonwealth: sync local changes",
     );
 
     // 2. Pull with rebase; resolve any same-file conflicts as siblings, then finish.
@@ -94,10 +94,10 @@ export class SyncEngine {
     await buildIndex(dir);
     await regenerateDerived(dir);
 
-    // 4. Commit derived changes (COMMONS.md / INDEX.md) if regeneration moved anything.
+    // 4. Commit derived changes (COMMONWEALTH.md / INDEX.md) if regeneration moved anything.
     //    Re-scrub: `add -A` here would otherwise re-stage a secret note left in the working
     //    tree by step 1, so route this commit through the same guard and merge the results.
-    const derived = await commitAllExceptSecrets(dir, "commons: regenerate derived index");
+    const derived = await commitAllExceptSecrets(dir, "commonwealth: regenerate derived index");
     for (const p of derived.secretsBlocked) {
       if (!secretsBlocked.includes(p)) secretsBlocked.push(p);
     }

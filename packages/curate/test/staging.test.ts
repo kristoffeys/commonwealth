@@ -1,14 +1,14 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { listNotes } from "@commons/core";
+import { listNotes } from "@commonwealth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { listStaged, stageNote, stagedAbsPath } from "../src/staging.js";
 
 let brainDir: string;
 
 beforeEach(async () => {
-  brainDir = await fs.mkdtemp(path.join(tmpdir(), "commons-curate-staging-"));
+  brainDir = await fs.mkdtemp(path.join(tmpdir(), "commonwealth-curate-staging-"));
 });
 
 afterEach(async () => {

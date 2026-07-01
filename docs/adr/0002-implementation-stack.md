@@ -3,11 +3,11 @@
 - Status: Accepted
 - Date: 2026-07-01
 - Deciders: kristof (owner), Claude (orchestrator)
-- Relates: GitHub project "Commons — Build"
+- Relates: GitHub project "Commonwealth — Build"
 
 ## Context
 
-Commons ships several components (see [architecture](../01-architecture.md)): a core
+Commonwealth ships several components (see [architecture](../01-architecture.md)): a core
 library, an MCP server, a CLI, a sync daemon, a Claude Code plugin, and a curation
 agent. We need one stack that covers all of them, integrates natively with the Claude
 Code ecosystem, and lets a small team move fast.
@@ -24,7 +24,7 @@ Code ecosystem, and lets a small team move fast.
   (schema validation), `better-sqlite3` (derived index + FTS5), `nanoid` (short ids),
   `github-slugger` (slugs), `simple-git` (git ops in the daemon).
 
-Initial packages: `@commons/core` (schema, note IO, scaffold, index). MCP server, CLI,
+Initial packages: `@commonwealth/core` (schema, note IO, scaffold, index). MCP server, CLI,
 daemon, and plugin are added as separate packages in later milestones.
 
 ## Consequences

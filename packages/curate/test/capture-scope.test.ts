@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureCandidates } from "../src/capture.js";
 import { isInScope, loadUserConfig, saveUserConfig } from "../src/scope.js";
 import { listStaged } from "../src/staging.js";
-import type { NewNoteInput } from "@commons/core";
+import type { NewNoteInput } from "@commonwealth/core";
 
 let brainDir: string;
 let configDir: string;
@@ -28,14 +28,14 @@ async function captureIfInScope(cwd: string): Promise<number> {
 }
 
 beforeEach(async () => {
-  brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "commons-curate-capscope-brain-"));
-  configDir = await fs.mkdtemp(path.join(os.tmpdir(), "commons-curate-capscope-cfg-"));
+  brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-capscope-brain-"));
+  configDir = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-capscope-cfg-"));
   configPath = path.join(configDir, "config.json");
-  process.env.COMMONS_CONFIG = configPath;
+  process.env.COMMONWEALTH_CONFIG = configPath;
 });
 
 afterEach(async () => {
-  delete process.env.COMMONS_CONFIG;
+  delete process.env.COMMONWEALTH_CONFIG;
   await fs.rm(brainDir, { recursive: true, force: true });
   await fs.rm(configDir, { recursive: true, force: true });
 });

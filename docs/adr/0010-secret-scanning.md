@@ -20,7 +20,7 @@ community-curated regex database we can import from to grow the built-in set).
 
 ## Decision
 
-**A built-in regex scanner in `@commons/core` (`secrets.ts`) is the zero-dependency
+**A built-in regex scanner in `@commonwealth/core` (`secrets.ts`) is the zero-dependency
 default**, with detection **inspired by** the gitleaks / SecretFinder rule sets:
 
 - Provider patterns (AWS, GitHub token/PAT, Anthropic, OpenAI incl. `sk-proj-`/

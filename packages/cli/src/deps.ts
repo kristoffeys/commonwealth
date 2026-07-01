@@ -2,34 +2,36 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { createRequire } from "node:module";
 import path from "node:path";
-import * as core from "@commons/core";
-import type { NewNoteInput } from "@commons/core";
-import { gatherCandidates } from "@commons/seed";
+import * as core from "@commonwealth/core";
+import type { NewNoteInput } from "@commonwealth/core";
+import { gatherCandidates } from "@commonwealth/seed";
 import type { InitDeps } from "./init.js";
 
 /** Options for {@link defaultInitDeps}, mostly to make wiring testable/overridable. */
 export interface DefaultInitDepsOptions {
-  /** Absolute path to `commons-curate`'s built entry (its `capture` subcommand is spawned). */
+  /** Absolute path to `commonwealth-curate`'s built entry (its `capture` subcommand is spawned). */
   curateEntry?: string;
   /** When true, `confirm` always resolves `true` (from `--yes`). */
   assumeYes?: boolean;
 }
 
 /**
- * Resolve the `commons-curate` CLI entry point: explicit override → `COMMONS_CURATE_BIN`
- * env → the `@commons/curate` package's declared `bin`. Throws only if none resolve, and
+ * Resolve the `commonwealth-curate` CLI entry point: explicit override → `COMMONWEALTH_CURATE_BIN`
+ * env → the `@commonwealth/curate` package's declared `bin`. Throws only if none resolve, and
  * that throw is caught by {@link makeStage} (staging degrades to a no-op with a log line).
  */
 function resolveCurateEntry(override?: string): string {
   if (override) return override;
-  const fromEnv = process.env.COMMONS_CURATE_BIN;
+  const fromEnv = process.env.COMMONWEALTH_CURATE_BIN;
   if (fromEnv) return fromEnv;
 
   const require = createRequire(import.meta.url);
-  const pkgJsonPath = require.resolve("@commons/curate/package.json");
-  const pkg = require("@commons/curate/package.json") as { bin?: string | Record<string, string> };
-  const rel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.["commons-curate"];
-  if (!rel) throw new Error("@commons/curate exposes no `commons-curate` bin");
+  const pkgJsonPath = require.resolve("@commonwealth/curate/package.json");
+  const pkg = require("@commonwealth/curate/package.json") as {
+    bin?: string | Record<string, string>;
+  };
+  const rel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.["commonwealth-curate"];
+  if (!rel) throw new Error("@commonwealth/curate exposes no `commonwealth-curate` bin");
   return path.resolve(path.dirname(pkgJsonPath), rel);
 }
 
@@ -56,13 +58,13 @@ function makeStage(
       });
 
       child.on("error", (err) => {
-        log(`Staging failed to spawn commons-curate: ${err.message}`);
+        log(`Staging failed to spawn commonwealth-curate: ${err.message}`);
         resolve({ captured: 0 });
       });
 
       child.on("close", (code) => {
         if (code !== 0) {
-          log(`commons-curate exited with code ${code ?? "null"}; staged nothing.`);
+          log(`commonwealth-curate exited with code ${code ?? "null"}; staged nothing.`);
           resolve({ captured: 0 });
           return;
         }
@@ -87,7 +89,7 @@ function promptConfirm(message: string): Promise<boolean> {
 
 /**
  * Wire the real {@link InitDeps}: seed for gathering, core for brain/marker resolution, a
- * spawned `commons-curate capture` for staging, a readline prompt for confirmation, and
+ * spawned `commonwealth-curate capture` for staging, a readline prompt for confirmation, and
  * stderr for logging. Pure orchestration lives in {@link runInit}; this is the only place
  * that performs real I/O.
  *
@@ -110,7 +112,7 @@ export function defaultInitDeps(opts: DefaultInitDepsOptions = {}): InitDeps {
   const stage = curateEntry
     ? makeStage(curateEntry, log)
     : async (): Promise<{ captured: number }> => {
-        log(`Cannot stage: ${curateError ?? "commons-curate not found"}.`);
+        log(`Cannot stage: ${curateError ?? "commonwealth-curate not found"}.`);
         return { captured: 0 };
       };
 

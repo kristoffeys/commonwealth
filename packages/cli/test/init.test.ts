@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { NewNoteInput } from "@commons/core";
+import type { NewNoteInput } from "@commonwealth/core";
 import { describe, expect, it, vi } from "vitest";
 import { findRepoRoot, runInit, type InitBySource, type InitDeps } from "../src/init.js";
 
@@ -111,7 +111,9 @@ describe("runInit", () => {
 
 describe("findRepoRoot", () => {
   it("walks up to the nearest .git ancestor", async () => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "commons-cli-root-")));
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-cli-root-")),
+    );
     try {
       execFileSync("git", ["init", "-q", root], { stdio: "pipe" });
       const nested = path.join(root, "a", "b", "c");
@@ -123,7 +125,9 @@ describe("findRepoRoot", () => {
   });
 
   it("falls back to startDir when no .git ancestor exists", async () => {
-    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "commons-cli-nogit-")));
+    const dir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-cli-nogit-")),
+    );
     try {
       expect(findRepoRoot(dir)).toBe(dir);
     } finally {

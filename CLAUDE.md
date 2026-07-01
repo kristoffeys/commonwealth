@@ -1,6 +1,6 @@
-# CLAUDE.md — working guide for Commons
+# CLAUDE.md — working guide for Commonwealth
 
-Commons is a **multiplayer, git-backed, agent-readable second brain for teams**: a shared
+Commonwealth is a **multiplayer, git-backed, agent-readable second brain for teams**: a shared
 repo of plain markdown (memory / decisions / work-state / people) that every teammate's
 AI reads before acting and writes back to. Open source (Apache-2.0). Read `README.md` and
 `docs/` before making design changes.
@@ -22,7 +22,7 @@ AI reads before acting and writes back to. Open source (Apache-2.0). Read `READM
    source of truth. (ADR-0003, ADR-0005)
 2. **Design out concurrency, don't resolve it.** Notes are atomic, one-fact-per-file,
    with collision-proof ids → concurrent writes union-merge with zero conflicts. Derived
-   files (COMMONS.md, INDEX.md) are regenerated, never hand-merged. Never silently
+   files (COMMONWEALTH.md, INDEX.md) are regenerated, never hand-merged. Never silently
    overwrite. (ADR-0003)
 3. **Prefer create/supersede over in-place edits.** `status` + `superseded_by`, not
    deletion. Git keeps history; superseding keeps the reasoning visible.
@@ -35,7 +35,7 @@ AI reads before acting and writes back to. Open source (Apache-2.0). Read `READM
 - Vitest (test), ESLint + Prettier, tsup (build).
 - `packages/core` — schema, note IO, scaffold, derived index. (More packages — MCP
   server, CLI, daemon, plugin — arrive in later milestones.)
-- `@commons/core` public surface is `packages/core/src/index.ts`. `schema.ts` and
+- `@commonwealth/core` public surface is `packages/core/src/index.ts`. `schema.ts` and
   `ids.ts` are the stable contract other modules build on.
 
 ## Commands
@@ -54,7 +54,7 @@ clone on a new platform, run `pnpm rebuild better-sqlite3 esbuild` if native mod
 
 ## How we work (project management)
 
-- **Source of truth for tasks = the GitHub Project** "Commons — Build"
+- **Source of truth for tasks = the GitHub Project** "Commonwealth — Build"
   (`gh project view 2 --owner kristoffeys`). Issues are grouped by milestone (M0–M5).
 - **Keep the board live.** When you start an issue set its Status to _In Progress_; when
   a PR merges / work lands, set it _Done_. Reference issues in commits (`#12`).

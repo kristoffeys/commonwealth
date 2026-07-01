@@ -20,7 +20,7 @@ settings**.
 Team-managed settings (org policy)
         │  distributes
         ▼
-Commons Claude Code plugin  ──▶  installs: MCP server + lifecycle hooks + brain registry
+Commonwealth Claude Code plugin  ──▶  installs: MCP server + lifecycle hooks + brain registry
         │  on `claude` startup in a project dir
         ▼
 Registry maps cwd/project → brain repo(s)
@@ -34,7 +34,7 @@ Sync daemon running  ──▶  SessionStart: pull + inject relevant context
 
 Claude Code supports **org-wide managed policy settings** (MDM/managed
 `settings.json`, highest-precedence in the config hierarchy). The company subscription's
-managed settings reference the **Commons plugin** (from our plugin marketplace / repo).
+managed settings reference the **Commonwealth plugin** (from our plugin marketplace / repo).
 When a new teammate's Claude Code reads managed policy, the plugin is present — no manual
 install. This is the "(semi-)automatic add to each user's setup."
 
@@ -50,13 +50,13 @@ The plugin ships:
   `SessionEnd` (capture → staging). Hooks are how "auto" actually happens; the harness
   runs them, not the model.
 - **The brain registry** — the map from project → brain repo(s).
-- **`/commons` skill/commands** — manual `remember`, `recall`, `promote`, `status`.
+- **`/commonwealth` skill/commands** — manual `remember`, `recall`, `promote`, `status`.
 
 ### 3. Registry resolves the right brain automatically
 
 On startup in a directory, the plugin consults the registry:
 
-- **Explicit:** a `.commons/brain` marker file in the project repo names its brain(s).
+- **Explicit:** a `.commonwealth/brain` marker file in the project repo names its brain(s).
 - **Convention:** map by git remote / org (e.g. `acme/*` → `acme-brain`).
 - **Fallback:** the `org-brain` for cross-project knowledge.
 

@@ -1,4 +1,4 @@
-import { type NewNoteInput } from "@commons/core";
+import { type NewNoteInput } from "@commonwealth/core";
 import { curate, type CurateResult, type Curator } from "./curate.js";
 
 /**

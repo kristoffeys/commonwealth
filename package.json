@@ -1,12 +1,12 @@
 {
-  "name": "commons",
+  "name": "commonwealth",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.28.2",
   "engines": {
     "node": ">=22"
   },
-  "description": "Commons — a multiplayer, git-backed, agent-readable second brain for teams",
+  "description": "Commonwealth — a multiplayer, git-backed, agent-readable second brain for teams",
   "license": "Apache-2.0",
   "scripts": {
     "build": "pnpm -r build",

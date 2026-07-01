@@ -1,11 +1,11 @@
 {
-  "name": "@commons/seed",
+  "name": "@commonwealth/seed",
   "version": "0.0.0",
   "description": "Cold-start seeding: mine git history + import agent-config into candidate notes",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "commons-seed": "./dist/index.js"
+    "commonwealth-seed": "./dist/index.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,6 +17,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@commons/core": "workspace:*"
+    "@commonwealth/core": "workspace:*"
   }
 }

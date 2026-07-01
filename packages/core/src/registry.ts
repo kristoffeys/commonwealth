@@ -6,18 +6,18 @@ import path from "node:path";
  * The brain registry (issue #14): resolve which brain repo a given working directory maps
  * to. The plugin's SessionStart/SessionEnd hooks call {@link resolveBrainDir} to learn the
  * brain for `cwd` before injecting context or capturing learnings; the MCP server reads the
- * resolved path from `COMMONS_BRAIN_DIR`.
+ * resolved path from `COMMONWEALTH_BRAIN_DIR`.
  *
  * Resolution is layered so a project can pin its brain explicitly, a brain repo resolves to
  * itself, teams can map by convention, and everything falls back to an env var — see
  * docs/03-distribution.md §3.
  */
 
-/** Marker file, relative to a project dir, naming that project's brain: `.commons/brain`. */
-const MARKER_REL = path.join(".commons", "brain");
+/** Marker file, relative to a project dir, naming that project's brain: `.commonwealth/brain`. */
+const MARKER_REL = path.join(".commonwealth", "brain");
 
-/** A brain repo is identified by its `.commons/config.json` (ADR-0009). */
-const BRAIN_CONFIG_REL = path.join(".commons", "config.json");
+/** A brain repo is identified by its `.commonwealth/config.json` (ADR-0009). */
+const BRAIN_CONFIG_REL = path.join(".commonwealth", "config.json");
 
 /** One prefix → brain mapping entry in the user registry file. */
 export interface RegistryMapping {
@@ -27,14 +27,14 @@ export interface RegistryMapping {
   brain: string;
 }
 
-/** Shape of the user registry JSON file (`~/.commons/registry.json`). */
+/** Shape of the user registry JSON file (`~/.commonwealth/registry.json`). */
 export interface Registry {
   mappings: RegistryMapping[];
 }
 
 /** Options for {@link resolveBrainDir}; all optional (env + registry path overrides). */
 export interface ResolveBrainOptions {
-  /** Explicit value to use instead of `process.env.COMMONS_BRAIN_DIR` (step 4). */
+  /** Explicit value to use instead of `process.env.COMMONWEALTH_BRAIN_DIR` (step 4). */
   env?: string;
   /** Explicit registry file path, overriding the default resolution (step 3). */
   registryPath?: string;
@@ -89,17 +89,17 @@ async function isFile(file: string): Promise<boolean> {
 }
 
 /**
- * Resolve the user registry path. Order: explicit `registryPath` → `$COMMONS_REGISTRY`
- * (test override) → a `registry.json` sibling of `$COMMONS_CONFIG` (so tests that redirect
- * config also redirect the registry) → `~/.commons/registry.json`.
+ * Resolve the user registry path. Order: explicit `registryPath` → `$COMMONWEALTH_REGISTRY`
+ * (test override) → a `registry.json` sibling of `$COMMONWEALTH_CONFIG` (so tests that redirect
+ * config also redirect the registry) → `~/.commonwealth/registry.json`.
  */
 function resolveRegistryPath(explicit?: string): string {
   if (explicit) return explicit;
-  if (process.env.COMMONS_REGISTRY) return process.env.COMMONS_REGISTRY;
-  if (process.env.COMMONS_CONFIG) {
-    return path.join(path.dirname(process.env.COMMONS_CONFIG), "registry.json");
+  if (process.env.COMMONWEALTH_REGISTRY) return process.env.COMMONWEALTH_REGISTRY;
+  if (process.env.COMMONWEALTH_CONFIG) {
+    return path.join(path.dirname(process.env.COMMONWEALTH_CONFIG), "registry.json");
   }
-  return path.join(os.homedir(), ".commons", "registry.json");
+  return path.join(os.homedir(), ".commonwealth", "registry.json");
 }
 
 /** Parse the registry file into a normalized {@link Registry}; null on missing/invalid. */
@@ -131,14 +131,14 @@ async function loadRegistry(registryPath: string): Promise<Registry | null> {
 /**
  * Resolve the brain directory for `startDir`. First hit wins:
  *
- * 1. Walk up from `startDir`: a `.commons/brain` marker file (a path, `~`-expanded and
+ * 1. Walk up from `startDir`: a `.commonwealth/brain` marker file (a path, `~`-expanded and
  *    resolved relative to the dir holding it) pins the brain explicitly.
- * 2. Walk up: a directory that is itself a brain (`.commons/config.json`) resolves to
+ * 2. Walk up: a directory that is itself a brain (`.commonwealth/config.json`) resolves to
  *    itself.
- * 3. The user registry file (`opts.registryPath` ?? `$COMMONS_REGISTRY` ?? sibling of
- *    `$COMMONS_CONFIG` ?? `~/.commons/registry.json`): the first `prefix` (tilde-expanded,
+ * 3. The user registry file (`opts.registryPath` ?? `$COMMONWEALTH_REGISTRY` ?? sibling of
+ *    `$COMMONWEALTH_CONFIG` ?? `~/.commonwealth/registry.json`): the first `prefix` (tilde-expanded,
  *    resolved) that `startDir` is under → its `brain` (tilde-expanded).
- * 4. `opts.env` ?? `process.env.COMMONS_BRAIN_DIR`, if set.
+ * 4. `opts.env` ?? `process.env.COMMONWEALTH_BRAIN_DIR`, if set.
  * 5. `null`.
  *
  * Never throws on missing/unreadable files.
@@ -173,7 +173,7 @@ export async function resolveBrainDir(
   }
 
   // 4) Env fallback.
-  const env = opts.env ?? process.env.COMMONS_BRAIN_DIR;
+  const env = opts.env ?? process.env.COMMONWEALTH_BRAIN_DIR;
   if (env && env.length > 0) return path.resolve(env);
 
   // 5) Nothing matched.
@@ -181,8 +181,8 @@ export async function resolveBrainDir(
 }
 
 /**
- * Write the `.commons/brain` marker in `projectDir` naming `brainPath`, creating the
- * `.commons/` directory if needed. Used to pin a project to its brain (registry step 1).
+ * Write the `.commonwealth/brain` marker in `projectDir` naming `brainPath`, creating the
+ * `.commonwealth/` directory if needed. Used to pin a project to its brain (registry step 1).
  */
 export async function setBrainMarker(projectDir: string, brainPath: string): Promise<void> {
   const markerPath = path.join(projectDir, MARKER_REL);

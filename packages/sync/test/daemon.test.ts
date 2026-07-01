@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { writeNote } from "@commons/core";
+import { writeNote } from "@commonwealth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Daemon, isRunning, readPid } from "../src/daemon";
 import { git, makeFixture, type Fixture } from "./helpers";
@@ -58,11 +58,11 @@ describe("Daemon", () => {
 
     // After stop the PID file is gone.
     expect(await readPid(fx.alice)).toBeNull();
-    await expect(fs.access(path.join(fx.alice, ".commons", "sync.pid"))).rejects.toBeTruthy();
+    await expect(fs.access(path.join(fx.alice, ".commonwealth", "sync.pid"))).rejects.toBeTruthy();
   }, 20_000);
 
   it("settles after a write and does not self-trigger an unbounded sync loop", async () => {
-    // Regression: regenerateDerived rewrites COMMONS.md/INDEX.md every sync; if the
+    // Regression: regenerateDerived rewrites COMMONWEALTH.md/INDEX.md every sync; if the
     // watcher observed those, each sync would retrigger the next forever. They must be
     // ignored so activity stabilizes after a single write.
     const daemon = new Daemon();

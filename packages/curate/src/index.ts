@@ -7,7 +7,7 @@ import {
   NOTE_KINDS,
   type NoteKind,
   setFeature,
-} from "@commons/core";
+} from "@commonwealth/core";
 import { captureCandidates } from "./capture.js";
 import { formatContext } from "./context.js";
 import { curate } from "./curate.js";
@@ -16,33 +16,33 @@ import { approve, approveAll, listPending, reject } from "./review.js";
 import { addAllow, addDeny, isInScope, loadUserConfig } from "./scope.js";
 
 /**
- * Resolve the brain directory: an explicit `--dir`, else `$COMMONS_BRAIN_DIR`, else cwd.
+ * Resolve the brain directory: an explicit `--dir`, else `$COMMONWEALTH_BRAIN_DIR`, else cwd.
  */
 function resolveDir(explicit: string | undefined): string {
-  return explicit ?? process.env.COMMONS_BRAIN_DIR ?? process.cwd();
+  return explicit ?? process.env.COMMONWEALTH_BRAIN_DIR ?? process.cwd();
 }
 
 /** Print usage to stderr. */
 function usage(): void {
   console.error(
     [
-      "commons-curate — curation + in-repo review queue",
+      "commonwealth-curate — curation + in-repo review queue",
       "",
       "Usage:",
-      "  commons-curate list [--dir <brain>]",
-      "  commons-curate approve <id...> [--dir <brain>]",
-      "  commons-curate reject <id...> [--dir <brain>]",
-      "  commons-curate approve-all [--dir <brain>]",
-      "  commons-curate stage --kind <kind> --title <t> --body <b> [--tags a,b] [--dir <brain>]",
-      "  commons-curate context [--dir <brain>] [--cwd <dir>] [--query <q>] [--limit <n>]",
-      "  commons-curate capture [--dir <brain>] [--cwd <dir>] [--from <json-file>]",
-      "  commons-curate scope show",
-      "  commons-curate scope check [--cwd <dir>]",
-      "  commons-curate scope allow <path>",
-      "  commons-curate scope deny <path>",
-      "  commons-curate feature list [--dir <brain>]",
-      "  commons-curate feature enable <name> [--dir <brain>]",
-      "  commons-curate feature disable <name> [--dir <brain>]",
+      "  commonwealth-curate list [--dir <brain>]",
+      "  commonwealth-curate approve <id...> [--dir <brain>]",
+      "  commonwealth-curate reject <id...> [--dir <brain>]",
+      "  commonwealth-curate approve-all [--dir <brain>]",
+      "  commonwealth-curate stage --kind <kind> --title <t> --body <b> [--tags a,b] [--dir <brain>]",
+      "  commonwealth-curate context [--dir <brain>] [--cwd <dir>] [--query <q>] [--limit <n>]",
+      "  commonwealth-curate capture [--dir <brain>] [--cwd <dir>] [--from <json-file>]",
+      "  commonwealth-curate scope show",
+      "  commonwealth-curate scope check [--cwd <dir>]",
+      "  commonwealth-curate scope allow <path>",
+      "  commonwealth-curate scope deny <path>",
+      "  commonwealth-curate feature list [--dir <brain>]",
+      "  commonwealth-curate feature enable <name> [--dir <brain>]",
+      "  commonwealth-curate feature disable <name> [--dir <brain>]",
       "",
       `Kinds: ${NOTE_KINDS.join(", ")}`,
     ].join("\n"),
@@ -73,14 +73,14 @@ async function cmdReject(dir: string, ids: string[]): Promise<void> {
   if (ids.length === 0) throw new Error("reject requires at least one <id>");
   for (const id of ids) {
     await reject(dir, id);
-    console.error(`[commons-curate] rejected ${id}`);
+    console.error(`[commonwealth-curate] rejected ${id}`);
   }
 }
 
 async function cmdApproveAll(dir: string): Promise<void> {
   const paths = await approveAll(dir);
   for (const p of paths) console.log(p);
-  console.error(`[commons-curate] approved ${paths.length} note(s)`);
+  console.error(`[commonwealth-curate] approved ${paths.length} note(s)`);
 }
 
 async function cmdStage(dir: string, args: string[]): Promise<void> {
@@ -125,7 +125,7 @@ async function cmdStage(dir: string, args: string[]): Promise<void> {
   }
   for (const r of result.rejected) {
     const extra = r.duplicateOf ? ` (of ${r.duplicateOf})` : "";
-    console.error(`[commons-curate] rejected: ${r.reason}${extra}`);
+    console.error(`[commonwealth-curate] rejected: ${r.reason}${extra}`);
   }
 }
 
@@ -148,7 +148,7 @@ async function cmdContext(dir: string, args: string[]): Promise<void> {
   const cwd = typeof values.cwd === "string" ? values.cwd : process.cwd();
   const config = await loadUserConfig();
   if (!isInScope(cwd, config)) {
-    console.error(`[commons-curate] ${cwd} is out of scope; injecting nothing`);
+    console.error(`[commonwealth-curate] ${cwd} is out of scope; injecting nothing`);
     return;
   }
 
@@ -199,7 +199,7 @@ async function cmdCapture(dir: string, args: string[]): Promise<void> {
   const cwd = typeof values.cwd === "string" ? values.cwd : process.cwd();
   const config = await loadUserConfig();
   if (!isInScope(cwd, config)) {
-    console.error(`[commons-curate] ${cwd} is out of scope; capturing nothing`);
+    console.error(`[commonwealth-curate] ${cwd} is out of scope; capturing nothing`);
     return;
   }
 
@@ -213,7 +213,7 @@ async function cmdCapture(dir: string, args: string[]): Promise<void> {
   }
   for (const r of result.rejected) {
     const extra = r.duplicateOf ? ` (of ${r.duplicateOf})` : "";
-    console.error(`[commons-curate] rejected: ${r.reason}${extra}`);
+    console.error(`[commonwealth-curate] rejected: ${r.reason}${extra}`);
   }
 }
 
@@ -241,14 +241,14 @@ async function cmdScope(args: string[]): Promise<void> {
       const target = rest[0];
       if (!target) throw new Error("scope allow requires a <path>");
       await addAllow(target);
-      console.error(`[commons-curate] allow += ${target}`);
+      console.error(`[commonwealth-curate] allow += ${target}`);
       return;
     }
     case "deny": {
       const target = rest[0];
       if (!target) throw new Error("scope deny requires a <path>");
       await addDeny(target);
-      console.error(`[commons-curate] deny += ${target}`);
+      console.error(`[commonwealth-curate] deny += ${target}`);
       return;
     }
     default:
@@ -258,7 +258,7 @@ async function cmdScope(args: string[]): Promise<void> {
 
 /**
  * `feature <list|enable|disable> [name]` — inspect and toggle brain-level feature flags
- * (ADR-0009). Flags live in the shared, synced `<brain>/.commons/config.json`, so they
+ * (ADR-0009). Flags live in the shared, synced `<brain>/.commonwealth/config.json`, so they
  * apply to the whole team. `list` prints each known flag with its current on/off state;
  * `enable`/`disable` validate the name against {@link FEATURE_FLAGS} then persist.
  */
@@ -291,7 +291,7 @@ async function cmdFeature(dir: string, args: string[]): Promise<void> {
       }
       const on = sub === "enable";
       await setFeature(dir, name, on);
-      console.error(`[commons-curate] feature ${name} ${on ? "enabled" : "disabled"}`);
+      console.error(`[commonwealth-curate] feature ${name} ${on ? "enabled" : "disabled"}`);
       return;
     }
     default:
@@ -300,7 +300,7 @@ async function cmdFeature(dir: string, args: string[]): Promise<void> {
 }
 
 /**
- * `commons-curate` CLI entry (ADR-0007). Diagnostics go to stderr; approved/staged paths
+ * `commonwealth-curate` CLI entry (ADR-0007). Diagnostics go to stderr; approved/staged paths
  * and ids go to stdout so they compose with other tools. NO shebang here — tsup's banner
  * supplies it; a source shebang would break the built binary.
  */
@@ -354,6 +354,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  console.error("[commons-curate] error:", err instanceof Error ? err.message : err);
+  console.error("[commonwealth-curate] error:", err instanceof Error ? err.message : err);
   process.exit(1);
 });

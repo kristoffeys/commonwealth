@@ -8,14 +8,14 @@ let configDir: string;
 let configPath: string;
 
 beforeEach(async () => {
-  configDir = await fs.mkdtemp(path.join(os.tmpdir(), "commons-curate-scope-"));
+  configDir = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-scope-"));
   configPath = path.join(configDir, "config.json");
-  // Point every scope-aware default at this temp file; never touch the real ~/.commons.
-  process.env.COMMONS_CONFIG = configPath;
+  // Point every scope-aware default at this temp file; never touch the real ~/.commonwealth.
+  process.env.COMMONWEALTH_CONFIG = configPath;
 });
 
 afterEach(async () => {
-  delete process.env.COMMONS_CONFIG;
+  delete process.env.COMMONWEALTH_CONFIG;
   await fs.rm(configDir, { recursive: true, force: true });
 });
 

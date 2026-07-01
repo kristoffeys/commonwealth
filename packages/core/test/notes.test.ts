@@ -9,7 +9,7 @@ import type { Note } from "../src/schema";
 let dir: string;
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "commons-notes-"));
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-notes-"));
 });
 afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });

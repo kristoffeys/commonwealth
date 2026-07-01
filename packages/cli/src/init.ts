@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { NewNoteInput } from "@commons/core";
+import type { NewNoteInput } from "@commonwealth/core";
 
 /** Per-source counts of what seeding mined from the repo. */
 export interface InitBySource {
@@ -22,16 +22,16 @@ export interface InitOptions {
 
 /**
  * Injected side effects so {@link runInit} is deterministic and unit-testable without
- * touching the filesystem, spawning `commons-curate`, or prompting a human.
+ * touching the filesystem, spawning `commonwealth-curate`, or prompting a human.
  */
 export interface InitDeps {
-  /** Mine cold-start candidates from the repo (usually `@commons/seed`'s `gatherCandidates`). */
+  /** Mine cold-start candidates from the repo (usually `@commonwealth/seed`'s `gatherCandidates`). */
   gather(repoDir: string): Promise<{ candidates: NewNoteInput[]; bySource: InitBySource }>;
   /** Resolve the brain this project already belongs to, or `null` if none. */
   resolveBrain(cwd: string): Promise<string | null>;
   /** Scaffold a fresh brain at `dir` with the given human-readable name. */
   createBrain(dir: string, name: string): Promise<void>;
-  /** Pin `repoDir` to `brainDir` via the `.commons/brain` marker. */
+  /** Pin `repoDir` to `brainDir` via the `.commonwealth/brain` marker. */
   writeMarker(repoDir: string, brainDir: string): Promise<void>;
   /** Stage candidates into the brain's review queue; returns how many were captured. */
   stage(brainDir: string, candidates: NewNoteInput[]): Promise<{ captured: number }>;
@@ -72,17 +72,17 @@ export function findRepoRoot(startDir: string): string {
 
 /**
  * Compute the default brain directory for a project. The brain is a SEPARATE repo living
- * under `~/.commons/brains/<project-basename>`, never nested inside the project itself.
+ * under `~/.commonwealth/brains/<project-basename>`, never nested inside the project itself.
  *
  * @param repoRoot The project's repo root.
  * @returns An absolute path for the project's default brain.
  */
 export function defaultBrainDir(repoRoot: string): string {
-  return path.join(os.homedir(), ".commons", "brains", path.basename(path.resolve(repoRoot)));
+  return path.join(os.homedir(), ".commonwealth", "brains", path.basename(path.resolve(repoRoot)));
 }
 
 /**
- * Orchestrate `commons init`. Deterministic and side-effect-free except through `deps`.
+ * Orchestrate `commonwealth init`. Deterministic and side-effect-free except through `deps`.
  *
  * Flow: resolve the repo root and any existing brain. If one exists and we're not
  * reseeding, JOIN it (write the marker, done). Otherwise create a new brain, pin the
@@ -90,7 +90,7 @@ export function defaultBrainDir(repoRoot: string): string {
  * unless `--yes` — stage them into the review queue. Brain creation and the marker are
  * idempotent and always run; every content write (staging) is gated by `confirm`.
  *
- * @param cwd The directory `commons init` was invoked from.
+ * @param cwd The directory `commonwealth init` was invoked from.
  * @param opts Parsed CLI flags.
  * @param deps Injected side effects.
  * @returns A structured summary of what happened.
@@ -127,7 +127,7 @@ export async function runInit(cwd: string, opts: InitOptions, deps: InitDeps): P
   const { captured } = candidates.length ? await deps.stage(brainDir, candidates) : { captured: 0 };
 
   deps.log(
-    `Your brain has ${captured} notes pending review. Run \`commons-curate list\` to approve, ` +
+    `Your brain has ${captured} notes pending review. Run \`commonwealth-curate list\` to approve, ` +
       `then start a Claude session here and ask it something your team already knows.`,
   );
 

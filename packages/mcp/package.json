@@ -1,11 +1,11 @@
 {
-  "name": "@commons/mcp",
+  "name": "@commonwealth/mcp",
   "version": "0.0.0",
-  "description": "MCP server exposing a Commons brain to Claude Code and other MCP clients",
+  "description": "MCP server exposing a Commonwealth brain to Claude Code and other MCP clients",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "commons-mcp": "./dist/index.js"
+    "commonwealth-mcp": "./dist/index.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,7 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@commons/core": "workspace:*",
+    "@commonwealth/core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^3.23.0"
   }

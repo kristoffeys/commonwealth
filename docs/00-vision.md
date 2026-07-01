@@ -15,7 +15,7 @@ decided; chat captures _noise_; nobody captures _why_ — the context, the rejec
 options, the current work-state, the live threads with people. When someone leaves,
 or just forgets, that layer is gone. Every AI a teammate runs starts cold.
 
-**Commons is the context substrate every team member's AI reads before it acts.**
+**Commonwealth is the context substrate every team member's AI reads before it acts.**
 It makes the personal `~/vault` pattern multiplayer: a remote, shared, per-project
 brain of plain markdown, git-backed, that agents read and write.
 

@@ -1,4 +1,4 @@
-import { listNotes, readNote, search, type Note } from "@commons/core";
+import { listNotes, readNote, search, type Note } from "@commonwealth/core";
 
 /** How to select relevant context for injection (ADR-0007 #12). */
 export interface RelevanceQuery {

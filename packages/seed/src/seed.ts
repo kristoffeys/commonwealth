@@ -1,4 +1,4 @@
-import type { NewNoteInput } from "@commons/core";
+import type { NewNoteInput } from "@commonwealth/core";
 import { importConfigs } from "./config-importer.js";
 import { mineGitHistory, type MineGitHistoryOptions } from "./git-miner.js";
 

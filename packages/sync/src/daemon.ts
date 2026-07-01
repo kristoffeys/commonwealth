@@ -16,8 +16,8 @@ export interface DaemonOptions {
   onError?: (err: unknown) => void;
 }
 
-/** Directory Commons owns for local process state (PID file, etc.). */
-const COMMONS_DIR = ".commons";
+/** Directory Commonwealth owns for local process state (PID file, etc.). */
+const COMMONWEALTH_DIR = ".commonwealth";
 const PID_FILE = "sync.pid";
 
 /**
@@ -28,13 +28,13 @@ const PID_FILE = "sync.pid";
 function makeIgnored(brainDir: string): (p: string) => boolean {
   const gitDir = path.join(brainDir, ".git");
   const indexDir = path.join(brainDir, "index");
-  const commonsDir = path.join(brainDir, COMMONS_DIR);
+  const commonwealthDir = path.join(brainDir, COMMONWEALTH_DIR);
   const stagingDir = path.join(brainDir, "staging");
-  const commonsMd = path.join(brainDir, "COMMONS.md");
+  const commonwealthMd = path.join(brainDir, "COMMONWEALTH.md");
   return (p: string): boolean => {
     if (p === gitDir || p.startsWith(gitDir + path.sep)) return true;
     if (p === indexDir || p.startsWith(indexDir + path.sep)) return true;
-    if (p === commonsDir || p.startsWith(commonsDir + path.sep)) return true;
+    if (p === commonwealthDir || p.startsWith(commonwealthDir + path.sep)) return true;
     // Per-user review queue: local-only, never synced (ADR-0008).
     if (p === stagingDir || p.startsWith(stagingDir + path.sep)) return true;
     if (/\.db(-shm|-wal)?$/.test(p)) return true;
@@ -42,7 +42,7 @@ function makeIgnored(brainDir: string): (p: string) => boolean {
     // Derived artifacts are rewritten by every sync (regenerateDerived); watching them
     // would make each sync retrigger the next — an unbounded loop. They are never a
     // legitimate sync trigger, so ignore them.
-    if (p === commonsMd) return true;
+    if (p === commonwealthMd) return true;
     if (path.basename(p) === "INDEX.md") return true;
     return false;
   };
@@ -122,7 +122,7 @@ export class Daemon {
 
 /** Absolute path of the daemon PID file for a brain. */
 function pidPath(brainDir: string): string {
-  return path.join(brainDir, COMMONS_DIR, PID_FILE);
+  return path.join(brainDir, COMMONWEALTH_DIR, PID_FILE);
 }
 
 /** Write the current process id to the brain's PID file. */

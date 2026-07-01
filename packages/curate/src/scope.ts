@@ -15,11 +15,11 @@ export interface UserConfig {
 }
 
 /**
- * Resolve the user config path: `$COMMONS_CONFIG` if set, else `~/.commons/config.json`.
- * The `COMMONS_CONFIG` override is essential so tests never touch the real `~/.commons`.
+ * Resolve the user config path: `$COMMONWEALTH_CONFIG` if set, else `~/.commonwealth/config.json`.
+ * The `COMMONWEALTH_CONFIG` override is essential so tests never touch the real `~/.commonwealth`.
  */
 export function defaultConfigPath(): string {
-  return process.env.COMMONS_CONFIG ?? path.join(os.homedir(), ".commons", "config.json");
+  return process.env.COMMONWEALTH_CONFIG ?? path.join(os.homedir(), ".commonwealth", "config.json");
 }
 
 /**

@@ -2,8 +2,8 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "paths": {
-      "@commons/core": ["../core/src/index.ts"],
-      "@commons/seed": ["../seed/src/index.ts"]
+      "@commonwealth/core": ["../core/src/index.ts"],
+      "@commonwealth/seed": ["../seed/src/index.ts"]
     }
   },
   "include": ["src"]

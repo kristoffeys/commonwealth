@@ -8,7 +8,7 @@ import { listStaged } from "../src/staging.js";
 let brainDir: string;
 
 beforeEach(async () => {
-  brainDir = await fs.mkdtemp(path.join(tmpdir(), "commons-curate-secrets-"));
+  brainDir = await fs.mkdtemp(path.join(tmpdir(), "commonwealth-curate-secrets-"));
 });
 
 afterEach(async () => {

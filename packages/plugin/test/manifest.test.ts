@@ -10,16 +10,16 @@ function readJson(rel: string): unknown {
 }
 
 describe(".claude-plugin/plugin.json", () => {
-  it("is valid JSON naming the plugin 'commons' with mcpServers + hooks", () => {
+  it("is valid JSON naming the plugin 'commonwealth' with mcpServers + hooks", () => {
     const manifest = readJson(".claude-plugin/plugin.json") as Record<string, unknown>;
-    expect(manifest.name).toBe("commons");
+    expect(manifest.name).toBe("commonwealth");
     expect(typeof manifest.version).toBe("string");
 
     const mcp = manifest.mcpServers as Record<string, { command: string; args: string[] }>;
-    expect(mcp["commons-brain"]).toBeDefined();
-    expect(mcp["commons-brain"].command).toBe("node");
-    expect(mcp["commons-brain"].args.join(" ")).toContain("vendor/mcp/index.js");
-    expect(mcp["commons-brain"].args.join(" ")).toContain("${CLAUDE_PLUGIN_ROOT}");
+    expect(mcp["commonwealth-brain"]).toBeDefined();
+    expect(mcp["commonwealth-brain"].command).toBe("node");
+    expect(mcp["commonwealth-brain"].args.join(" ")).toContain("vendor/mcp/index.js");
+    expect(mcp["commonwealth-brain"].args.join(" ")).toContain("${CLAUDE_PLUGIN_ROOT}");
 
     expect(typeof manifest.hooks).toBe("string");
     expect(manifest.hooks as string).toContain("hooks/hooks.json");

@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { initBrain } from "@commons/core";
+import { initBrain } from "@commonwealth/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
@@ -19,7 +19,9 @@ let brainDir: string;
 
 beforeAll(async () => {
   execFileSync("pnpm", ["-r", "build"], { cwd: repoRoot, stdio: "pipe" });
-  brainDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "commons-sync-smoke-")));
+  brainDir = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-sync-smoke-")),
+  );
   // A local-only brain (no remote): sync must still exit 0.
   execFileSync("git", ["init", "-q", "-b", "main", brainDir], { stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "smoke@example.com"], { cwd: brainDir });
@@ -31,7 +33,7 @@ afterAll(async () => {
   if (brainDir) await fs.rm(brainDir, { recursive: true, force: true });
 });
 
-describe("built commons-sync binary", () => {
+describe("built commonwealth-sync binary", () => {
   it("`sync --dir <brain>` exits 0", () => {
     expect(() =>
       execFileSync("node", [distEntry, "sync", "--dir", brainDir], { stdio: "pipe" }),

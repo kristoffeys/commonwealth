@@ -172,7 +172,7 @@ function hasLiteralRun(raw) {
  */
 function tryCompile(body, caseInsensitive) {
   // Reject scoped/mid-pattern inline flag groups — (?i), (?i:…), (?-i:…), (?ims:…). These
-  // are ES2025 regex modifiers that only newer engines accept (Node 24), but Commons
+  // are ES2025 regex modifiers that only newer engines accept (Node 24), but Commonwealth
   // targets Node >= 22, where they throw at RegExp construction. `new RegExp` on the
   // GENERATING host (which may be Node 24) would NOT catch them, so filter textually.
   // (Non-capturing (?:…), lookaround (?=…)/(?!…)/(?<=…), and named (?<name>…) are fine.)

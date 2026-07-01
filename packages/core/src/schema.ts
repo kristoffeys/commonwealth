@@ -92,5 +92,5 @@ export interface Note {
   path: string;
 }
 
-/** Current on-disk schema version, pinned in `.commons/schema-version`. */
+/** Current on-disk schema version, pinned in `.commonwealth/schema-version`. */
 export const SCHEMA_VERSION = 1;

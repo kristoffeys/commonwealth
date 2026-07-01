@@ -4,7 +4,7 @@ import { defaultBrainConfig } from "./config.js";
 import { KIND_DIR, type NoteKind, SCHEMA_VERSION } from "./schema.js";
 
 export interface InitBrainOptions {
-  /** Human-readable brain name, written into COMMONS.md / .commons/config. */
+  /** Human-readable brain name, written into COMMONWEALTH.md / .commonwealth/config. */
   name?: string;
   /** Proceed even if the directory already contains files. */
   force?: boolean;
@@ -24,23 +24,23 @@ const KIND_INDEX_TITLE: Record<string, string> = {
 /** Entries that don't count as "pre-existing content" when deciding to abort. */
 const IGNORED_ENTRIES = new Set([".git", ".gitkeep"]);
 
-/** Top-level files/folders a Commons brain owns; their presence means "already a brain". */
+/** Top-level files/folders a Commonwealth brain owns; their presence means "already a brain". */
 const BRAIN_ENTRIES = new Set<string>([
-  ".commons",
+  ".commonwealth",
   ".gitattributes",
   ".gitignore",
-  "COMMONS.md",
+  "COMMONWEALTH.md",
   "index",
   ...KIND_DIRS,
 ]);
 
-const GITATTRIBUTES = ["COMMONS.md merge=union", "**/INDEX.md merge=union", ""].join("\n");
+const GITATTRIBUTES = ["COMMONWEALTH.md merge=union", "**/INDEX.md merge=union", ""].join("\n");
 
 // `staging/` is the per-user review queue — local only, never synced (ADR-0008).
 const GITIGNORE = ["index/", "staging/", "*.db", "*.db-shm", "*.db-wal", ""].join("\n");
 
 /**
- * True if `dir` is empty or contains only entries a Commons brain owns (or `.git`).
+ * True if `dir` is empty or contains only entries a Commonwealth brain owns (or `.git`).
  * Anything else (a stray README, source tree, etc.) means initializing here would be a
  * surprise, so `initBrain` refuses unless `force` is set.
  */
@@ -68,18 +68,18 @@ async function writeFile(file: string, contents: string): Promise<void> {
  * Initialize a brain repository skeleton at `dir` (see docs/01-architecture.md §1,
  * docs/02-data-model.md). Creates:
  *   - the four kind folders: memory/ decisions/ work-state/ people/ (each with `.gitkeep`)
- *   - `.commons/` with `schema-version` and a `config.json` (name, schemaVersion, remotes, curation)
+ *   - `.commonwealth/` with `schema-version` and a `config.json` (name, schemaVersion, remotes, curation)
  *   - `.gitattributes` with `merge=union` for derived/append-only files (ADR-0003)
  *   - `.gitignore` ignoring the derived `index/` and `*.db`
- *   - a generated `COMMONS.md` router and per-folder `INDEX.md` placeholders
+ *   - a generated `COMMONWEALTH.md` router and per-folder `INDEX.md` placeholders
  *
  * Idempotent: safe to call again; missing files are (re)created. Throws if `dir` already
- * contains non-Commons files and `force` is not set.
+ * contains non-Commonwealth files and `force` is not set.
  */
 export async function initBrain(dir: string, opts: InitBrainOptions = {}): Promise<void> {
   if (!opts.force && !(await isSafeToInit(dir))) {
     throw new Error(
-      `Refusing to initialize a Commons brain in a non-empty directory: ${dir}. ` +
+      `Refusing to initialize a Commonwealth brain in a non-empty directory: ${dir}. ` +
         `Pass { force: true } to proceed.`,
     );
   }
@@ -97,11 +97,11 @@ export async function initBrain(dir: string, opts: InitBrainOptions = {}): Promi
     await writeFile(path.join(abs, "INDEX.md"), `# ${title} index\n\n_generated_\n`);
   }
 
-  // .commons metadata: schema-version pin + config.json.
-  await writeFile(path.join(dir, ".commons", "schema-version"), `${SCHEMA_VERSION}\n`);
+  // .commonwealth metadata: schema-version pin + config.json.
+  await writeFile(path.join(dir, ".commonwealth", "schema-version"), `${SCHEMA_VERSION}\n`);
   const config = defaultBrainConfig(name);
   await writeFile(
-    path.join(dir, ".commons", "config.json"),
+    path.join(dir, ".commonwealth", "config.json"),
     `${JSON.stringify(config, null, 2)}\n`,
   );
 
@@ -110,15 +110,15 @@ export async function initBrain(dir: string, opts: InitBrainOptions = {}): Promi
   await writeFile(path.join(dir, ".gitignore"), GITIGNORE);
 
   // Minimal generated router placeholder; real content comes from regenerateDerived.
-  const commons = [
-    `# ${name} — Commons brain`,
+  const commonwealth = [
+    `# ${name} — Commonwealth brain`,
     "",
     "_This file is generated. Do not edit by hand — it is regenerated from the note set._",
     "",
-    "Run the Commons index to populate the router with active work-state and recent decisions.",
+    "Run the Commonwealth index to populate the router with active work-state and recent decisions.",
     "",
   ].join("\n");
-  await writeFile(path.join(dir, "COMMONS.md"), commons);
+  await writeFile(path.join(dir, "COMMONWEALTH.md"), commonwealth);
 }
 
 // Re-export for consumers that want the canonical folder list without touching schema.

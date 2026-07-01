@@ -1,14 +1,14 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { initBrain, readNote, writeNote } from "@commons/core";
+import { initBrain, readNote, writeNote } from "@commonwealth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { listWorkState, readNoteTool, remember, searchNotes, whoIs } from "../src/tools.js";
 
 let brainDir: string;
 
 beforeEach(async () => {
-  brainDir = await fs.mkdtemp(path.join(tmpdir(), "commons-mcp-"));
+  brainDir = await fs.mkdtemp(path.join(tmpdir(), "commonwealth-mcp-"));
   await initBrain(brainDir, { name: "test-brain" });
 });
 

@@ -16,7 +16,7 @@ beforeAll(() => {
   execFileSync("pnpm", ["-r", "build"], { cwd: repoRoot, stdio: "pipe" });
 }, 180_000);
 
-describe("built commons binary", () => {
+describe("built commonwealth binary", () => {
   it("`init --help` exits 0", () => {
     expect(() =>
       execFileSync("node", [distEntry, "init", "--help"], { stdio: "pipe" }),
