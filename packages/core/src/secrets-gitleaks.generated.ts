@@ -4,7 +4,7 @@
  *
  * Filtered, JS-compatible, false-positive-safe subset of the gitleaks ruleset. Each
  * `re` is global-flagged (and case-insensitive when the source had a leading `(?i)`).
- * Kept 197 of 221 rules; the rest were skipped as generic,
+ * Kept 183 of 221 rules; the rest were skipped as generic,
  * too broad, JS-incompatible, or benign-corpus false positives.
  */
 
@@ -92,13 +92,6 @@ export const GITLEAKS_PATTERNS: ReadonlyArray<{ kind: string; re: RegExp }> = [
     ),
   },
   {
-    kind: "gitleaks:atlassian-api-token",
-    re: new RegExp(
-      "[\\w.-]{0,50}?(?:(?-i:ATLASSIAN|[Aa]tlassian)|(?-i:CONFLUENCE|[Cc]onfluence)|(?-i:JIRA|[Jj]ira))(?:[ \\t\\w.-]{0,20})[\\s'\"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'\"\\s=]{0,5}([a-z0-9]{20}[a-f0-9]{4})(?:[\\x60'\"\\s;]|\\\\[nr]|$)|\\b(ATATT3[A-Za-z0-9_\\-=]{186})(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
-      "gi",
-    ),
-  },
-  {
     kind: "gitleaks:aws-access-token",
     re: new RegExp("\\b((?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16})\\b", "g"),
   },
@@ -153,13 +146,6 @@ export const GITLEAKS_PATTERNS: ReadonlyArray<{ kind: string; re: RegExp }> = [
     ),
   },
   {
-    kind: "gitleaks:cisco-meraki-api-key",
-    re: new RegExp(
-      "[\\w.-]{0,50}?(?i:[\\w.-]{0,50}?(?:(?-i:[Mm]eraki|MERAKI))(?:[ \\t\\w.-]{0,20})[\\s'\"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'\"\\s=]{0,5}([0-9a-f]{40})(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
-      "g",
-    ),
-  },
-  {
     kind: "gitleaks:clickhouse-cloud-api-secret-key",
     re: new RegExp("\\b(4b1d[A-Za-z0-9]{38})\\b", "g"),
   },
@@ -187,13 +173,6 @@ export const GITLEAKS_PATTERNS: ReadonlyArray<{ kind: string; re: RegExp }> = [
     re: new RegExp(
       "[\\w.-]{0,50}?(?:codecov)(?:[ \\t\\w.-]{0,20})[\\s'\"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'\"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
       "gi",
-    ),
-  },
-  {
-    kind: "gitleaks:cohere-api-token",
-    re: new RegExp(
-      "[\\w.-]{0,50}?(?i:[\\w.-]{0,50}?(?:cohere|CO_API_KEY)(?:[ \\t\\w.-]{0,20})[\\s'\"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'\"\\s=]{0,5}([a-zA-Z0-9]{40})(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
-      "g",
     ),
   },
   {
@@ -307,13 +286,6 @@ export const GITLEAKS_PATTERNS: ReadonlyArray<{ kind: string; re: RegExp }> = [
     kind: "gitleaks:dropbox-short-lived-api-token",
     re: new RegExp(
       "[\\w.-]{0,50}?(?:dropbox)(?:[ \\t\\w.-]{0,20})[\\s'\"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'\"\\s=]{0,5}(sl\\.[a-z0-9\\-=_]{135})(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
-      "gi",
-    ),
-  },
-  {
-    kind: "gitleaks:etsy-access-token",
-    re: new RegExp(
-      "[\\w.-]{0,50}?(?:(?-i:ETSY|[Ee]tsy))(?:[ \\t\\w.-]{0,20})[\\s'\"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'\"\\s=]{0,5}([a-z0-9]{24})(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
       "gi",
     ),
   },
@@ -447,10 +419,6 @@ export const GITLEAKS_PATTERNS: ReadonlyArray<{ kind: string; re: RegExp }> = [
     re: new RegExp("(?:pat|sat)\\.[a-zA-Z0-9_-]{22}\\.[a-zA-Z0-9]{24}\\.[a-zA-Z0-9]{20}", "g"),
   },
   {
-    kind: "gitleaks:hashicorp-tf-api-token",
-    re: new RegExp("[a-z0-9]{14}\\.(?-i:atlasv1)\\.[a-z0-9\\-_=]{60,70}", "gi"),
-  },
-  {
     kind: "gitleaks:hashicorp-tf-password",
     re: new RegExp(
       '[\\w.-]{0,50}?(?:administrator_login_password|password)(?:[ \\t\\w.-]{0,20})[\\s\'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60\'"\\s=]{0,5}("[a-z0-9=_\\-]{8,20}")(?:[\\x60\'"\\s;]|\\\\[nr]|$)',
@@ -474,14 +442,6 @@ export const GITLEAKS_PATTERNS: ReadonlyArray<{ kind: string; re: RegExp }> = [
       "[\\w.-]{0,50}?(?:hubspot)(?:[ \\t\\w.-]{0,20})[\\s'\"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'\"\\s=]{0,5}([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
       "gi",
     ),
-  },
-  {
-    kind: "gitleaks:huggingface-access-token",
-    re: new RegExp("\\b(hf_(?i:[a-z]{34}))(?:[\\x60'\"\\s;]|\\\\[nr]|$)", "g"),
-  },
-  {
-    kind: "gitleaks:huggingface-organization-api-token",
-    re: new RegExp("\\b(api_org_(?i:[a-z]{34}))(?:[\\x60'\"\\s;]|\\\\[nr]|$)", "g"),
   },
   {
     kind: "gitleaks:infracost-api-token",
@@ -526,13 +486,6 @@ export const GITLEAKS_PATTERNS: ReadonlyArray<{ kind: string; re: RegExp }> = [
     kind: "gitleaks:kraken-access-token",
     re: new RegExp(
       "[\\w.-]{0,50}?(?:kraken)(?:[ \\t\\w.-]{0,20})[\\s'\"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'\"\\s=]{0,5}([a-z0-9\\/=_\\+\\-]{80,90})(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
-      "gi",
-    ),
-  },
-  {
-    kind: "gitleaks:kubernetes-secret-yaml",
-    re: new RegExp(
-      '(?:\\bkind:[ \\t]*["\']?\\bsecret\\b["\']?(?s:.){0,200}?\\bdata:(?s:.){0,100}?\\s+([\\w.-]+:(?:[ \\t]*(?:\\||>[-+]?)\\s+)?[ \\t]*(?:["\']?[a-z0-9+/]{10,}={0,3}["\']?|\\{\\{[ \\t\\w"|$:=,.-]+}}|""|\'\'))|\\bdata:(?s:.){0,100}?\\s+([\\w.-]+:(?:[ \\t]*(?:\\||>[-+]?)\\s+)?[ \\t]*(?:["\']?[a-z0-9+/]{10,}={0,3}["\']?|\\{\\{[ \\t\\w"|$:=,.-]+}}|""|\'\'))(?s:.){0,200}?\\bkind:[ \\t]*["\']?\\bsecret\\b["\']?)',
       "gi",
     ),
   },
@@ -735,13 +688,6 @@ export const GITLEAKS_PATTERNS: ReadonlyArray<{ kind: string; re: RegExp }> = [
     re: new RegExp("\\b(API-[A-Z0-9]{26})(?:[\\x60'\"\\s;]|\\\\[nr]|$)", "g"),
   },
   {
-    kind: "gitleaks:okta-access-token",
-    re: new RegExp(
-      "[\\w.-]{0,50}?(?i:[\\w.-]{0,50}?(?:(?-i:[Oo]kta|OKTA))(?:[ \\t\\w.-]{0,20})[\\s'\"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'\"\\s=]{0,5}(00[\\w=\\-]{40})(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
-      "g",
-    ),
-  },
-  {
     kind: "gitleaks:openai-api-key",
     re: new RegExp(
       "\\b(sk-(?:proj|svcacct|admin)-(?:[A-Za-z0-9_-]{74}|[A-Za-z0-9_-]{58})T3BlbkFJ(?:[A-Za-z0-9_-]{74}|[A-Za-z0-9_-]{58})\\b|sk-[a-zA-Z0-9]{20}T3BlbkFJ[a-zA-Z0-9]{20})(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
@@ -790,13 +736,6 @@ export const GITLEAKS_PATTERNS: ReadonlyArray<{ kind: string; re: RegExp }> = [
     re: new RegExp(
       "-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----[\\s\\S-]{64,}?KEY(?: BLOCK)?-----",
       "gi",
-    ),
-  },
-  {
-    kind: "gitleaks:privateai-api-token",
-    re: new RegExp(
-      "[\\w.-]{0,50}?(?i:[\\w.-]{0,50}?(?:private[_-]?ai)(?:[ \\t\\w.-]{0,20})[\\s'\"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'\"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
-      "g",
     ),
   },
   {
@@ -961,27 +900,6 @@ export const GITLEAKS_PATTERNS: ReadonlyArray<{ kind: string; re: RegExp }> = [
     ),
   },
   {
-    kind: "gitleaks:sumologic-access-id",
-    re: new RegExp(
-      "[\\w.-]{0,50}?(?i:[\\w.-]{0,50}?(?:(?-i:[Ss]umo|SUMO))(?:[ \\t\\w.-]{0,20})[\\s'\"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'\"\\s=]{0,5}(su[a-zA-Z0-9]{12})(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
-      "g",
-    ),
-  },
-  {
-    kind: "gitleaks:sumologic-access-token",
-    re: new RegExp(
-      "[\\w.-]{0,50}?(?:(?-i:[Ss]umo|SUMO))(?:[ \\t\\w.-]{0,20})[\\s'\"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'\"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
-      "gi",
-    ),
-  },
-  {
-    kind: "gitleaks:telegram-bot-api-token",
-    re: new RegExp(
-      "[\\w.-]{0,50}?(?:telegr)(?:[ \\t\\w.-]{0,20})[\\s'\"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'\"\\s=]{0,5}([0-9]{5,16}:(?-i:A)[a-z0-9_\\-]{34})(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
-      "gi",
-    ),
-  },
-  {
     kind: "gitleaks:travisci-access-token",
     re: new RegExp(
       "[\\w.-]{0,50}?(?:travis)(?:[ \\t\\w.-]{0,20})[\\s'\"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'\"\\s=]{0,5}([a-z0-9]{22})(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
@@ -1041,13 +959,6 @@ export const GITLEAKS_PATTERNS: ReadonlyArray<{ kind: string; re: RegExp }> = [
   {
     kind: "gitleaks:vault-batch-token",
     re: new RegExp("\\b(hvb\\.[\\w-]{138,300})(?:[\\x60'\"\\s;]|\\\\[nr]|$)", "g"),
-  },
-  {
-    kind: "gitleaks:vault-service-token",
-    re: new RegExp(
-      "\\b((?:hvs\\.[\\w-]{90,120}|s\\.(?i:[a-z0-9]{24})))(?:[\\x60'\"\\s;]|\\\\[nr]|$)",
-      "g",
-    ),
   },
   {
     kind: "gitleaks:yandex-access-token",
