@@ -124,7 +124,11 @@ export function defaultInitDeps(opts: DefaultInitDepsOptions = {}): InitDeps {
     gather: (repoDir) => gatherCandidates(repoDir),
     resolveBrain: (cwd) => core.resolveBrainDir(cwd),
     createBrain: (dir, name) => core.initBrain(dir, { name }),
-    writeMarker: (repoDir, brainDir) => core.setBrainMarker(repoDir, brainDir),
+    registerBrain: async (repoDir, brainDir) => {
+      // ADR-0011: the global registry is the source of truth; no per-project marker.
+      await core.addRegistryMapping(repoDir, brainDir);
+      await core.linkBrain(path.basename(brainDir), brainDir);
+    },
     stage,
     confirm: opts.assumeYes ? async () => true : promptConfirm,
     log,
@@ -336,15 +340,16 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
     }
   };
 
-  const writeMarker = async (
+  const registerBrain = async (
     folder: string,
     brainDir: string,
-  ): Promise<{ written: boolean; skipped?: string }> => {
+  ): Promise<{ mapped: boolean; linked: boolean; skipped?: string }> => {
     try {
-      await core.setBrainMarker(folder, brainDir);
-      return { written: true };
+      const map = await core.addRegistryMapping(folder, brainDir);
+      const link = await core.linkBrain(path.basename(brainDir), brainDir);
+      return { mapped: map.added || map.updated, linked: link.linked, skipped: link.skipped };
     } catch (err) {
-      return { written: false, skipped: `marker write failed (${(err as Error).message})` };
+      return { mapped: false, linked: false, skipped: (err as Error).message };
     }
   };
 
@@ -424,7 +429,7 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
     ensureBuilt,
     init,
     configureScope,
-    writeMarker,
+    registerBrain,
     seedFrom,
     ensureUserConfig,
     setAutoAdr,

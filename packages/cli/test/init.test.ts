@@ -21,7 +21,7 @@ function makeDeps(over: Partial<InitDeps> = {}): InitDeps {
     gather: vi.fn(async () => ({ candidates: [], bySource: ZERO_SOURCE })),
     resolveBrain: vi.fn(async () => null),
     createBrain: vi.fn(async () => {}),
-    writeMarker: vi.fn(async () => {}),
+    registerBrain: vi.fn(async () => {}),
     stage: vi.fn(async (_dir, c) => ({ captured: c.length })),
     confirm: vi.fn(async () => true),
     log: vi.fn(),
@@ -30,7 +30,7 @@ function makeDeps(over: Partial<InitDeps> = {}): InitDeps {
 }
 
 describe("runInit", () => {
-  it("NEW: creates brain, writes marker, stages the gathered candidates on confirm", async () => {
+  it("NEW: creates brain, registers mapping, stages the gathered candidates on confirm", async () => {
     const two = candidates(2);
     const deps = makeDeps({
       resolveBrain: vi.fn(async () => null),
@@ -41,14 +41,14 @@ describe("runInit", () => {
     const result = await runInit("/repo", { brain: "/b" }, deps);
 
     expect(deps.createBrain).toHaveBeenCalledTimes(1);
-    expect(deps.writeMarker).toHaveBeenCalledTimes(1);
+    expect(deps.registerBrain).toHaveBeenCalledTimes(1);
     expect(deps.stage).toHaveBeenCalledWith("/b", two);
     expect(result.mode).toBe("new");
     expect(result.staged).toBe(2);
     expect(result.gathered).toBe(2);
   });
 
-  it("DECLINE: skips staging but still creates brain + marker", async () => {
+  it("DECLINE: skips staging but still creates brain + registers mapping", async () => {
     const two = candidates(2);
     const deps = makeDeps({
       gather: vi.fn(async () => ({ candidates: two, bySource: ZERO_SOURCE })),
@@ -59,7 +59,7 @@ describe("runInit", () => {
 
     expect(deps.stage).not.toHaveBeenCalled();
     expect(deps.createBrain).toHaveBeenCalledTimes(1);
-    expect(deps.writeMarker).toHaveBeenCalledWith("/repo", "/b");
+    expect(deps.registerBrain).toHaveBeenCalledWith("/repo", "/b");
     expect(result.mode).toBe("skipped");
     expect(result.staged).toBe(0);
     expect(result.gathered).toBe(2);
@@ -89,12 +89,12 @@ describe("runInit", () => {
     expect(deps.createBrain).not.toHaveBeenCalled();
     expect(deps.gather).not.toHaveBeenCalled();
     expect(deps.stage).not.toHaveBeenCalled();
-    expect(deps.writeMarker).toHaveBeenCalledWith(findRepoRoot("/repo"), "/x/brain");
+    expect(deps.registerBrain).toHaveBeenCalledWith(findRepoRoot("/repo"), "/x/brain");
     expect(result.mode).toBe("join");
     expect(result.brainDir).toBe("/x/brain");
   });
 
-  it("seed=false: creates brain + marker but skips gathering and staging", async () => {
+  it("seed=false: creates brain + registers mapping but skips gathering and staging", async () => {
     const deps = makeDeps({
       gather: vi.fn(async () => ({ candidates: candidates(3), bySource: ZERO_SOURCE })),
     });
@@ -102,7 +102,7 @@ describe("runInit", () => {
     const result = await runInit("/repo", { brain: "/b", seed: false }, deps);
 
     expect(deps.createBrain).toHaveBeenCalledTimes(1);
-    expect(deps.writeMarker).toHaveBeenCalledWith("/repo", "/b");
+    expect(deps.registerBrain).toHaveBeenCalledWith("/repo", "/b");
     expect(deps.gather).not.toHaveBeenCalled();
     expect(deps.stage).not.toHaveBeenCalled();
     expect(result.mode).toBe("skipped");

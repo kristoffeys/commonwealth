@@ -18,6 +18,7 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 | [0008](0008-curation-locality.md)             | Curation locality: staging is per-user local, canon syncs    | Accepted |
 | [0009](0009-brain-config-feature-flags.md)    | Brain-level config & feature flags (incl. optional auto-ADR) | Accepted |
 | [0010](0010-secret-scanning.md)               | Secret scanning: built-in regex default, gitleaks optional   | Accepted |
+| [0011](0011-brain-wiring-global-registry.md)  | Brain wiring: global user registry is the default source     | Accepted |
 
 ## Process
 

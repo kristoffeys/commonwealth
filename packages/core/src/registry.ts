@@ -16,8 +16,14 @@ import path from "node:path";
 /** Marker file, relative to a project dir, naming that project's brain: `.commonwealth/brain`. */
 const MARKER_REL = path.join(".commonwealth", "brain");
 
-/** A brain repo is identified by its `.commonwealth/config.json` (ADR-0009). */
-const BRAIN_CONFIG_REL = path.join(".commonwealth", "config.json");
+/**
+ * A brain repo is identified by its `.commonwealth/schema-version` file (written by
+ * `initBrain`). We deliberately do NOT key off `.commonwealth/config.json`: that name
+ * collides with the per-user *scope* config at `~/.commonwealth/config.json` (ADR-0008),
+ * which would otherwise make the home directory resolve as a brain. `schema-version` is a
+ * brain-only scaffold artifact, so it disambiguates cleanly (ADR-0011).
+ */
+const BRAIN_IDENTITY_REL = path.join(".commonwealth", "schema-version");
 
 /** One prefix → brain mapping entry in the user registry file. */
 export interface RegistryMapping {
@@ -133,7 +139,7 @@ async function loadRegistry(registryPath: string): Promise<Registry | null> {
  *
  * 1. Walk up from `startDir`: a `.commonwealth/brain` marker file (a path, `~`-expanded and
  *    resolved relative to the dir holding it) pins the brain explicitly.
- * 2. Walk up: a directory that is itself a brain (`.commonwealth/config.json`) resolves to
+ * 2. Walk up: a directory that is itself a brain (`.commonwealth/schema-version`) resolves to
  *    itself.
  * 3. The user registry file (`opts.registryPath` ?? `$COMMONWEALTH_REGISTRY` ?? sibling of
  *    `$COMMONWEALTH_CONFIG` ?? `~/.commonwealth/registry.json`): the first `prefix` (tilde-expanded,
@@ -148,6 +154,7 @@ export async function resolveBrainDir(
   opts: ResolveBrainOptions = {},
 ): Promise<string | null> {
   const start = path.resolve(startDir);
+  const registryPath = resolveRegistryPath(opts.registryPath);
 
   // 1) Explicit marker file, nearest ancestor wins.
   for (const dir of walkUp(start)) {
@@ -159,13 +166,14 @@ export async function resolveBrainDir(
     }
   }
 
-  // 2) A directory that is itself a brain, nearest ancestor wins.
+  // 2) A directory that is itself a brain, nearest ancestor wins. Keyed off the brain-only
+  //    `schema-version` file so the global scope-config dir is never mistaken for a brain.
   for (const dir of walkUp(start)) {
-    if (await isFile(path.join(dir, BRAIN_CONFIG_REL))) return dir;
+    if (await isFile(path.join(dir, BRAIN_IDENTITY_REL))) return dir;
   }
 
   // 3) User registry mappings; first prefix that startDir is under wins.
-  const registry = await loadRegistry(resolveRegistryPath(opts.registryPath));
+  const registry = await loadRegistry(registryPath);
   if (registry) {
     for (const mapping of registry.mappings) {
       if (isUnder(start, expand(mapping.prefix))) return expand(mapping.brain);
@@ -188,4 +196,128 @@ export async function setBrainMarker(projectDir: string, brainPath: string): Pro
   const markerPath = path.join(projectDir, MARKER_REL);
   await fs.mkdir(path.dirname(markerPath), { recursive: true });
   await fs.writeFile(markerPath, `${brainPath}\n`, "utf8");
+}
+
+/**
+ * The default user registry path (public wrapper over the internal resolver): honors
+ * `$COMMONWEALTH_REGISTRY`, then a `registry.json` sibling of `$COMMONWEALTH_CONFIG`, then
+ * `~/.commonwealth/registry.json`. This is where onboarding writes the project→brain map
+ * (resolution layer 3, the default source of truth).
+ */
+export function defaultRegistryPath(): string {
+  return resolveRegistryPath();
+}
+
+/**
+ * The default convenience-symlink directory (`brains/` next to the registry file), where
+ * `~/.commonwealth/brains/<name>` symlinks let a human `ls`/`cd` their brains.
+ */
+export function defaultBrainsDir(): string {
+  return path.join(path.dirname(defaultRegistryPath()), "brains");
+}
+
+/**
+ * Add (or update) a `prefix → brain` mapping in the user registry, the default brain-wiring
+ * source of truth (resolution layer 3). Both `prefix` and `brain` are `~`-expanded and
+ * resolved to absolute paths; dedupe is by expanded prefix:
+ *
+ * - no mapping with this prefix → push `{ prefix, brain }` (`added: true`);
+ * - a mapping with this prefix but a DIFFERENT brain → update it (`updated: true`);
+ * - an identical mapping → no-op (`{ added: false, updated: false }`).
+ *
+ * Idempotent. Creates the registry's directory if missing and persists pretty (2-space) JSON
+ * with a trailing newline. A missing directory is created; genuine IO errors may propagate
+ * (the CLI dependency wraps them).
+ */
+export async function addRegistryMapping(
+  prefix: string,
+  brain: string,
+  registryPath = defaultRegistryPath(),
+): Promise<{ added: boolean; updated: boolean }> {
+  const absPrefix = expand(prefix);
+  const absBrain = expand(brain);
+
+  const registry = (await loadRegistry(registryPath)) ?? { mappings: [] };
+  const existing = registry.mappings.find((m) => expand(m.prefix) === absPrefix);
+
+  let added = false;
+  let updated = false;
+  if (!existing) {
+    registry.mappings.push({ prefix: absPrefix, brain: absBrain });
+    added = true;
+  } else if (expand(existing.brain) !== absBrain) {
+    existing.prefix = absPrefix;
+    existing.brain = absBrain;
+    updated = true;
+  } else {
+    return { added, updated };
+  }
+
+  await fs.mkdir(path.dirname(registryPath), { recursive: true });
+  await fs.writeFile(registryPath, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
+  return { added, updated };
+}
+
+/**
+ * Drop a convenience symlink `<brainsDir>/<name> → <brainDir>` so a human can `ls`/`cd` their
+ * brains. `name` is sanitized via `path.basename`; an empty/`.`/`..` name is rejected. If a
+ * symlink already resolves to the target it is a no-op; a symlink pointing elsewhere is
+ * replaced; a real (non-symlink) file/dir at the path is left intact and reported as skipped.
+ * Never throws for unsupported/permission cases (Windows/EPERM/EACCES/ENOSYS/EEXIST) — those
+ * are reported via `skipped`.
+ */
+export async function linkBrain(
+  name: string,
+  brainDir: string,
+  brainsDir = defaultBrainsDir(),
+): Promise<{ path: string; linked: boolean; skipped?: string }> {
+  const safe = path.basename(name);
+  if (safe === "" || safe === "." || safe === "..") {
+    return { path: "", linked: false, skipped: "invalid name" };
+  }
+
+  const target = path.resolve(brainDir);
+  const symlinkPath = path.join(brainsDir, safe);
+
+  try {
+    await fs.mkdir(brainsDir, { recursive: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return { path: symlinkPath, linked: false, skipped: code ?? "cannot create brains dir" };
+  }
+
+  let existingStat: import("node:fs").Stats | null = null;
+  try {
+    existingStat = await fs.lstat(symlinkPath);
+  } catch {
+    existingStat = null;
+  }
+
+  if (existingStat) {
+    if (existingStat.isSymbolicLink()) {
+      let resolved: string | null = null;
+      try {
+        resolved = path.resolve(brainsDir, await fs.readlink(symlinkPath));
+      } catch {
+        resolved = null;
+      }
+      if (resolved === target) return { path: symlinkPath, linked: true };
+      try {
+        await fs.unlink(symlinkPath);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        return { path: symlinkPath, linked: false, skipped: code ?? "symlink unsupported" };
+      }
+    } else {
+      return { path: symlinkPath, linked: false, skipped: "exists (not a symlink)" };
+    }
+  }
+
+  try {
+    await fs.symlink(target, symlinkPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return { path: symlinkPath, linked: false, skipped: code ?? "symlink unsupported" };
+  }
+  return { path: symlinkPath, linked: true };
 }

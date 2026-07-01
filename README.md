@@ -72,7 +72,9 @@ node /path/to/Commonwealth/packages/cli/dist/index.js init
 1. **Builds** the workspace if the `dist/` artifacts are missing (`pnpm -r build`).
 2. **Creates** a brain for this project (or **joins** the one it already belongs to).
 3. **Syncs** one or more folders into the brain: each is added to the capture allowlist and
-   pinned to the brain via a `.commonwealth/brain` marker.
+   wired to the brain in the **global user registry** (`~/.commonwealth/registry.json`), plus a
+   convenience `~/.commonwealth/brains/<name>` symlink so you can `ls`/`cd` your brains. (A
+   per-project `.commonwealth/brain` marker remains an optional manual override.)
 4. **Seeds** the brain from one or more repos — mining git history, ADRs, and agent config
    (`CLAUDE.md` / `.cursorrules` / `AGENTS.md`) — into the review queue.
 5. **Registers** the MCP server with the `claude` CLI, pointed at the new brain.
@@ -226,12 +228,19 @@ Everything lands in the staging review queue first — nothing enters canon unre
 
 ## Configuration
 
-Commonwealth has two config layers, deliberately separate:
+Commonwealth keeps a few files under `~/.commonwealth/` and one inside each brain,
+deliberately separate:
 
-| File                           | Scope                 | Synced?           | Holds                                                 |
-| ------------------------------ | --------------------- | ----------------- | ----------------------------------------------------- |
-| `~/.commonwealth/config.json`       | per-user, per-machine | no                | the folder **scope** allow/deny (above)               |
-| `<brain>/.commonwealth/config.json` | shared with the brain | yes (in the repo) | brain **name**, remotes, and global **feature flags** |
+| File                                | Scope                 | Synced?           | Holds                                                            |
+| ----------------------------------- | --------------------- | ----------------- | --------------------------------------------------------------- |
+| `~/.commonwealth/config.json`       | per-user, per-machine | no                | the folder **scope** allow/deny (above)                         |
+| `~/.commonwealth/registry.json`     | per-user, per-machine | no                | **brain routing**: `prefix → brain` mappings (resolver layer 3) |
+| `~/.commonwealth/brains/<name>`     | per-user, per-machine | no                | convenience **symlink** to each brain dir (for `ls`/`cd`)       |
+| `<brain>/.commonwealth/config.json` | shared with the brain | yes (in the repo) | brain **name**, remotes, and global **feature flags**           |
+
+`registry.json` is the default source of truth for which brain a directory maps to — written
+by `init` for every synced folder. A per-project `.commonwealth/brain` marker file resolves
+ahead of the registry when you need to pin one project explicitly (an optional manual override).
 
 Brain-level **feature flags** are toggled with the CLI and sync with the brain:
 

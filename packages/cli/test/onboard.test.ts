@@ -10,7 +10,7 @@ function makeDeps(over: Partial<OnboardDeps> = {}): OnboardDeps {
     ensureBuilt: vi.fn(async () => ({ built: true })),
     init: vi.fn(async () => INIT_RESULT),
     configureScope: vi.fn(async () => ({ added: true })),
-    writeMarker: vi.fn(async () => ({ written: true })),
+    registerBrain: vi.fn(async () => ({ mapped: true, linked: true })),
     seedFrom: vi.fn(async () => ({ staged: 4 })),
     ensureUserConfig: vi.fn(async () => ({ path: "/home/.commonwealth/config.json" })),
     setAutoAdr: vi.fn(async () => ({ set: true })),
@@ -31,7 +31,7 @@ describe("runOnboard", () => {
     expect(deps.ensureBuilt).toHaveBeenCalledTimes(1);
     expect(deps.init).toHaveBeenCalledTimes(1);
     expect(deps.configureScope).toHaveBeenCalledTimes(1);
-    expect(deps.writeMarker).toHaveBeenCalledTimes(1);
+    expect(deps.registerBrain).toHaveBeenCalledTimes(1);
     expect(deps.seedFrom).toHaveBeenCalledTimes(1);
     expect(deps.ensureUserConfig).toHaveBeenCalledTimes(1);
     expect(deps.registerMcp).toHaveBeenCalledWith("/b");
@@ -43,6 +43,7 @@ describe("runOnboard", () => {
       built: true,
       staged: 4,
       scopedFolders: 1,
+      mappedFolders: 1,
       seededRepos: 1,
       scopeConfigPath: "/home/.commonwealth/config.json",
       scope: "added 1",
@@ -223,25 +224,47 @@ describe("runOnboard", () => {
     await runOnboard("/repo", { brain: "/b", autoAdr: true, remote: "git@x:y.git" }, deps);
 
     expect(deps.configureScope).not.toHaveBeenCalled();
-    expect(deps.writeMarker).not.toHaveBeenCalled();
+    expect(deps.registerBrain).not.toHaveBeenCalled();
     expect(deps.seedFrom).not.toHaveBeenCalled();
     expect(deps.ensureUserConfig).not.toHaveBeenCalled();
     expect(deps.setAutoAdr).not.toHaveBeenCalled();
     expect(deps.setRemote).not.toHaveBeenCalled();
   });
 
-  it("multi syncFolders: loops configureScope + writeMarker over every folder", async () => {
+  it("multi syncFolders: loops configureScope + registerBrain over every folder", async () => {
     const deps = makeDeps();
     const folders = ["/a", "/b", "/c"];
     const result = await runOnboard("/repo", { yes: true, syncFolders: folders }, deps);
 
     expect(deps.configureScope).toHaveBeenCalledTimes(3);
-    expect(deps.writeMarker).toHaveBeenCalledTimes(3);
+    expect(deps.registerBrain).toHaveBeenCalledTimes(3);
     for (const f of folders) {
       expect(deps.configureScope).toHaveBeenCalledWith(f);
-      expect(deps.writeMarker).toHaveBeenCalledWith(f, "/b");
+      expect(deps.registerBrain).toHaveBeenCalledWith(f, "/b");
     }
     expect(result.scopedFolders).toBe(3);
+    expect(result.mappedFolders).toBe(3);
+  });
+
+  it("registerBrain runs once per syncFolder", async () => {
+    const deps = makeDeps();
+    await runOnboard("/repo", { yes: true, syncFolders: ["/a", "/b"] }, deps);
+    expect(deps.registerBrain).toHaveBeenCalledTimes(2);
+  });
+
+  it("a registerBrain result with skipped emits a WARNING but still counts the mapping", async () => {
+    const log = vi.fn();
+    const deps = makeDeps({
+      registerBrain: vi.fn(async () => ({ mapped: true, linked: false, skipped: "EPERM" })),
+      log,
+    });
+    const result = await runOnboard("/repo", { yes: true, syncFolders: ["/a"] }, deps);
+
+    const warned = log.mock.calls
+      .map((c) => c[0] as string)
+      .some((m) => m.startsWith("WARNING: brain symlink skipped") && m.includes("EPERM"));
+    expect(warned).toBe(true);
+    expect(result.mappedFolders).toBe(1);
   });
 
   it("multi seedRepos: loops seedFrom over every repo and sums staged", async () => {

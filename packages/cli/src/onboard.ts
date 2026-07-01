@@ -31,8 +31,8 @@ export type OnboardOptions = {
   /** Add this URL as the brain's git `origin` remote. Default: undefined (skip). */
   remote?: string;
   /**
-   * Folders to sync into this brain: each is added to the capture allowlist and pinned to the
-   * brain via a `.commonwealth/brain` marker. Default: `[repoRoot]`.
+   * Folders to sync into this brain: each is added to the capture allowlist and wired to the
+   * brain via the global user registry (plus a convenience symlink). Default: `[repoRoot]`.
    */
   syncFolders?: string[];
   /**
@@ -53,8 +53,16 @@ export interface OnboardDeps {
   init(cwd: string, initOpts: InitOptions): Promise<InitResult>;
   /** Idempotently add `folder` to the capture allowlist (`scope allow`; de-dupes). */
   configureScope(folder: string): Promise<{ added: boolean; skipped?: string }>;
-  /** Pin `folder` to `brainDir` via the `.commonwealth/brain` marker (idempotent). */
-  writeMarker(folder: string, brainDir: string): Promise<{ written: boolean; skipped?: string }>;
+  /**
+   * Register `folder → brainDir` in the global user registry (the default brain-wiring source
+   * of truth) and drop a convenience `~/.commonwealth/brains/<name>` symlink. Idempotent;
+   * never throws. `mapped` reflects the registry write, `linked` the symlink; `skipped` carries
+   * a reason when the symlink could not be created (the mapping still counts).
+   */
+  registerBrain(
+    folder: string,
+    brainDir: string,
+  ): Promise<{ mapped: boolean; linked: boolean; skipped?: string }>;
   /** Mine `repoDir` and stage the candidates into `brainDir`'s review queue. */
   seedFrom(brainDir: string, repoDir: string): Promise<{ staged: number; skipped?: string }>;
   /**
@@ -88,8 +96,10 @@ export interface OnboardResult {
   built: boolean;
   /** How many candidate notes were staged into the review queue (summed across seeded repos). */
   staged: number;
-  /** How many folders were added to the capture allowlist + pinned to the brain. */
+  /** How many folders were added to the capture allowlist. */
   scopedFolders: number;
+  /** How many folders were wired into a brain via the global registry. */
+  mappedFolders: number;
   /** How many repos were seeded (mined) into the brain. */
   seededRepos: number;
   /** Resolved path of the per-user scope config file (always ensured to exist). */
@@ -164,6 +174,7 @@ export async function runOnboard(
         built: false,
         staged: 0,
         scopedFolders: 0,
+        mappedFolders: 0,
         seededRepos: 0,
         scopeConfigPath: "",
         scope: "skipped",
@@ -193,6 +204,7 @@ export async function runOnboard(
   const brainDir = initResult.brainDir;
 
   let scopedFolders = 0;
+  let mappedFolders = 0;
   let scope = "skipped";
   if (doScope) {
     for (const folder of syncFolders) {
@@ -206,11 +218,11 @@ export async function runOnboard(
         deps.log(`Scope: ${folder} already allowed`);
       }
 
-      const markerRes = await deps.writeMarker(folder, brainDir);
-      if (markerRes.skipped) {
-        deps.log(`WARNING: marker step skipped for ${folder}: ${markerRes.skipped}`);
-      } else {
-        deps.log(`Marker: pinned ${folder} -> ${brainDir}`);
+      const regRes = await deps.registerBrain(folder, brainDir);
+      if (regRes.mapped) mappedFolders += 1;
+      deps.log(`registered ${folder} -> ${brainDir} (symlink brains/${path.basename(brainDir)})`);
+      if (regRes.skipped) {
+        deps.log(`WARNING: brain symlink skipped for ${folder}: ${regRes.skipped}`);
       }
     }
     scope = scopedFolders > 0 ? `added ${scopedFolders}` : "none added";
@@ -277,7 +289,7 @@ export async function runOnboard(
 
   deps.log(
     `Done. mode=${initResult.mode} brain=${brainDir} staged=${staged} ` +
-      `scopedFolders=${scopedFolders} seededRepos=${seededRepos} ` +
+      `scopedFolders=${scopedFolders} mappedFolders=${mappedFolders} seededRepos=${seededRepos} ` +
       `scope=${scope} autoAdr=${autoAdr} remote=${remote} mcp=${mcp} daemon=${daemon}. ` +
       `Scope config: ${scopeConfigPath}. ` +
       "Open a Claude session here and ask it something your team knows.",
@@ -289,6 +301,7 @@ export async function runOnboard(
     built,
     staged,
     scopedFolders,
+    mappedFolders,
     seededRepos,
     scopeConfigPath,
     scope,
