@@ -1,11 +1,13 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { createRequire } from "node:module";
 import path from "node:path";
 import * as core from "@commonwealth/core";
 import type { NewNoteInput } from "@commonwealth/core";
 import { gatherCandidates } from "@commonwealth/seed";
-import type { InitDeps } from "./init.js";
+import { findRepoRoot, runInit, type InitDeps } from "./init.js";
+import type { OnboardDeps } from "./onboard.js";
 
 /** Options for {@link defaultInitDeps}, mostly to make wiring testable/overridable. */
 export interface DefaultInitDepsOptions {
@@ -123,6 +125,142 @@ export function defaultInitDeps(opts: DefaultInitDepsOptions = {}): InitDeps {
     writeMarker: (repoDir, brainDir) => core.setBrainMarker(repoDir, brainDir),
     stage,
     confirm: opts.assumeYes ? async () => true : promptConfirm,
+    log,
+  };
+}
+
+/** Options for {@link defaultOnboardDeps}, mostly to make wiring testable/overridable. */
+export interface DefaultOnboardDepsOptions {
+  /** Repo root to resolve dist paths from; defaults to the nearest `.git` ancestor of cwd. */
+  repoRoot?: string;
+  /** Absolute path to `commonwealth-curate`'s built entry, forwarded to {@link defaultInitDeps}. */
+  curateEntry?: string;
+}
+
+/** The workspace packages whose `dist/index.js` must exist for the plugin to run standalone. */
+const REQUIRED_DIST_PACKAGES = ["core", "mcp", "sync", "curate", "seed", "cli"] as const;
+
+/** True if the `<name>` executable resolves on the current PATH. */
+function hasExecutable(name: string): boolean {
+  const probe = process.platform === "win32" ? "where" : "which";
+  const res = spawnSync(probe, [name], { stdio: "ignore" });
+  return res.status === 0;
+}
+
+/**
+ * Wire the real {@link OnboardDeps}: a dist-presence check that triggers `pnpm -r build` + the
+ * plugin bundle, `runInit` for the brain core, an idempotent `claude mcp add`, and a detached
+ * sync daemon. Every step degrades to a `skipped` note rather than throwing, so a missing
+ * `pnpm`/`claude` never aborts onboarding. Pure orchestration lives in {@link runOnboard}.
+ *
+ * @param opts Optional overrides ({@link DefaultOnboardDepsOptions}).
+ * @returns A fully-wired {@link OnboardDeps}.
+ */
+export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): OnboardDeps {
+  const log = (m: string): void => {
+    process.stderr.write(m + "\n");
+  };
+
+  const repoRoot = opts.repoRoot ?? findRepoRoot(process.cwd());
+  const distEntry = (pkg: string): string =>
+    path.join(repoRoot, "packages", pkg, "dist", "index.js");
+
+  const ensureBuilt = async (): Promise<{ built: boolean; skipped?: string }> => {
+    const missing = REQUIRED_DIST_PACKAGES.filter((pkg) => !existsSync(distEntry(pkg)));
+    if (missing.length === 0) return { built: false };
+    if (!hasExecutable("pnpm")) {
+      return {
+        built: false,
+        skipped: `pnpm not found; cannot build (missing: ${missing.join(", ")})`,
+      };
+    }
+    const build = spawnSync("pnpm", ["-r", "build"], { cwd: repoRoot, stdio: "inherit" });
+    if (build.status !== 0) {
+      const reason = build.error
+        ? build.error.message
+        : build.signal
+          ? `signal ${build.signal}`
+          : `exit code ${build.status}`;
+      return { built: false, skipped: `pnpm -r build failed (${reason})` };
+    }
+    // Best-effort: refresh the vendored plugin bundle; failure here is non-fatal.
+    const bundle = path.join(repoRoot, "packages", "plugin", "scripts", "bundle.mjs");
+    if (existsSync(bundle)) {
+      const res = spawnSync("node", [bundle], { cwd: repoRoot, stdio: "inherit" });
+      if (res.status !== 0)
+        log(`Plugin bundle exited with code ${res.status ?? "null"} (ignored).`);
+    }
+    return { built: true };
+  };
+
+  const init = (cwd: string, initOpts: Parameters<OnboardDeps["init"]>[1]) =>
+    runInit(
+      cwd,
+      initOpts,
+      defaultInitDeps({ assumeYes: initOpts.yes, curateEntry: opts.curateEntry }),
+    );
+
+  const registerMcp = async (
+    brainDir: string,
+  ): Promise<{ registered: boolean; skipped?: string }> => {
+    if (!hasExecutable("claude")) {
+      return { registered: false, skipped: "claude CLI not found" };
+    }
+    const get = spawnSync("claude", ["mcp", "get", "commonwealth"], { stdio: "ignore" });
+    if (get.status === 0) return { registered: false, skipped: "already registered" };
+
+    const add = spawnSync(
+      "claude",
+      [
+        "mcp",
+        "add",
+        "commonwealth",
+        "--env",
+        `COMMONWEALTH_BRAIN_DIR=${brainDir}`,
+        "--",
+        "node",
+        distEntry("mcp"),
+      ],
+      { stdio: "inherit" },
+    );
+    if (add.error || add.status !== 0) {
+      return { registered: false, skipped: `claude mcp add failed (code ${add.status ?? "null"})` };
+    }
+    return { registered: true };
+  };
+
+  const startDaemon = async (
+    brainDir: string,
+  ): Promise<{ started: boolean; alreadyRunning?: boolean; skipped?: string }> => {
+    const syncEntry = distEntry("sync");
+    if (!existsSync(syncEntry)) {
+      return { started: false, skipped: "sync daemon not built" };
+    }
+    const status = spawnSync("node", [syncEntry, "status", "--dir", brainDir], {
+      encoding: "utf8",
+    });
+    const output = `${status.stdout ?? ""}${status.stderr ?? ""}`;
+    if (/\brunning on\b/.test(output) && !/\bnot running on\b/.test(output)) {
+      return { started: false, alreadyRunning: true };
+    }
+    try {
+      const child = spawn("node", [syncEntry, "start", "--dir", brainDir], {
+        detached: true,
+        stdio: "ignore",
+      });
+      child.unref();
+      return { started: true };
+    } catch (err) {
+      return { started: false, skipped: `failed to start daemon: ${(err as Error).message}` };
+    }
+  };
+
+  return {
+    ensureBuilt,
+    init,
+    registerMcp,
+    startDaemon,
+    confirm: promptConfirm,
     log,
   };
 }

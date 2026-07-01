@@ -18,6 +18,8 @@ export interface InitOptions {
   yes?: boolean;
   /** Re-run seeding even if this project already resolves to a brain (skip JOIN). */
   reseed?: boolean;
+  /** Gather + stage seed candidates. Defaults to `true`; `false` creates the brain but skips staging. */
+  seed?: boolean;
 }
 
 /**
@@ -108,6 +110,11 @@ export async function runInit(cwd: string, opts: InitOptions, deps: InitDeps): P
   const brainDir = opts.brain ?? defaultBrainDir(repoRoot);
   await deps.createBrain(brainDir, path.basename(brainDir));
   await deps.writeMarker(repoRoot, brainDir);
+
+  if (opts.seed === false) {
+    deps.log(`Seeding skipped. Brain created at ${brainDir}.`);
+    return { mode: "skipped", brainDir, staged: 0, gathered: 0 };
+  }
 
   const { candidates, bySource } = await deps.gather(repoRoot);
   deps.log(

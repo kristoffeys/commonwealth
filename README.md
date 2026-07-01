@@ -56,18 +56,54 @@ The steps below wire the same pieces manually (à la carte).
 git clone https://github.com/kristoffeys/Commonwealth.git
 cd team-second-brain
 pnpm install
-pnpm build          # builds @commonwealth/core, @commonwealth/mcp, @commonwealth/sync
-pnpm test           # 127 tests
+```
+
+### One command: `commonwealth init`
+
+From the project you want a brain for, run **one** command. It is fully idempotent — run
+it again anytime, it only does what's still missing:
+
+```bash
+node /path/to/team-second-brain/packages/cli/dist/index.js init
+```
+
+`init` does the whole setup end to end:
+
+1. **Builds** the workspace if the `dist/` artifacts are missing (`pnpm -r build`).
+2. **Creates** a brain for this project (or **joins** the one it already belongs to) and
+   **seeds** it from your repo's existing knowledge — git history, ADRs, and agent config
+   (`CLAUDE.md` / `.cursorrules` / `AGENTS.md`) — into the review queue.
+3. **Registers** the MCP server with the `claude` CLI, pointed at the new brain.
+4. **Starts** the sync daemon for the brain (detached).
+
+It prints the plan first and asks once for confirmation. Common flags:
+
+```bash
+init --yes            # non-interactive; skip the plan + seed prompts
+init --brain <dir>    # where to create the brain (default: ~/.commonwealth/brains/<project>)
+init --reseed         # re-seed even if this project already resolves to a brain
+init --no-seed        # create the brain but skip mining/staging candidates
+init --no-mcp         # skip registering the MCP server
+init --no-daemon      # skip starting the sync daemon
+init --no-build       # skip the workspace build
 ```
 
 > Not yet published to npm — for now the tools run from the built `dist/` in this repo.
 > `commonwealth init` and the plugin's auto-provisioning already work from the built repo;
-> npm-published binaries are a later milestone (see the roadmap).
+> npm-published binaries are a later milestone (see the roadmap). When missing steps are
+> needed, `claude` and `pnpm` must be on `PATH`; if either is absent, `init` skips that
+> step with a note instead of failing.
 
-### 1. Create a brain
+That's it — open a Claude Code session in the project and ask it something your team
+already knows. The rest of this section documents the pieces `init` wires up, in case you
+want to run or reconfigure them individually.
 
-A brain is just a git repository. The four folders (`memory/ decisions/ work-state/
-people/`) are created on first write, or scaffold them up front:
+### 1. Create a brain (done by `init`)
+
+A brain is just a git repository. `init` creates one under
+`~/.commonwealth/brains/<project>` (override with `--brain`). To scaffold one by hand
+instead, the four folders (`memory/ decisions/ work-state/ people/`) are created on first
+write:
 
 ```bash
 mkdir ~/my-brain && cd ~/my-brain && git init
@@ -75,9 +111,10 @@ mkdir ~/my-brain && cd ~/my-brain && git init
 git remote add origin git@github.com:you/my-brain.git
 ```
 
-### 2. Read/write the brain from Claude Code (MCP)
+### 2. Read/write the brain from Claude Code (MCP) (done by `init`)
 
-Register the MCP server, pointed at your brain:
+`init` runs the registration below for you. To do it manually, point the MCP server at
+your brain:
 
 ```bash
 claude mcp add commonwealth \
@@ -95,9 +132,10 @@ Then, in a Claude Code session, the brain is available through these tools:
 | `list-work-state` | list active workstreams                                    |
 | `who-is`          | look up a person note                                      |
 
-### 3. Keep it synced (resident daemon)
+### 3. Keep it synced (resident daemon) (done by `init`)
 
-Run the sync daemon so local edits and teammates' changes converge continuously:
+`init` starts this daemon for you (detached). To run it yourself so local edits and
+teammates' changes converge continuously:
 
 ```bash
 node /path/to/team-second-brain/packages/sync/dist/index.js start --dir "$HOME/my-brain"
@@ -142,16 +180,11 @@ Default (no config) = everything in scope; add a deny (or a narrow allow) to exc
 
 ## Seed the brain from your repo (cold-start)
 
-A fresh brain shouldn't be empty. **`commonwealth init`** detects your repo, mines its existing
+A fresh brain shouldn't be empty. Seeding is part of `commonwealth init` (see [Getting
+started](#one-command-commonwealth-init)): it detects your repo, mines its existing
 knowledge (git history — merged PRs + notable commits — ADRs, and agent-config like
-`CLAUDE.md` / `.cursorrules` / `AGENTS.md`), previews what it found, and on confirm creates
-the brain, wires it to the project, and stages the candidates into the review queue:
-
-```bash
-node /path/to/team-second-brain/packages/cli/dist/index.js init   # detect → preview → confirm → seed
-#   --brain <dir>   where to create the brain (default: ~/.commonwealth/brains/<project>)
-#   --yes           skip the confirmation prompt
-```
+`CLAUDE.md` / `.cursorrules` / `AGENTS.md`), previews what it found, and on confirm stages
+the candidates into the review queue. Pass `--no-seed` to create the brain without mining.
 
 A teammate running `init` where a brain already exists **joins** it instead of re-seeding
 (TTFV ≈ 0 — they clone an already-full brain). Or drive the pieces à la carte:
