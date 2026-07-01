@@ -28,3 +28,8 @@ index/
 
 # local Claude Code settings (personal, per-clone)
 .claude/settings.local.json
+
+# Stray brain state if commonwealth init/tests run inside this source repo
+.commonwealth/
+staging/
+COMMONWEALTH.md

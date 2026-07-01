@@ -54,7 +54,7 @@ The steps below wire the same pieces manually (à la carte).
 
 ```bash
 git clone https://github.com/kristoffeys/Commonwealth.git
-cd team-second-brain
+cd Commonwealth
 pnpm install
 ```
 
@@ -64,7 +64,7 @@ From the project you want a brain for, run **one** command. It is fully idempote
 it again anytime, it only does what's still missing:
 
 ```bash
-node /path/to/team-second-brain/packages/cli/dist/index.js init
+node /path/to/Commonwealth/packages/cli/dist/index.js init
 ```
 
 `init` does the whole setup end to end:
@@ -119,7 +119,7 @@ your brain:
 ```bash
 claude mcp add commonwealth \
   --env COMMONWEALTH_BRAIN_DIR="$HOME/my-brain" \
-  -- node "/path/to/team-second-brain/packages/mcp/dist/index.js"
+  -- node "/path/to/Commonwealth/packages/mcp/dist/index.js"
 ```
 
 Then, in a Claude Code session, the brain is available through these tools:
@@ -138,7 +138,7 @@ Then, in a Claude Code session, the brain is available through these tools:
 teammates' changes converge continuously:
 
 ```bash
-node /path/to/team-second-brain/packages/sync/dist/index.js start --dir "$HOME/my-brain"
+node /path/to/Commonwealth/packages/sync/dist/index.js start --dir "$HOME/my-brain"
 # one-shot instead of resident:  ... sync --dir "$HOME/my-brain"
 # status / stop:                 ... status --dir ...   |   ... stop --dir ...
 ```
@@ -153,7 +153,7 @@ Curated notes land in a `staging/` queue (never straight to canon). Review and p
 them with the `commonwealth-curate` CLI:
 
 ```bash
-node /path/to/team-second-brain/packages/curate/dist/index.js list --dir "$HOME/my-brain"
+node /path/to/Commonwealth/packages/curate/dist/index.js list --dir "$HOME/my-brain"
 #   approve <id...> | reject <id...> | approve-all
 ```
 
@@ -168,7 +168,7 @@ sessions whose folder is in scope are ever captured or injected — personal pro
 out. It lives in `~/.commonwealth/config.json` and is never synced.
 
 ```bash
-CURATE="node /path/to/team-second-brain/packages/curate/dist/index.js"
+CURATE="node /path/to/Commonwealth/packages/curate/dist/index.js"
 $CURATE scope allow ~/work          # only capture work under here…
 $CURATE scope deny  ~/work/secret   # …except this (deny wins)
 $CURATE scope check --cwd "$PWD"    # → in-scope | out-of-scope
@@ -190,7 +190,7 @@ A teammate running `init` where a brain already exists **joins** it instead of r
 (TTFV ≈ 0 — they clone an already-full brain). Or drive the pieces à la carte:
 
 ```bash
-SEED="node /path/to/team-second-brain/packages/seed/dist/index.js"
+SEED="node /path/to/Commonwealth/packages/seed/dist/index.js"
 $SEED gather --repo "$PWD" | commonwealth-curate capture --dir "$HOME/my-brain"
 commonwealth-curate list --dir "$HOME/my-brain"                    # review, then approve
 ```
@@ -209,7 +209,7 @@ Commonwealth has two config layers, deliberately separate:
 Brain-level **feature flags** are toggled with the CLI and sync with the brain:
 
 ```bash
-CURATE="node /path/to/team-second-brain/packages/curate/dist/index.js"
+CURATE="node /path/to/Commonwealth/packages/curate/dist/index.js"
 $CURATE feature list --dir "$HOME/my-brain"
 $CURATE feature enable autoAdr --dir "$HOME/my-brain"   # opt in per team
 ```
