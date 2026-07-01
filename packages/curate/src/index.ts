@@ -1,6 +1,13 @@
 import { promises as fs } from "node:fs";
 import { parseArgs } from "node:util";
-import { NOTE_KINDS, type NewNoteInput, type NoteKind } from "@commons/core";
+import {
+  FEATURE_FLAGS,
+  loadBrainConfig,
+  type NewNoteInput,
+  NOTE_KINDS,
+  type NoteKind,
+  setFeature,
+} from "@commons/core";
 import { captureCandidates } from "./capture.js";
 import { formatContext } from "./context.js";
 import { curate } from "./curate.js";
@@ -33,6 +40,9 @@ function usage(): void {
       "  commons-curate scope check [--cwd <dir>]",
       "  commons-curate scope allow <path>",
       "  commons-curate scope deny <path>",
+      "  commons-curate feature list [--dir <brain>]",
+      "  commons-curate feature enable <name> [--dir <brain>]",
+      "  commons-curate feature disable <name> [--dir <brain>]",
       "",
       `Kinds: ${NOTE_KINDS.join(", ")}`,
     ].join("\n"),
@@ -247,6 +257,49 @@ async function cmdScope(args: string[]): Promise<void> {
 }
 
 /**
+ * `feature <list|enable|disable> [name]` — inspect and toggle brain-level feature flags
+ * (ADR-0009). Flags live in the shared, synced `<brain>/.commons/config.json`, so they
+ * apply to the whole team. `list` prints each known flag with its current on/off state;
+ * `enable`/`disable` validate the name against {@link FEATURE_FLAGS} then persist.
+ */
+async function cmdFeature(dir: string, args: string[]): Promise<void> {
+  // `--dir` is handled by the top-level parser; drop it (and its value) so the remaining
+  // positionals are just the subcommand and flag name.
+  const { positionals } = parseArgs({
+    args,
+    options: { dir: { type: "string" } },
+    allowPositionals: true,
+    strict: false,
+  });
+  const [sub, ...rest] = positionals;
+  switch (sub) {
+    case "list": {
+      const config = await loadBrainConfig(dir);
+      for (const flag of FEATURE_FLAGS) {
+        const state = config.features[flag.name] ? "on" : "off";
+        console.log(`${flag.name}  [${state}]  — ${flag.description}`);
+      }
+      return;
+    }
+    case "enable":
+    case "disable": {
+      const name = rest[0];
+      if (!name) throw new Error(`feature ${sub} requires a <name>`);
+      if (!FEATURE_FLAGS.some((f) => f.name === name)) {
+        const known = FEATURE_FLAGS.map((f) => f.name).join(", ");
+        throw new Error(`unknown feature "${name}"; expected one of: ${known}`);
+      }
+      const on = sub === "enable";
+      await setFeature(dir, name, on);
+      console.error(`[commons-curate] feature ${name} ${on ? "enabled" : "disabled"}`);
+      return;
+    }
+    default:
+      throw new Error(`unknown feature subcommand "${sub ?? ""}"; expected list|enable|disable`);
+  }
+}
+
+/**
  * `commons-curate` CLI entry (ADR-0007). Diagnostics go to stderr; approved/staged paths
  * and ids go to stdout so they compose with other tools. NO shebang here — tsup's banner
  * supplies it; a source shebang would break the built binary.
@@ -290,6 +343,9 @@ async function main(): Promise<void> {
       break;
     case "scope":
       await cmdScope(rest);
+      break;
+    case "feature":
+      await cmdFeature(dir, rest);
       break;
     default:
       usage();

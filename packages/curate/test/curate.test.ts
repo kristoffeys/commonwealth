@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { writeNote } from "@commons/core";
+import { setFeature, writeNote } from "@commons/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { curate } from "../src/curate.js";
 import { listStaged } from "../src/staging.js";
@@ -69,6 +69,8 @@ describe("curate", () => {
   });
 
   it("stages a novel candidate", async () => {
+    // `decision` kind is gated by autoAdr (ADR-0009); enable it for this staging test.
+    await setFeature(brainDir, "autoAdr", true);
     const result = await curate(brainDir, [
       {
         kind: "decision",

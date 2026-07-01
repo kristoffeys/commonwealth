@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { defaultBrainConfig } from "./config.js";
 import { KIND_DIR, type NoteKind, SCHEMA_VERSION } from "./schema.js";
 
 export interface InitBrainOptions {
@@ -98,12 +99,7 @@ export async function initBrain(dir: string, opts: InitBrainOptions = {}): Promi
 
   // .commons metadata: schema-version pin + config.json.
   await writeFile(path.join(dir, ".commons", "schema-version"), `${SCHEMA_VERSION}\n`);
-  const config = {
-    name,
-    schemaVersion: SCHEMA_VERSION,
-    remotes: [] as string[],
-    curation: {} as Record<string, unknown>,
-  };
+  const config = defaultBrainConfig(name);
   await writeFile(
     path.join(dir, ".commons", "config.json"),
     `${JSON.stringify(config, null, 2)}\n`,

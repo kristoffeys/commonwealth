@@ -47,6 +47,7 @@ describe("initBrain", () => {
     const config = JSON.parse(await fs.readFile(path.join(dir, ".commons", "config.json"), "utf8"));
     expect(config.name).toBe("acme-brain");
     expect(config.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(config.features.autoAdr).toBe(false); // feature flags default off (ADR-0009)
   });
 
   it("writes union-merge .gitattributes and index-ignoring .gitignore", async () => {
