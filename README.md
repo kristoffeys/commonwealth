@@ -55,7 +55,7 @@ git clone https://github.com/kristoffeys/team-second-brain.git
 cd team-second-brain
 pnpm install
 pnpm build          # builds @commons/core, @commons/mcp, @commons/sync
-pnpm test           # 102 tests
+pnpm test           # 118 tests
 ```
 
 > Not yet published to npm — for now the tools run from the built `dist/` in this repo.
@@ -138,6 +138,22 @@ $CURATE scope show
 Rule: in scope if `(allow is empty OR under an allow entry) AND under no deny entry`.
 Default (no config) = everything in scope; add a deny (or a narrow allow) to exclude.
 
+## Seed the brain from your repo (cold-start)
+
+A fresh brain shouldn't be empty. Mine your repo's existing knowledge — git history
+(merged PRs + notable commits), ADRs, and agent-config (`CLAUDE.md` / `.cursorrules` /
+`AGENTS.md`) — into draft notes, then review and approve:
+
+```bash
+SEED="node /path/to/team-second-brain/packages/seed/dist/index.js"
+$SEED preview --repo "$PWD"                                   # see what would be seeded
+$SEED gather  --repo "$PWD" | commons-curate capture --dir "$HOME/my-brain"
+commons-curate list --dir "$HOME/my-brain"                    # review, then approve
+```
+
+Everything lands in the staging review queue first — nothing enters canon unreviewed. The
+`commons init` wizard (roadmap) will do this end-to-end with a preview-diff and confirm.
+
 ## Configuration
 
 Commons has two config layers, deliberately separate:
@@ -168,6 +184,7 @@ scope filter). When off, decision candidates are dropped.
 | `@commons/sync`   | ✅     | Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings (`commons-sync`)     |
 | `@commons/curate` | ✅     | Curation (dedupe/relevance) + in-repo review queue + per-user scope filter (`commons-curate`); hooks in M4  |
 | `@commons/plugin` | ✅     | Claude Code plugin: MCP + scope-gated SessionStart/SessionEnd hooks + /commons commands + auto-provisioning |
+| `@commons/seed`   | ✅     | Cold-start seeding: git-history miner + agent-config importer → candidate notes (`commons-seed`)            |
 
 ## Development
 
