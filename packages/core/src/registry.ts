@@ -94,6 +94,15 @@ async function isFile(file: string): Promise<boolean> {
   }
 }
 
+/** True when `dir` exists and is a directory (symlinks are followed). */
+async function isDir(dir: string): Promise<boolean> {
+  try {
+    return (await fs.stat(dir)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Resolve the user registry path. Order: explicit `registryPath` → `$COMMONWEALTH_REGISTRY`
  * (test override) → a `registry.json` sibling of `$COMMONWEALTH_CONFIG` (so tests that redirect
@@ -138,7 +147,9 @@ async function loadRegistry(registryPath: string): Promise<Registry | null> {
  * Resolve the brain directory for `startDir`. First hit wins:
  *
  * 1. Walk up from `startDir`: a `.commonwealth/brain` marker file (a path, `~`-expanded and
- *    resolved relative to the dir holding it) pins the brain explicitly.
+ *    resolved relative to the dir holding it) pins the brain explicitly — but only when that
+ *    target directory exists. A marker pointing at a missing brain is skipped so a stale/
+ *    dangling marker falls through to the registry instead of hijacking resolution (#68).
  * 2. Walk up: a directory that is itself a brain (`.commonwealth/schema-version`) resolves to
  *    itself.
  * 3. The user registry file (`opts.registryPath` ?? `$COMMONWEALTH_REGISTRY` ?? sibling of
@@ -156,13 +167,21 @@ export async function resolveBrainDir(
   const start = path.resolve(startDir);
   const registryPath = resolveRegistryPath(opts.registryPath);
 
-  // 1) Explicit marker file, nearest ancestor wins.
+  // 1) Explicit marker file, nearest ancestor wins — but only when its target actually
+  //    exists. A marker whose target is missing (a brain that was moved/removed, or a stale
+  //    marker left by an older onboarding) is skipped so resolution falls through to the
+  //    registry rather than being hijacked to a dead path (#68). We keep walking up in case
+  //    a higher ancestor carries a valid marker.
   for (const dir of walkUp(start)) {
     const markerPath = path.join(dir, MARKER_REL);
     const raw = await readFileOrNull(markerPath);
     if (raw !== null) {
       const target = raw.trim();
-      if (target.length > 0) return expand(target, dir);
+      if (target.length > 0) {
+        const resolved = expand(target, dir);
+        if (await isDir(resolved)) return resolved;
+        // Dangling marker: ignore it and continue (next ancestor marker, then layers 2–4).
+      }
     }
   }
 

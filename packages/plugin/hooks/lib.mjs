@@ -291,6 +291,14 @@ async function isFile(file) {
   }
 }
 
+async function isDir(dir) {
+  try {
+    return (await fs.stat(dir)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function resolveRegistryPath() {
   if (process.env.COMMONWEALTH_REGISTRY) return process.env.COMMONWEALTH_REGISTRY;
   if (process.env.COMMONWEALTH_CONFIG) {
@@ -317,10 +325,11 @@ async function loadRegistryMappings(registryPath) {
 }
 
 /**
- * Resolve the brain for `startDir`: (1) nearest `.commonwealth/brain` marker → (2) nearest
- * ancestor that is itself a brain (`.commonwealth/config.json`) → (3) user registry prefix
- * mapping → (4) `$COMMONWEALTH_BRAIN_DIR` → (5) null. Pure fs/path; never throws. Exported for
- * tests so the real resolution path is covered (not just injected fakes).
+ * Resolve the brain for `startDir`: (1) nearest `.commonwealth/brain` marker whose target
+ * exists (a dangling marker is skipped so it falls through, #68) → (2) nearest ancestor that
+ * is itself a brain (`.commonwealth/config.json`) → (3) user registry prefix mapping →
+ * (4) `$COMMONWEALTH_BRAIN_DIR` → (5) null. Pure fs/path; never throws. Exported for tests so
+ * the real resolution path is covered (not just injected fakes).
  */
 export async function realResolveBrainDir(startDir) {
   if (typeof startDir !== "string" || startDir.length === 0) return null;
@@ -330,7 +339,12 @@ export async function realResolveBrainDir(startDir) {
     const raw = await readFileOrNull(path.join(dir, MARKER_REL));
     if (raw !== null) {
       const target = raw.trim();
-      if (target.length > 0) return expandPath(target, dir);
+      if (target.length > 0) {
+        const resolved = expandPath(target, dir);
+        // Skip a dangling marker (missing target) so a stale one falls through to the
+        // registry instead of hijacking capture to a dead brain path (#68).
+        if (await isDir(resolved)) return resolved;
+      }
     }
   }
   for (const dir of walkUp(start)) {
