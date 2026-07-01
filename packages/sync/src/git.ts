@@ -1,6 +1,17 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { findSecrets } from "@commons/core";
 import { simpleGit, type SimpleGit } from "simple-git";
+
+/** Note-kind folders whose staged markdown is scanned for secrets before commit. */
+const NOTE_DIRS = ["memory", "decisions", "work-state", "people"] as const;
+
+/** True if a repo-relative path is a markdown note file under a note-kind folder. */
+function isNoteFile(rel: string): boolean {
+  if (!rel.endsWith(".md")) return false;
+  const top = rel.split("/")[0];
+  return top !== undefined && (NOTE_DIRS as readonly string[]).includes(top);
+}
 
 /**
  * Open a simple-git handle bound to a working directory. `core.editor=true` is injected
@@ -34,6 +45,63 @@ export async function commitAll(dir: string, message: string): Promise<boolean> 
   if (status.isClean()) return false;
   await git.commit(message);
   return true;
+}
+
+/**
+ * Repo-relative paths that are currently staged (`git diff --cached --name-only`).
+ * Used by the pre-commit secret scrub to know which files a commit is about to include.
+ */
+export async function stagedFiles(dir: string): Promise<string[]> {
+  const out = await openRepo(dir).diff(["--cached", "--name-only"]);
+  return out
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+}
+
+/** Remove `files` from the index (`git reset -q -- <files>`), leaving the working tree. */
+export async function unstage(dir: string, files: string[]): Promise<void> {
+  if (files.length === 0) return;
+  await openRepo(dir).raw(["reset", "-q", "--", ...files]);
+}
+
+/** Outcome of {@link commitAllExceptSecrets}: commit status plus any blocked note paths. */
+export interface GuardedCommit {
+  /** A commit was actually created (there were staged changes after scrubbing). */
+  committed: boolean;
+  /** Repo-relative note paths withheld because they contained a secret. */
+  secretsBlocked: string[];
+}
+
+/**
+ * Pre-commit secret scrub (#16, defense-in-depth for hand-edited files). Stage everything
+ * (`add -A`), scan every staged MARKDOWN note file for secrets, and unstage any offenders
+ * so they are neither committed nor pushed. Commit the remainder only if staged changes
+ * survive. Blocked files are left modified/uncommitted in the working tree for the user to
+ * fix. Returns whether a commit landed and which note paths were withheld.
+ */
+export async function commitAllExceptSecrets(dir: string, message: string): Promise<GuardedCommit> {
+  const git = openRepo(dir);
+  await git.add(["-A"]);
+
+  const secretsBlocked: string[] = [];
+  for (const rel of await stagedFiles(dir)) {
+    if (!isNoteFile(rel)) continue;
+    let content: string;
+    try {
+      content = await fs.readFile(path.join(dir, rel), "utf8");
+    } catch {
+      continue; // deletion or unreadable — nothing to scan
+    }
+    if (findSecrets(content).length > 0) secretsBlocked.push(rel);
+  }
+
+  await unstage(dir, secretsBlocked);
+
+  const status = await git.status();
+  if (status.staged.length === 0) return { committed: false, secretsBlocked };
+  await git.commit(message);
+  return { committed: true, secretsBlocked };
 }
 
 /** The current branch name, or null if detached / no commits yet. */
