@@ -11,9 +11,12 @@ A shared, synced brain must never carry credentials. We need to detect secrets a
 them entering (at capture) or leaving (at pre-commit). Options ranged from a small hand-
 rolled regex set to hard-depending on a mature scanner. Reference tools reviewed:
 [gitleaks](https://github.com/gitleaks/gitleaks) (~150 rules + entropy),
-[SecretFinder](https://github.com/m4ll0k/SecretFinder) (broad provider regex set), and
+[SecretFinder](https://github.com/m4ll0k/SecretFinder) (broad provider regex set),
 [detect-secrets](https://github.com/Yelp/detect-secrets) (entropy plugins + a
-baseline/allowlist workflow).
+baseline/allowlist workflow), [ggshield](https://github.com/GitGuardian/ggshield)
+(GitGuardian's scanner, API-backed), and
+[secrets-patterns-db](https://github.com/mazen160/secrets-patterns-db) (a large
+community-curated regex database we can import from to grow the built-in set).
 
 ## Decision
 
@@ -42,9 +45,10 @@ ethos. Instead the scanner is designed to be **pluggable**: an optional gitleaks
   paste. Zero false positives on the tested benign look-alikes.
 - Not exhaustive vs gitleaks' full ruleset, and has **no entropy detection** (so a novel
   high-entropy secret matching no named pattern can slip through) and no allowlist yet —
-  accepted for now. The tracked follow-up adds **entropy-based detection + a
-  baseline/allowlist** (detect-secrets model) and an **optional external backend**
-  (gitleaks/detect-secrets) for teams that want maximum coverage.
+  accepted for now. The tracked follow-up (#46) adds **entropy-based detection + a
+  baseline/allowlist** (detect-secrets model), **importing curated patterns from
+  secrets-patterns-db** to widen the built-in set, and an **optional external backend**
+  (gitleaks / detect-secrets / ggshield) for teams that want maximum coverage.
 - Regex maintenance burden as new key formats appear (e.g. the OpenAI `sk-proj-` shift
   this ADR already had to absorb) — another reason the pluggable backend matters.
 
