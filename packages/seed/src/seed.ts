@@ -3,7 +3,7 @@ import { importConfigs } from "./config-importer.js";
 import { mineGitHistory, type MineGitHistoryOptions } from "./git-miner.js";
 
 /** Options for {@link gatherCandidates}. */
-export interface GatherOptions extends MineGitHistoryOptions {}
+export type GatherOptions = MineGitHistoryOptions;
 
 /** Per-source candidate counts, for previews and reporting. */
 export interface GatherBySource {
