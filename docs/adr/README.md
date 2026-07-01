@@ -13,6 +13,7 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 | [0003](0003-concurrency-model.md)             | Concurrency: atomic files + union merge + derived indexes | Accepted |
 | [0004](0004-license-apache-2.md)              | License: Apache-2.0                                       | Accepted |
 | [0005](0005-search-and-embeddings.md)         | Search: SQLite FTS5 now, pluggable embeddings later       | Accepted |
+| [0006](0006-sync-resident-daemon.md)          | Sync architecture: resident daemon                        | Accepted |
 
 ## Process
 
