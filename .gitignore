@@ -1,0 +1,27 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# test / coverage
+coverage/
+
+# derived brain index (rebuildable from markdown — never committed)
+index/
+*.db
+*.db-shm
+*.db-wal
+
+# env / local
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# editor
+.idea/
+.vscode/*
+!.vscode/extensions.json
