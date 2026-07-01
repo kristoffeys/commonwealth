@@ -1,7 +1,6 @@
 import { NOTE_KINDS, type Note } from "@commonwealth/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { resolveBrainDir } from "./brain.js";
 import { listWorkState, readNoteTool, remember, searchNotes, whoIs } from "./tools.js";
 
 /** Zod enum of the four note kinds, reused across tool input schemas. */
@@ -19,9 +18,11 @@ function summarizeNote(note: Note): string {
  * `tools.ts`. Every tool reads/writes the brain only through `@commonwealth/core`, keeping
  * markdown the source of truth (ADR-0003).
  *
- * @param brainDir Absolute path to the brain repo; defaults to {@link resolveBrainDir}.
+ * @param brainDir Absolute path to the brain repo. Resolve it via {@link resolveBrainDir}
+ *   (async) in `main()` and pass it in; defaults to the process cwd when omitted so a
+ *   caller that already `cd`'d into a brain can build the server without resolving.
  */
-export function createServer(brainDir: string = resolveBrainDir()): McpServer {
+export function createServer(brainDir: string = process.cwd()): McpServer {
   const server = new McpServer({ name: "commonwealth", version: "0.0.0" });
 
   server.registerTool(

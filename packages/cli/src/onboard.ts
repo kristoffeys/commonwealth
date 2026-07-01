@@ -18,7 +18,13 @@ export type OnboardOptions = {
   reseed?: boolean;
   /** Gather + stage seed candidates. Default: true. `false` skips staging. */
   seed?: boolean;
-  /** Register the MCP server with the `claude` CLI. Default: true. */
+  /**
+   * Install the Commonwealth plugin (global MCP + session hooks) via the repo marketplace.
+   * Default: true. The plugin resolves the brain per repo dynamically, so no brain dir is
+   * pinned. `mcp` is a backward-compatible alias for this gate.
+   */
+  plugin?: boolean;
+  /** Backward-compatible alias for {@link OnboardOptions.plugin}. */
   mcp?: boolean;
   /** Start the sync daemon for the brain. Default: true. */
   daemon?: boolean;
@@ -74,8 +80,13 @@ export interface OnboardDeps {
   setAutoAdr(brainDir: string, on: boolean): Promise<{ set: boolean; skipped?: string }>;
   /** Add `url` as the brain's git `origin` remote unless one already exists. */
   setRemote(brainDir: string, url: string): Promise<{ set: boolean; skipped?: string }>;
-  /** Idempotently register the MCP server for `brainDir` with the `claude` CLI. */
-  registerMcp(brainDir: string): Promise<{ registered: boolean; skipped?: string }>;
+  /**
+   * Idempotently install the Commonwealth plugin (global MCP + session hooks) via the repo
+   * marketplace with the `claude` CLI. No brain dir is needed — the plugin + its SessionStart
+   * hook resolve the brain per repo dynamically (ADR-0012). Never throws. `installed` is true
+   * when the plugin is present after the step; `skipped` carries a reason when it is not.
+   */
+  installPlugin(): Promise<{ installed: boolean; skipped?: string }>;
   /** Start the sync daemon for `brainDir`, or report it already running. */
   startDaemon(
     brainDir: string,
@@ -110,19 +121,19 @@ export interface OnboardResult {
   autoAdr: string;
   /** Short brain-remote status string (e.g. `set`, `origin exists`, `skipped`). */
   remote: string;
-  /** Short MCP status string (e.g. `registered`, `already registered`, `skipped`). */
-  mcp: string;
+  /** Short plugin-install status string (e.g. `installed`, `skipped`). */
+  plugin: string;
   /** Short daemon status string (e.g. `started`, `already running`, `skipped`). */
   daemon: string;
 }
 
 /**
  * Orchestrate the full `commonwealth init`: build the workspace (if needed), create/seed/join
- * the brain, register the MCP server, and start the sync daemon — a single idempotent command.
- * Deterministic and side-effect-free except through `deps`.
+ * the brain, install the Commonwealth plugin (global MCP + session hooks), and start the sync
+ * daemon — a single idempotent command. Deterministic and side-effect-free except through `deps`.
  *
  * Flow: build a plan and log it; unless `--yes`, confirm the whole plan (a decline does NOTHING
- * and returns early); then run each enabled step in order — ensureBuilt, init, registerMcp,
+ * and returns early); then run each enabled step in order — ensureBuilt, init, installPlugin,
  * startDaemon — and log a done summary. Each step is individually gated by its option and every
  * step is idempotent, so re-running is safe.
  *
@@ -141,7 +152,9 @@ export async function runOnboard(
   const doScope = opts.scope !== false;
   const doAutoAdr = opts.autoAdr === true;
   const doRemote = typeof opts.remote === "string" && opts.remote.trim().length > 0;
-  const doMcp = opts.mcp !== false;
+  // Install the plugin unless explicitly disabled. `plugin` is the canonical gate; `mcp` is a
+  // backward-compatible alias, so either being `false` disables the step.
+  const doPlugin = opts.plugin !== false && opts.mcp !== false;
   const doDaemon = opts.daemon !== false;
 
   const repoRoot = findRepoRoot(cwd);
@@ -158,7 +171,7 @@ export async function runOnboard(
     seedRepos.length > 0 ? `seed from ${seedRepos.length} repo(s)` : null,
     doAutoAdr ? "enable auto-ADR" : null,
     doRemote ? `set brain remote to ${opts.remote}` : null,
-    doMcp ? "register the MCP server" : null,
+    doPlugin ? "install the Commonwealth plugin (global MCP + session hooks)" : null,
     doDaemon ? "start the sync daemon" : null,
     "ensure the per-user scope config exists",
   ].filter((step): step is string => step !== null);
@@ -180,7 +193,7 @@ export async function runOnboard(
         scope: "skipped",
         autoAdr: "skipped",
         remote: "skipped",
-        mcp: "skipped",
+        plugin: "skipped",
         daemon: "skipped",
       };
     }
@@ -257,15 +270,15 @@ export async function runOnboard(
     deps.log(`Remote: ${remote}`);
   }
 
-  let mcp = "skipped";
-  if (doMcp) {
-    const res = await deps.registerMcp(brainDir);
+  let plugin = "skipped";
+  if (doPlugin) {
+    const res = await deps.installPlugin();
     if (res.skipped) {
-      deps.log(`WARNING: MCP step skipped: ${res.skipped}`);
-      mcp = res.skipped;
+      deps.log(`WARNING: plugin step skipped: ${res.skipped}`);
+      plugin = res.skipped;
     } else {
-      mcp = res.registered ? "registered" : "not registered";
-      deps.log(`MCP: ${mcp}`);
+      plugin = res.installed ? "installed" : "not installed";
+      deps.log(`Plugin: ${plugin}`);
     }
   }
 
@@ -290,7 +303,7 @@ export async function runOnboard(
   deps.log(
     `Done. mode=${initResult.mode} brain=${brainDir} staged=${staged} ` +
       `scopedFolders=${scopedFolders} mappedFolders=${mappedFolders} seededRepos=${seededRepos} ` +
-      `scope=${scope} autoAdr=${autoAdr} remote=${remote} mcp=${mcp} daemon=${daemon}. ` +
+      `scope=${scope} autoAdr=${autoAdr} remote=${remote} plugin=${plugin} daemon=${daemon}. ` +
       `Scope config: ${scopeConfigPath}. ` +
       "Open a Claude session here and ask it something your team knows.",
   );
@@ -307,7 +320,7 @@ export async function runOnboard(
     scope,
     autoAdr,
     remote,
-    mcp,
+    plugin,
     daemon,
   };
 }
@@ -317,7 +330,7 @@ export interface WizardAnswers {
   brain: string;
   scope: boolean;
   seed: boolean;
-  mcp: boolean;
+  plugin: boolean;
   daemon: boolean;
   autoAdr: boolean;
   remote: string;
@@ -333,7 +346,7 @@ export interface WizardDefaults {
   repoRoot: string;
   scope: boolean;
   seed: boolean;
-  mcp: boolean;
+  plugin: boolean;
   daemon: boolean;
   autoAdr: boolean;
 }
@@ -396,7 +409,10 @@ export async function runWizard(
     seedRepos = [defaults.repoRoot];
   }
 
-  const mcp = await prompter.confirm("Register MCP with Claude Code?", defaults.mcp);
+  const plugin = await prompter.confirm(
+    "Install the Commonwealth plugin (global MCP + session hooks)?",
+    defaults.plugin,
+  );
   const daemon = await prompter.confirm("Start the sync daemon?", defaults.daemon);
   const autoAdr = await prompter.confirm("Enable auto-ADR?", defaults.autoAdr);
   const remote = await prompter.text("Brain git remote (blank to skip)", "");
@@ -405,7 +421,7 @@ export async function runWizard(
     brain: brain.trim() === "" ? undefined : brain,
     yes: true,
     seed: seedRepos.length > 0,
-    mcp,
+    plugin,
     daemon,
     scope: true,
     autoAdr,

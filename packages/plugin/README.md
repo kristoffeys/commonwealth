@@ -44,12 +44,21 @@ cross-platform build / npm publish with per-platform prebuilds is a later task.
 
 ## Install (git plugin marketplace)
 
-```
-/plugin marketplace add kristoffeys/commonwealth
-/plugin install commonwealth
+The repo root ships `.claude-plugin/marketplace.json` declaring this plugin, so the repo IS a
+plugin marketplace. Add it and install (user scope / global — ADR-0012):
+
+```bash
+claude plugin marketplace add kristoffeys/commonwealth
+claude plugin install commonwealth@commonwealth
 ```
 
-(Or point the marketplace at your fork / internal mirror of this repo.)
+(Or point the marketplace at a local path / your fork / an internal mirror of this repo.)
+
+The plugin installs globally, so the `commonwealth-brain` MCP server + hooks work in **every**
+session. Per-repo routing is dynamic: the SessionStart hook resolves the real session cwd → its
+brain via the registry, and the MCP server resolves its brain via `@commonwealth/core`'s
+`resolveBrainDir` — no brain is pinned into the registration. This replaced the old raw
+local-scope `claude mcp add`, which was invisible outside its install dir and pinned one brain.
 
 ## Auto-provisioning via team-managed settings (issue #13)
 
@@ -117,8 +126,8 @@ hand:
    ```
 3. **Register the brain** so it resolves: either drop a `.commonwealth/brain` marker in your
    project, add a `~/.commonwealth/registry.json` mapping, or `export COMMONWEALTH_BRAIN_DIR=/tmp/acme-brain`.
-4. **Install the plugin** (`/plugin marketplace add <this repo>` → `/plugin install
-commonwealth`) and open Claude Code in an **in-scope** project directory.
+4. **Install the plugin** (`claude plugin marketplace add <this repo>` → `claude plugin install
+commonwealth@commonwealth`) and open Claude Code in an **in-scope** project directory.
 5. **SessionStart:** confirm the "Relevant from the team brain" block appears in context.
    In an **out-of-scope** dir (add it via `commonwealth-curate scope deny <dir>`), confirm
    nothing is injected.

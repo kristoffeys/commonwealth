@@ -15,7 +15,7 @@ function makeDeps(over: Partial<OnboardDeps> = {}): OnboardDeps {
     ensureUserConfig: vi.fn(async () => ({ path: "/home/.commonwealth/config.json" })),
     setAutoAdr: vi.fn(async () => ({ set: true })),
     setRemote: vi.fn(async () => ({ set: true })),
-    registerMcp: vi.fn(async () => ({ registered: true })),
+    installPlugin: vi.fn(async () => ({ installed: true })),
     startDaemon: vi.fn(async () => ({ started: true })),
     confirm: vi.fn(async () => true),
     log: vi.fn(),
@@ -24,7 +24,7 @@ function makeDeps(over: Partial<OnboardDeps> = {}): OnboardDeps {
 }
 
 describe("runOnboard", () => {
-  it("full run (defaults): builds, inits, registers MCP, starts daemon, aggregates", async () => {
+  it("full run (defaults): builds, inits, installs plugin, starts daemon, aggregates", async () => {
     const deps = makeDeps();
     const result = await runOnboard("/repo", { yes: true }, deps);
 
@@ -34,7 +34,7 @@ describe("runOnboard", () => {
     expect(deps.registerBrain).toHaveBeenCalledTimes(1);
     expect(deps.seedFrom).toHaveBeenCalledTimes(1);
     expect(deps.ensureUserConfig).toHaveBeenCalledTimes(1);
-    expect(deps.registerMcp).toHaveBeenCalledWith("/b");
+    expect(deps.installPlugin).toHaveBeenCalledTimes(1);
     expect(deps.startDaemon).toHaveBeenCalledWith("/b");
 
     expect(result).toEqual({
@@ -49,7 +49,7 @@ describe("runOnboard", () => {
       scope: "added 1",
       autoAdr: "skipped",
       remote: "skipped",
-      mcp: "registered",
+      plugin: "installed",
       daemon: "started",
     });
   });
@@ -61,7 +61,7 @@ describe("runOnboard", () => {
     expect(deps.confirm).not.toHaveBeenCalled();
     expect(deps.ensureBuilt).toHaveBeenCalledTimes(1);
     expect(deps.init).toHaveBeenCalledTimes(1);
-    expect(deps.registerMcp).toHaveBeenCalledTimes(1);
+    expect(deps.installPlugin).toHaveBeenCalledTimes(1);
     expect(deps.startDaemon).toHaveBeenCalledTimes(1);
   });
 
@@ -79,12 +79,12 @@ describe("runOnboard", () => {
 
     expect(deps.ensureBuilt).not.toHaveBeenCalled();
     expect(deps.init).not.toHaveBeenCalled();
-    expect(deps.registerMcp).not.toHaveBeenCalled();
+    expect(deps.installPlugin).not.toHaveBeenCalled();
     expect(deps.startDaemon).not.toHaveBeenCalled();
 
     expect(result.mode).toBe("skipped");
     expect(result.built).toBe(false);
-    expect(result.mcp).toBe("skipped");
+    expect(result.plugin).toBe("skipped");
     expect(result.daemon).toBe("skipped");
   });
 
@@ -94,7 +94,7 @@ describe("runOnboard", () => {
 
     expect(deps.ensureBuilt).not.toHaveBeenCalled();
     expect(deps.init).toHaveBeenCalledTimes(1);
-    expect(deps.registerMcp).toHaveBeenCalledTimes(1);
+    expect(deps.installPlugin).toHaveBeenCalledTimes(1);
     expect(deps.startDaemon).toHaveBeenCalledTimes(1);
     expect(result.built).toBe(false);
   });
@@ -108,14 +108,22 @@ describe("runOnboard", () => {
     expect(result.staged).toBe(0);
   });
 
-  it("--no-mcp: skips registerMcp, runs the rest", async () => {
+  it("--no-plugin: skips installPlugin, runs the rest", async () => {
+    const deps = makeDeps();
+    const result = await runOnboard("/repo", { yes: true, plugin: false }, deps);
+
+    expect(deps.installPlugin).not.toHaveBeenCalled();
+    expect(deps.init).toHaveBeenCalledTimes(1);
+    expect(deps.startDaemon).toHaveBeenCalledTimes(1);
+    expect(result.plugin).toBe("skipped");
+  });
+
+  it("--no-mcp (alias): also skips installPlugin", async () => {
     const deps = makeDeps();
     const result = await runOnboard("/repo", { yes: true, mcp: false }, deps);
 
-    expect(deps.registerMcp).not.toHaveBeenCalled();
-    expect(deps.init).toHaveBeenCalledTimes(1);
-    expect(deps.startDaemon).toHaveBeenCalledTimes(1);
-    expect(result.mcp).toBe("skipped");
+    expect(deps.installPlugin).not.toHaveBeenCalled();
+    expect(result.plugin).toBe("skipped");
   });
 
   it("--no-daemon: skips startDaemon, runs the rest", async () => {
@@ -123,11 +131,11 @@ describe("runOnboard", () => {
     const result = await runOnboard("/repo", { yes: true, daemon: false }, deps);
 
     expect(deps.startDaemon).not.toHaveBeenCalled();
-    expect(deps.registerMcp).toHaveBeenCalledTimes(1);
+    expect(deps.installPlugin).toHaveBeenCalledTimes(1);
     expect(result.daemon).toBe("skipped");
   });
 
-  it("runs steps in order: ensureBuilt -> init -> scope -> autoAdr -> remote -> mcp -> daemon", async () => {
+  it("runs steps in order: ensureBuilt -> init -> scope -> autoAdr -> remote -> plugin -> daemon", async () => {
     const calls: string[] = [];
     const deps = makeDeps({
       ensureBuilt: vi.fn(async () => {
@@ -150,9 +158,9 @@ describe("runOnboard", () => {
         calls.push("remote");
         return { set: true };
       }),
-      registerMcp: vi.fn(async () => {
-        calls.push("mcp");
-        return { registered: true };
+      installPlugin: vi.fn(async () => {
+        calls.push("plugin");
+        return { installed: true };
       }),
       startDaemon: vi.fn(async () => {
         calls.push("daemon");
@@ -161,7 +169,7 @@ describe("runOnboard", () => {
     });
 
     await runOnboard("/repo", { yes: true, autoAdr: true, remote: "git@x:y.git" }, deps);
-    expect(calls).toEqual(["build", "init", "scope", "autoAdr", "remote", "mcp", "daemon"]);
+    expect(calls).toEqual(["build", "init", "scope", "autoAdr", "remote", "plugin", "daemon"]);
   });
 
   it("scope/autoAdr/remote: runs each when its opt is set, reflects status", async () => {
@@ -319,17 +327,17 @@ describe("runOnboard", () => {
     expect(warned).toBe(true);
   });
 
-  it("idempotency surfaced: already-registered MCP + already-running daemon reflected without error", async () => {
+  it("idempotency surfaced: skipped plugin install + already-running daemon reflected without error", async () => {
     const deps = makeDeps({
       ensureBuilt: vi.fn(async () => ({ built: false })),
-      registerMcp: vi.fn(async () => ({ registered: false, skipped: "already registered" })),
+      installPlugin: vi.fn(async () => ({ installed: false, skipped: "claude CLI not found" })),
       startDaemon: vi.fn(async () => ({ started: false, alreadyRunning: true })),
     });
 
     const result = await runOnboard("/repo", { yes: true }, deps);
 
     expect(result.built).toBe(false);
-    expect(result.mcp).toBe("already registered");
+    expect(result.plugin).toBe("claude CLI not found");
     expect(result.daemon).toBe("already running");
   });
 
@@ -342,5 +350,17 @@ describe("runOnboard", () => {
     const planLine = log.mock.calls.map((c) => c[0] as string).find((m) => m.startsWith("Will:"));
     expect(planLine).toBeDefined();
     expect(planLine).toContain("/b");
+  });
+
+  it("plan and done summary mention installing the Commonwealth plugin", async () => {
+    const log = vi.fn();
+    const deps = makeDeps({ log });
+    await runOnboard("/repo", { yes: true }, deps);
+
+    const lines = log.mock.calls.map((c) => c[0] as string);
+    const planLine = lines.find((m) => m.startsWith("Will:"));
+    expect(planLine).toContain("install the Commonwealth plugin");
+    const doneLine = lines.find((m) => m.startsWith("Done."));
+    expect(doneLine).toContain("plugin=installed");
   });
 });
