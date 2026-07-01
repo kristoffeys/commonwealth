@@ -13,16 +13,42 @@ function summarizeNote(note: Note): string {
   return `- ${fm.title}${status} (${note.path})`;
 }
 
+/** The MCP error-result shape returned by a tool: human text + `isError`. */
+type ToolError = { content: { type: "text"; text: string }[]; isError: true };
+
+/**
+ * The explicit "no brain configured" result. Returned by every tool when the server was
+ * built without a resolved brain (see {@link createServer}), instead of silently operating
+ * on the process cwd. Tells the user exactly how to wire one up. (#64)
+ */
+function noBrainConfigured(): ToolError {
+  const cwd = process.cwd();
+  return {
+    isError: true,
+    content: [
+      {
+        type: "text",
+        text:
+          `No Commonwealth brain is configured for ${cwd}. Run \`commonwealth init\` here to ` +
+          `create or join a brain, or add a prefix → brain mapping to ` +
+          `~/.commonwealth/registry.json. (Set COMMONWEALTH_BRAIN_DIR to pin one explicitly.)`,
+      },
+    ],
+  };
+}
+
 /**
  * Build the Commonwealth MCP server with the five M1 tools wired to the pure handlers in
  * `tools.ts`. Every tool reads/writes the brain only through `@commonwealth/core`, keeping
  * markdown the source of truth (ADR-0003).
  *
- * @param brainDir Absolute path to the brain repo. Resolve it via {@link resolveBrainDir}
- *   (async) in `main()` and pass it in; defaults to the process cwd when omitted so a
- *   caller that already `cd`'d into a brain can build the server without resolving.
+ * @param brainDir Absolute path to the brain repo, or `null` when {@link resolveBrainDir}
+ *   found no brain for the cwd. When `null` the server still starts (so the plugin never
+ *   breaks an unmapped project) but every tool returns {@link noBrainConfigured} rather than
+ *   silently reading/writing the cwd. Defaults to the process cwd when omitted so a caller
+ *   that already `cd`'d into a brain can build the server without resolving.
  */
-export function createServer(brainDir: string = process.cwd()): McpServer {
+export function createServer(brainDir: string | null = process.cwd()): McpServer {
   const server = new McpServer({ name: "commonwealth", version: "0.0.0" });
 
   server.registerTool(
@@ -39,6 +65,7 @@ export function createServer(brainDir: string = process.cwd()): McpServer {
       },
     },
     async ({ query, kind, limit }) => {
+      if (brainDir === null) return noBrainConfigured();
       const results = await searchNotes(brainDir, { query, kind, limit });
       const text =
         results.length === 0
@@ -63,6 +90,7 @@ export function createServer(brainDir: string = process.cwd()): McpServer {
       },
     },
     async ({ path }) => {
+      if (brainDir === null) return noBrainConfigured();
       const note = await readNoteTool(brainDir, { path });
       const text = `# ${note.frontmatter.title}\n\n${note.body}`;
       return {
@@ -89,6 +117,7 @@ export function createServer(brainDir: string = process.cwd()): McpServer {
       },
     },
     async ({ kind, title, body, tags, author }) => {
+      if (brainDir === null) return noBrainConfigured();
       const result = await remember(brainDir, { kind, title, body, tags, author });
       const text = `Remembered "${title}" as ${result.id} (${result.path}).`;
       return {
@@ -108,6 +137,7 @@ export function createServer(brainDir: string = process.cwd()): McpServer {
       inputSchema: {},
     },
     async () => {
+      if (brainDir === null) return noBrainConfigured();
       const notes = await listWorkState(brainDir);
       const text =
         notes.length === 0 ? "No active work-state." : notes.map(summarizeNote).join("\n");
@@ -127,6 +157,7 @@ export function createServer(brainDir: string = process.cwd()): McpServer {
       },
     },
     async ({ query }) => {
+      if (brainDir === null) return noBrainConfigured();
       const notes = await whoIs(brainDir, { query });
       const text =
         notes.length === 0 ? `No people matched "${query}".` : notes.map(summarizeNote).join("\n");

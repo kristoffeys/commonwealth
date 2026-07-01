@@ -8,7 +8,8 @@ import { resolveBrainDir } from "../src/brain.js";
 /**
  * The MCP server must resolve its brain the same way the rest of Commonwealth does: an
  * explicit `COMMONWEALTH_BRAIN_DIR` wins, otherwise `@commonwealth/core`'s registry maps the
- * cwd to a brain, and when nothing maps we degrade to the cwd (never crash).
+ * cwd to a brain, and when nothing maps we return `null` — the server surfaces an explicit
+ * "no brain configured" error rather than silently adopting the cwd (#64).
  */
 
 let tmp: string;
@@ -59,11 +60,12 @@ describe("resolveBrainDir (mcp)", () => {
     await expect(resolveBrainDir()).resolves.toBe(brain);
   });
 
-  it("falls back to cwd when the registry maps nothing (null -> cwd)", async () => {
+  it("returns null when the registry maps nothing (no silent cwd fallback)", async () => {
     const loose = path.join(tmp, "elsewhere");
     await fs.mkdir(loose, { recursive: true });
-    // Registry file is absent; no marker, no ancestor brain -> core returns null.
+    // Registry file is absent; no marker, no ancestor brain -> core returns null, and the
+    // MCP resolver propagates that null instead of adopting `loose` as a brain (#64).
     process.chdir(loose);
-    await expect(resolveBrainDir()).resolves.toBe(loose);
+    await expect(resolveBrainDir()).resolves.toBeNull();
   });
 });
