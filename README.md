@@ -259,7 +259,6 @@ Conventions and non-negotiable design principles live in
 
 | Doc                                                  | What it covers                                                            |
 | ---------------------------------------------------- | ------------------------------------------------------------------------- |
-| [`docs/00-vision.md`](docs/00-vision.md)             | Positioning, competitors, edge, wedge, risks                              |
 | [`docs/01-architecture.md`](docs/01-architecture.md) | Git-as-substrate, the concurrency model (the crux), sync daemon, curation |
 | [`docs/02-data-model.md`](docs/02-data-model.md)     | The markdown schema: memory / decisions / work-state / people-threads     |
 | [`docs/03-distribution.md`](docs/03-distribution.md) | Auto-provisioning into Claude, OSS + monetization                         |
