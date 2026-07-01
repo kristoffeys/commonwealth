@@ -46,6 +46,30 @@ describe("resolveBrainDir", () => {
     expect(await resolveBrainDir(nested)).toBe(brain);
   });
 
+  it("skips a dangling marker (missing target) and falls through to the registry (#68)", async () => {
+    const project = await mkdir("proj");
+    const registryPath = path.join(root, "registry.json");
+    const realBrain = await makeBrain(await mkdir("real-brain"));
+    // A marker pointing at a brain that does not exist (moved/removed, or stale onboarding).
+    await setBrainMarker(project, path.join(root, "ghost-brain"));
+    // A registry mapping that DOES resolve.
+    await addRegistryMapping(project, realBrain, registryPath);
+
+    // The dead marker must not hijack resolution — the registry mapping wins.
+    expect(await resolveBrainDir(project, { registryPath })).toBe(realBrain);
+  });
+
+  it("prefers a valid ancestor marker over a nearer dangling one (#68)", async () => {
+    const parent = await mkdir("parent");
+    const child = await mkdir("parent", "child");
+    const brain = await makeBrain(await mkdir("ancestor-brain"));
+    await setBrainMarker(parent, brain); // valid, higher up
+    await setBrainMarker(child, path.join(root, "gone")); // dangling, nearer
+
+    // Nearer marker is dead → keep walking up → the valid ancestor marker resolves.
+    expect(await resolveBrainDir(child)).toBe(brain);
+  });
+
   it("resolves a directory that is itself a brain (self-is-brain)", async () => {
     const brain = await makeBrain(await mkdir("self-brain"));
     const inside = await mkdir("self-brain", "decisions");

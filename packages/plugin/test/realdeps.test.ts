@@ -41,9 +41,21 @@ describe("realResolveBrainDir (inlined registry — no bare @commonwealth/core i
   it("honors a .commonwealth/brain marker file", async () => {
     const project = path.join(tmp, "proj");
     const brain = path.join(tmp, "elsewhere-brain");
+    await fs.mkdir(brain, { recursive: true }); // marker target must exist (#68)
     await fs.mkdir(path.join(project, ".commonwealth"), { recursive: true });
     await fs.writeFile(path.join(project, ".commonwealth", "brain"), `${brain}\n`);
     expect(await realResolveBrainDir(project)).toBe(brain);
+  });
+
+  it("skips a dangling .commonwealth/brain marker and falls through (#68)", async () => {
+    const project = path.join(tmp, "proj2");
+    await fs.mkdir(path.join(project, ".commonwealth"), { recursive: true });
+    // Marker points at a brain that does not exist → must be ignored, not returned.
+    await fs.writeFile(
+      path.join(project, ".commonwealth", "brain"),
+      `${path.join(tmp, "ghost-brain")}\n`,
+    );
+    expect(await realResolveBrainDir(project)).toBeNull();
   });
 
   it("falls back to COMMONWEALTH_BRAIN_DIR when nothing else matches", async () => {
