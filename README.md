@@ -31,6 +31,21 @@ Claude Code ──MCP──▶ @commons/mcp ──▶ @commons/core ──▶  b
    watches the brain, syncs continuously, serializes writes, resolves conflicts as siblings
 ```
 
+## Install as a Claude Code plugin
+
+The `@commons/plugin` bundles the MCP server + lifecycle hooks, so a session auto-loads
+relevant brain context at start and captures learnings at end — **scope-gated** (personal
+projects excluded) and routed through the review queue.
+
+```bash
+node packages/plugin/scripts/bundle.mjs   # vendors the built CLIs into the plugin (self-contained)
+# then add the packages/plugin dir to Claude Code (local plugin dir or a git marketplace)
+```
+
+For a team, an admin auto-provisions it to everyone via Claude Code **managed settings**
+(`extraKnownMarketplaces` + `enabledPlugins`) — see [`packages/plugin/README.md`](packages/plugin/README.md).
+The steps below wire the same pieces manually (à la carte).
+
 ## Getting started
 
 **Requirements:** Node ≥ 22, [pnpm](https://pnpm.io) 10+, git.
@@ -40,7 +55,7 @@ git clone https://github.com/kristoffeys/team-second-brain.git
 cd team-second-brain
 pnpm install
 pnpm build          # builds @commons/core, @commons/mcp, @commons/sync
-pnpm test           # 75 tests
+pnpm test           # 102 tests
 ```
 
 > Not yet published to npm — for now the tools run from the built `dist/` in this repo.
@@ -103,8 +118,8 @@ node /path/to/team-second-brain/packages/curate/dist/index.js list --dir "$HOME/
 ```
 
 The curation engine dedupes near-identical notes and drops trivial ones before they
-reach the queue; approval moves a note into canon. (Automatic capture at session end and
-relevance-gated injection at session start arrive with the M4 plugin.)
+reach the queue; approval moves a note into canon. Automatic capture at session end and
+relevance-gated injection at session start are wired by the plugin (see above).
 
 ### 5. Keep personal projects out of the brain (scope)
 
@@ -146,13 +161,13 @@ scope filter). When off, decision candidates are dropped.
 
 ## Packages
 
-| Package            | Status | What it is                                                                                                 |
-| ------------------ | ------ | ---------------------------------------------------------------------------------------------------------- |
-| `@commons/core`    | ✅     | Schema (4 note kinds), atomic note IO, brain scaffold, FTS5 index + derived `COMMONS.md`/`INDEX.md`        |
-| `@commons/mcp`     | ✅     | MCP server exposing a brain to Claude Code (`commons-mcp`)                                                 |
-| `@commons/sync`    | ✅     | Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings (`commons-sync`)    |
-| `@commons/curate`  | ✅     | Curation (dedupe/relevance) + in-repo review queue + per-user scope filter (`commons-curate`); hooks in M4 |
-| Claude Code plugin | ⏳     | Auto-provisioning + lifecycle hooks (roadmap M4)                                                           |
+| Package           | Status | What it is                                                                                                  |
+| ----------------- | ------ | ----------------------------------------------------------------------------------------------------------- |
+| `@commons/core`   | ✅     | Schema (4 note kinds), atomic note IO, brain scaffold, FTS5 index + derived `COMMONS.md`/`INDEX.md`         |
+| `@commons/mcp`    | ✅     | MCP server exposing a brain to Claude Code (`commons-mcp`)                                                  |
+| `@commons/sync`   | ✅     | Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings (`commons-sync`)     |
+| `@commons/curate` | ✅     | Curation (dedupe/relevance) + in-repo review queue + per-user scope filter (`commons-curate`); hooks in M4  |
+| `@commons/plugin` | ✅     | Claude Code plugin: MCP + scope-gated SessionStart/SessionEnd hooks + /commons commands + auto-provisioning |
 
 ## Development
 
