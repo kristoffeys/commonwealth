@@ -66,6 +66,42 @@ export async function sessionEnd(input, deps) {
   return await deps.capture(brain, cwd, candidates);
 }
 
+/**
+ * Derive a short, user-facing "value receipt" from injected context. Parses the
+ * `## Team brain — N relevant note(s)` heading (curate's formatContext) to report the count.
+ * When context is non-empty but lacks that heading/count, falls back to a generic message.
+ * Pure function.
+ *
+ * @param {string} context  The markdown context injected by {@link sessionStart}.
+ * @returns {string}        A one-line receipt to show the user.
+ */
+export function deriveReceipt(context) {
+  const text = typeof context === "string" ? context : "";
+  const match = text.match(/## Team brain — (\d+) relevant note\(s\)/);
+  if (match) return `📖 Loaded ${match[1]} note(s) from your team brain.`;
+  return "📖 Loaded relevant context from your team brain.";
+}
+
+/**
+ * Build the SessionStart hook's stdout payload. Returns `null` when there is no context to
+ * inject (empty/whitespace), so the hook writes nothing. Otherwise returns the JSON shape
+ * Claude Code expects: `additionalContext` is injected into the model and `systemMessage`
+ * (the value receipt) is shown to the user. Pure function.
+ *
+ * @param {string} context  The markdown context from {@link sessionStart}.
+ * @returns {{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: string }, systemMessage: string } | null}
+ */
+export function buildSessionStartOutput(context) {
+  if (typeof context !== "string" || context.trim().length === 0) return null;
+  return {
+    hookSpecificOutput: {
+      hookEventName: "SessionStart",
+      additionalContext: context,
+    },
+    systemMessage: deriveReceipt(context),
+  };
+}
+
 // ---------------------------------------------------------------------------------------
 // Production dependencies. These are only imported/used at runtime by the real hooks, never
 // by the unit tests (which inject fakes), so importing this module is cheap and side-effect
