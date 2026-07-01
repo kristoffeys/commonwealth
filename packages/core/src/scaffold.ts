@@ -35,7 +35,8 @@ const BRAIN_ENTRIES = new Set<string>([
 
 const GITATTRIBUTES = ["COMMONS.md merge=union", "**/INDEX.md merge=union", ""].join("\n");
 
-const GITIGNORE = ["index/", "*.db", "*.db-shm", "*.db-wal", ""].join("\n");
+// `staging/` is the per-user review queue — local only, never synced (ADR-0008).
+const GITIGNORE = ["index/", "staging/", "*.db", "*.db-shm", "*.db-wal", ""].join("\n");
 
 /**
  * True if `dir` is empty or contains only entries a Commons brain owns (or `.git`).

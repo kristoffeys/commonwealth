@@ -29,11 +29,14 @@ function makeIgnored(brainDir: string): (p: string) => boolean {
   const gitDir = path.join(brainDir, ".git");
   const indexDir = path.join(brainDir, "index");
   const commonsDir = path.join(brainDir, COMMONS_DIR);
+  const stagingDir = path.join(brainDir, "staging");
   const commonsMd = path.join(brainDir, "COMMONS.md");
   return (p: string): boolean => {
     if (p === gitDir || p.startsWith(gitDir + path.sep)) return true;
     if (p === indexDir || p.startsWith(indexDir + path.sep)) return true;
     if (p === commonsDir || p.startsWith(commonsDir + path.sep)) return true;
+    // Per-user review queue: local-only, never synced (ADR-0008).
+    if (p === stagingDir || p.startsWith(stagingDir + path.sep)) return true;
     if (/\.db(-shm|-wal)?$/.test(p)) return true;
     if (p.endsWith(".tmp")) return true;
     // Derived artifacts are rewritten by every sync (regenerateDerived); watching them
