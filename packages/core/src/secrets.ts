@@ -6,6 +6,8 @@
  * shapes so ordinary prose (e.g. "the password is rotated monthly") does not match.
  */
 
+import { GITLEAKS_PATTERNS } from "./secrets-gitleaks.generated.js";
+
 /** A single detected secret. Never carries the raw value — only a masked preview. */
 export interface SecretMatch {
   /** Which pattern matched (e.g. "aws-access-key-id", "github-token"). */
@@ -61,6 +63,18 @@ export const SECRET_PATTERNS: ReadonlyArray<{ kind: string; re: RegExp }> = [
 ];
 
 /**
+ * All patterns scanned by {@link findSecrets} / {@link hasSecrets}: our hand-tuned
+ * {@link SECRET_PATTERNS} FIRST (so on an overlapping start index their more specific
+ * attribution wins the dedupe), then the gitleaks-derived {@link GITLEAKS_PATTERNS}
+ * which widen coverage to providers we don't hand-maintain. Internal — the public API is
+ * unchanged.
+ */
+const ALL_PATTERNS: ReadonlyArray<{ kind: string; re: RegExp }> = [
+  ...SECRET_PATTERNS,
+  ...GITLEAKS_PATTERNS,
+];
+
+/**
  * Mask a matched secret for reporting: keep the first 4 and last 2 characters, replace
  * the middle with "...". Short matches degrade gracefully to all-asterisks so the raw
  * value is never reconstructable from the preview.
@@ -71,7 +85,8 @@ function maskPreview(match: string): string {
 }
 
 /**
- * Scan `text` with every pattern in {@link SECRET_PATTERNS} and return the matches,
+ * Scan `text` with every pattern in {@link ALL_PATTERNS} (our hand-tuned
+ * {@link SECRET_PATTERNS} first, then {@link GITLEAKS_PATTERNS}) and return the matches,
  * deduplicated by start index and sorted by position. When two patterns hit the same
  * index, the earlier (more specific) pattern wins. Previews are masked — the raw secret
  * is never returned.
@@ -79,7 +94,7 @@ function maskPreview(match: string): string {
 export function findSecrets(text: string): SecretMatch[] {
   const byIndex = new Map<number, SecretMatch>();
 
-  for (const { kind, re } of SECRET_PATTERNS) {
+  for (const { kind, re } of ALL_PATTERNS) {
     // Reset lastIndex: patterns are module-level and shared across calls.
     re.lastIndex = 0;
     let m: RegExpExecArray | null;
@@ -106,7 +121,7 @@ export function findSecrets(text: string): SecretMatch[] {
 
 /** True if `text` contains at least one detected secret. */
 export function hasSecrets(text: string): boolean {
-  for (const { re } of SECRET_PATTERNS) {
+  for (const { re } of ALL_PATTERNS) {
     re.lastIndex = 0;
     if (re.test(text)) return true;
   }
