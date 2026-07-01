@@ -40,7 +40,7 @@ git clone https://github.com/kristoffeys/team-second-brain.git
 cd team-second-brain
 pnpm install
 pnpm build          # builds @commons/core, @commons/mcp, @commons/sync
-pnpm test           # 41 tests
+pnpm test           # 54 tests
 ```
 
 > Not yet published to npm — for now the tools run from the built `dist/` in this repo.
