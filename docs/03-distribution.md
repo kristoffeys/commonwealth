@@ -8,9 +8,9 @@ tags: [distribution, provisioning, claude-code, open-source, monetization]
 
 # Distribution, Auto-Provisioning & Monetization
 
-The brief's hardest distribution ask: *our Claude company subscription
+The brief's hardest distribution ask: _our Claude company subscription
 (semi-)automatically adds this second brain to each user's personal setup, and auto
-pushes/fetches knowledge where it sees fit.* This is the "auto bridge" from the
+pushes/fetches knowledge where it sees fit._ This is the "auto bridge" from the
 architecture, delivered as a **Claude Code plugin** propagated through **team-managed
 settings**.
 
@@ -31,17 +31,20 @@ Sync daemon running  ──▶  SessionStart: pull + inject relevant context
 ```
 
 ### 1. Distribute the plugin via managed settings
+
 Claude Code supports **org-wide managed policy settings** (MDM/managed
 `settings.json`, highest-precedence in the config hierarchy). The company subscription's
 managed settings reference the **Commons plugin** (from our plugin marketplace / repo).
 When a new teammate's Claude Code reads managed policy, the plugin is present — no manual
 install. This is the "(semi-)automatic add to each user's setup."
 
-*Semi-* because first run still needs the user to authenticate to the git remote (their
+_Semi-_ because first run still needs the user to authenticate to the git remote (their
 GitHub identity) — we don't want to hold org-wide write creds. After that, hands-off.
 
 ### 2. Plugin bundles everything needed
+
 The plugin ships:
+
 - **MCP server registration** — `search / read / remember / work-state / people` tools.
 - **Lifecycle hooks** — `SessionStart` (pull + relevance-gated inject), `Stop`/
   `SessionEnd` (capture → staging). Hooks are how "auto" actually happens; the harness
@@ -50,16 +53,19 @@ The plugin ships:
 - **`/commons` skill/commands** — manual `remember`, `recall`, `promote`, `status`.
 
 ### 3. Registry resolves the right brain automatically
+
 On startup in a directory, the plugin consults the registry:
+
 - **Explicit:** a `.commons/brain` marker file in the project repo names its brain(s).
 - **Convention:** map by git remote / org (e.g. `acme/*` → `acme-brain`).
 - **Fallback:** the `org-brain` for cross-project knowledge.
 
 If the brain isn't cloned locally yet, the daemon clones it (read perms checked against
-the user's git identity — the brain's own repo permissions *are* the access control; no
+the user's git identity — the brain's own repo permissions _are_ the access control; no
 separate ACL system to build).
 
 ### 4. Daemon does the push/fetch "where it sees fit"
+
 Per [architecture §3](01-architecture.md): pull + inject on session start, capture on
 session end, curate + PR before canon, relevance-gate what gets surfaced. "Where it sees
 fit" = the relevance gate + the curation agent, not a firehose.
@@ -82,11 +88,12 @@ License: permissive (MIT/Apache-2.0) to match the cluster (GBrain MIT, Mem0 Apac
 Dust MIT) and maximize adoption. **Decision pending** — see roadmap open questions.
 
 ### What's free vs. paid (candidate model)
-| Tier | Contents |
-|---|---|
-| **OSS core (free, self-host)** | Substrate, schema, daemon, MCP server, plugin, basic curation. BYO git remote. The whole thing works with zero vendor. |
-| **Hosted / Team (paid)** | Managed remotes + daemon, hosted curation agent (no self-run cron), team feed/analytics, SSO, relevance-gate tuning, secret scanning. Convenience over lock-in — you can always eject to your own git. |
-| **SOW-diff (the wedge)** | The acute, monetizable product that rides the same substrate: read existing tools → structured memory → surfaced insight → drafted action. Land here on margin; expand to the brain. |
+
+| Tier                           | Contents                                                                                                                                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **OSS core (free, self-host)** | Substrate, schema, daemon, MCP server, plugin, basic curation. BYO git remote. The whole thing works with zero vendor.                                                                                 |
+| **Hosted / Team (paid)**       | Managed remotes + daemon, hosted curation agent (no self-run cron), team feed/analytics, SSO, relevance-gate tuning, secret scanning. Convenience over lock-in — you can always eject to your own git. |
+| **SOW-diff (the wedge)**       | The acute, monetizable product that rides the same substrate: read existing tools → structured memory → surfaced insight → drafted action. Land here on margin; expand to the brain.                   |
 
 **Anti-lock-in as a feature:** because the source of truth is always your git repo, the
 paid tier competes on convenience, not captivity. This is the explicit counter to the

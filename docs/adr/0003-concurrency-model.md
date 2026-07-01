@@ -9,7 +9,7 @@
 
 Concurrency is where every competitor is weakest: basic-memory does mtime-wins silent
 overwrites; whole-file rewriters (Cline) are merge-conflict-prone; GBrain sidesteps it
-by being single-player. For a multiplayer git-backed brain this is *the* hard problem
+by being single-player. For a multiplayer git-backed brain this is _the_ hard problem
 and the moat. We want to **avoid** conflicts by design, not merely resolve them.
 
 ## Decision

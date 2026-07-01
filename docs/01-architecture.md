@@ -16,7 +16,7 @@ The whole system rests on three decisions, in order of how much they define the 
 
 ## 1. Git is the substrate
 
-The brain *is* a git repository of markdown. No proprietary store is the source of
+The brain _is_ a git repository of markdown. No proprietary store is the source of
 truth. This is the ownership/portability guarantee and the thing that separates us from
 basic-memory (cloud), Mem0/Cognee/Zep (opaque index), and Notion (block DB).
 
@@ -28,7 +28,7 @@ basic-memory (cloud), Mem0/Cognee/Zep (opaque index), and Notion (block DB).
 - **A local working copy** lives on each member's machine (e.g. `~/.commons/<brain>`),
   kept in sync by the daemon (below). The agent reads/writes the local copy; the daemon
   moves commits to/from the remote.
-- **A derived index** (SQLite + embeddings) is built *from* the markdown for fast
+- **A derived index** (SQLite + embeddings) is built _from_ the markdown for fast
   search. It is disposable and `.gitignore`d — rebuildable from files at any time
   (basic-memory's model, and the right one).
 
@@ -49,31 +49,36 @@ acme-brain/                      # a git repo = one project's brain
 
 Concurrency is where every competitor is weakest (basic-memory mtime-wins overwrites;
 whole-file rewriters like Cline are merge-conflict-prone; GBrain is single-player). We
-don't want to *win* merge conflicts — we want to **not have them**.
+don't want to _win_ merge conflicts — we want to **not have them**.
 
 Three mechanisms, in priority order:
 
 ### a) Atomic, append-only notes — one fact per file
+
 Following the pattern that already works in personal setups (Claude's own
 one-fact-per-file memory): each note is a **small, self-contained markdown file** with a
 **collision-proof name** (`<date>-<slug>-<shortid>`, shortid = content/uuid hash). Two
-teammates writing "at the same time" create two *different* files. Git merges them as a
+teammates writing "at the same time" create two _different_ files. Git merges them as a
 **union** — no conflict, ever. This is the single most important concurrency decision.
 
 ### b) Derived, never-hand-merged indexes
+
 `COMMONS.md`, per-folder tables of contents, backlink graphs, roll-ups — all
 **regenerated from the note files**, not hand-edited. So the high-contention "index"
 file is never the subject of a manual merge. Two strategies, combined:
+
 - Regenerate on the daemon after every pull (idempotent from the file set).
 - Register a **git merge driver** (`merge=union` via `.gitattributes`) for the append-
   only index files as a backstop, so even a raw merge unions cleanly.
 
 ### c) A serialization queue for the rare true edit
-Editing an *existing* note (a correction, a decision superseded) can still collide. For
+
+Editing an _existing_ note (a correction, a decision superseded) can still collide. For
 those:
+
 - **Section-scoped edits, not whole-file rewrites.** Prefer `append` / `insert-section`
   ops over rewriting the file (Letta's `memory_insert` is safe; `rethink` is lossy).
-- A lightweight **write queue** in the daemon serializes commits to the *same file*:
+- A lightweight **write queue** in the daemon serializes commits to the _same file_:
   acquire → pull/rebase → apply → push, with retry. This is the "queueing mechanism"
   from the brief, scoped down to only where it's actually needed (same-file edits),
   not every write.
@@ -86,7 +91,7 @@ reviewable task rather than data loss.
 
 ## 3. The "auto" bridge — capture → curate → commit → propagate
 
-Storage is solved; the unsolved problem (per the research) is the *auto* pipeline:
+Storage is solved; the unsolved problem (per the research) is the _auto_ pipeline:
 turning session learnings into shared, curated, propagated knowledge. This is the
 product. It runs in four stages, wired into Claude Code lifecycle hooks + MCP.
 
@@ -98,12 +103,14 @@ product. It runs in four stages, wired into Claude Code lifecycle hooks + MCP.
 ```
 
 ### Capture (Stop / SessionEnd hook + MCP write tools)
+
 - The agent proposes candidate memories from the session (decisions made, gotchas
   learned, work-state changes). Two paths: explicit MCP `remember` calls during the
   session, and an end-of-session sweep that drafts notes.
 - Candidates land in a **staging area** (`memory/_staging/`), not straight into canon.
 
 ### Curate (curation agent, runs on staging + nightly)
+
 - **Dedupe** against existing notes (embedding + entity match).
 - **Verify** where possible — Kage's best idea: check memory against reality (e.g. a
   claim about code vs. the actual code). Mark `verified:` / `stale:`.
@@ -112,28 +119,30 @@ product. It runs in four stages, wired into Claude Code lifecycle hooks + MCP.
   (avoid junk accumulation). Low-value → drop; high-value → promote.
 
 ### Commit (atomic file + queue, per §2)
+
 - Promoted notes become atomic files, committed with a structured message.
 - **Curation-as-review:** promotion opens a **PR** (or a review queue) so a human — or a
   higher-trust agent — approves before it becomes canon. Junk never auto-lands.
 
 ### Propagate (SessionStart hook + relevance-gated fetch)
+
 - **Push** on commit (daemon).
 - **Fetch/merge** into every teammate's local copy on session start (daemon `pull`).
 - **Relevance-gated injection** — the genuinely novel bit: don't dump the whole brain
-  into context; surface the notes relevant to *what this teammate is doing right now*
+  into context; surface the notes relevant to _what this teammate is doing right now_
   (current project/files/task). This is the "auto push/fetch where it sees fit" from
   the brief, made concrete.
 
 ## Components
 
-| Component | Role |
-|---|---|
-| **Brain repo(s)** | Git repo(s) of markdown — the substrate & source of truth |
-| **Sync daemon** | Per-machine: pull on session start, commit+push on write, run the write queue, rebuild the index. Long-lived, one per user. |
-| **MCP server** | Exposes `search / read / remember / list-workstate / whoami`-style tools to Claude Code (and any MCP client). Reads local copy + index. |
-| **Curation agent** | Runs dedupe/verify/contradiction/relevance on staging + nightly (cron), opens review PRs. Can reuse Claude via the Agent SDK. |
+| Component              | Role                                                                                                                                                      |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Brain repo(s)**      | Git repo(s) of markdown — the substrate & source of truth                                                                                                 |
+| **Sync daemon**        | Per-machine: pull on session start, commit+push on write, run the write queue, rebuild the index. Long-lived, one per user.                               |
+| **MCP server**         | Exposes `search / read / remember / list-workstate / whoami`-style tools to Claude Code (and any MCP client). Reads local copy + index.                   |
+| **Curation agent**     | Runs dedupe/verify/contradiction/relevance on staging + nightly (cron), opens review PRs. Can reuse Claude via the Agent SDK.                             |
 | **Claude Code plugin** | Bundles MCP server config + lifecycle hooks (SessionStart pull+inject, Stop capture) + the brain registry. The auto-provisioning unit (see distribution). |
-| **Brain registry** | Maps a working directory / project → its brain repo(s), so the plugin mounts the right brain automatically. |
+| **Brain registry**     | Maps a working directory / project → its brain repo(s), so the plugin mounts the right brain automatically.                                               |
 
 ## Open architectural questions
 

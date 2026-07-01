@@ -7,7 +7,7 @@
 ## Context
 
 This project makes several decisions that are expensive to reverse (storage substrate,
-concurrency model, stack). We want the *reasoning* preserved — fittingly, since that is
+concurrency model, stack). We want the _reasoning_ preserved — fittingly, since that is
 the product's own thesis.
 
 ## Decision
@@ -18,7 +18,7 @@ are superseded, not edited.
 
 ## Consequences
 
-- A durable trail of *why*, not just *what*.
+- A durable trail of _why_, not just _what_.
 - Small overhead per decision; offset by less re-litigation.
 - Decision-type GitHub issues map 1:1 to ADRs.
 
