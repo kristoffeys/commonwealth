@@ -1,5 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -40,5 +42,39 @@ describe("built commonwealth binary", () => {
     expect(res.error).toBeUndefined();
     expect(res.signal).toBeNull();
     expect(res.status).toBe(0);
+  });
+
+  it("`init --yes` always leaves the per-user scope config file behind", async () => {
+    const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "cw-home-")));
+    const project = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "cw-proj-")));
+    const configPath = path.join(home, ".commonwealth", "config.json");
+    try {
+      execFileSync("git", ["init", "-q", project], { stdio: "pipe" });
+
+      const res = spawnSync(
+        "node",
+        [distEntry, "init", "--yes", "--no-mcp", "--no-daemon", "--no-build", "--no-seed"],
+        {
+          cwd: project,
+          stdio: "pipe",
+          timeout: 30_000,
+          env: {
+            ...process.env,
+            HOME: home,
+            USERPROFILE: home,
+            COMMONWEALTH_CONFIG: configPath,
+          },
+        },
+      );
+      expect(res.status).toBe(0);
+      expect(existsSync(configPath)).toBe(true);
+
+      const parsed = JSON.parse(await fs.readFile(configPath, "utf8")) as unknown;
+      expect(parsed).toHaveProperty("allow");
+      expect(parsed).toHaveProperty("deny");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(project, { recursive: true, force: true });
+    }
   });
 });

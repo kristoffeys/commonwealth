@@ -45,7 +45,7 @@ cross-platform build / npm publish with per-platform prebuilds is a later task.
 ## Install (git plugin marketplace)
 
 ```
-/plugin marketplace add kristoffeys/Commonwealth
+/plugin marketplace add kristoffeys/commonwealth
 /plugin install commonwealth
 ```
 
@@ -63,7 +63,7 @@ marketplace and force-install the plugin:
     "commonwealth": {
       "source": {
         "source": "github",
-        "repo": "kristoffeys/Commonwealth"
+        "repo": "kristoffeys/commonwealth"
       }
     }
   },

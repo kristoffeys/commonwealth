@@ -53,7 +53,7 @@ The steps below wire the same pieces manually (à la carte).
 **Requirements:** Node ≥ 22, [pnpm](https://pnpm.io) 10+, git.
 
 ```bash
-git clone https://github.com/kristoffeys/Commonwealth.git
+git clone https://github.com/kristoffeys/commonwealth.git
 cd Commonwealth
 pnpm install
 ```
@@ -70,35 +70,48 @@ node /path/to/Commonwealth/packages/cli/dist/index.js init
 `init` does the whole setup end to end:
 
 1. **Builds** the workspace if the `dist/` artifacts are missing (`pnpm -r build`).
-2. **Creates** a brain for this project (or **joins** the one it already belongs to) and
-   **seeds** it from your repo's existing knowledge — git history, ADRs, and agent config
+2. **Creates** a brain for this project (or **joins** the one it already belongs to).
+3. **Syncs** one or more folders into the brain: each is added to the capture allowlist and
+   pinned to the brain via a `.commonwealth/brain` marker.
+4. **Seeds** the brain from one or more repos — mining git history, ADRs, and agent config
    (`CLAUDE.md` / `.cursorrules` / `AGENTS.md`) — into the review queue.
-3. **Adds** this folder to the capture allowlist so agents can capture from it.
-4. **Registers** the MCP server with the `claude` CLI, pointed at the new brain.
-5. **Starts** the sync daemon for the brain (detached).
+5. **Registers** the MCP server with the `claude` CLI, pointed at the new brain.
+6. **Starts** the sync daemon for the brain (detached).
+7. **Ensures** your per-user scope config exists at `~/.commonwealth/config.json` (an empty
+   `{ "allow": [], "deny": [] }` is created if it is missing) — so it is always present after
+   `init`, even if you skip the allowlist step or no folder ends up allow-listed.
 
 Run in a terminal, `init` is an **interactive wizard**: it asks each choice with a sensible
-default (press Enter to accept) — the brain directory, whether to add this folder to the
-capture allowlist, whether to seed now, whether to register MCP, whether to start the
-daemon, whether to enable auto-ADR, and an optional brain git remote — then a final
-`Proceed?` before making any changes. Declining `Proceed?` prints `Aborted.` and changes
-nothing.
+default (press Enter to accept). After the brain directory it asks **which directory to scan
+for projects** (default: the parent of the current repo), discovers the git repos beneath it,
+and lets you **multi-select** which folders to _sync_ into the brain and which repos to _seed_
+from now (seed defaults to your sync selection). Selection accepts `all`, `none`, or a
+comma/space list of the numbered items; Enter keeps the defaults. If no repos are found it
+falls back to the current repo for both. It then asks whether to register MCP, start the
+daemon, enable auto-ADR, and an optional brain git remote — then a final `Proceed?` before
+making any changes. Declining `Proceed?` prints `Aborted.` and changes nothing.
 
 Non-interactively (piped/CI, or with `--yes`) it never prompts: pass `--yes` to run with
 defaults + flags, or the run is a no-op that tells you to re-run in a terminal. Common flags:
 
 ```bash
-init --yes            # non-interactive; skip the wizard and all prompts (defaults + flags)
-init --brain <dir>    # where to create the brain (default: ~/.commonwealth/brains/<project>)
-init --reseed         # re-seed even if this project already resolves to a brain
-init --auto-adr       # enable auto-ADR capture for the brain
-init --remote <url>   # add <url> as the brain's git origin remote
-init --no-scope       # skip adding this folder to the capture allowlist
-init --no-seed        # create the brain but skip mining/staging candidates
-init --no-mcp         # skip registering the MCP server
-init --no-daemon      # skip starting the sync daemon
-init --no-build       # skip the workspace build
+init --yes                  # non-interactive; skip the wizard and all prompts (defaults + flags)
+init --brain <dir>          # where to create the brain (default: ~/.commonwealth/brains/<project>)
+init --sync <dir,dir,...>   # folders to sync into the brain (default: this repo)
+init --seed-repo <dir,...>  # repos to seed from now (default: the --sync folders)
+init --reseed               # re-seed even if this project already resolves to a brain
+init --auto-adr             # enable auto-ADR capture for the brain
+init --remote <url>         # add <url> as the brain's git origin remote
+init --no-scope             # skip adding folders to the capture allowlist
+init --no-seed              # create the brain but skip mining/staging candidates
+init --no-mcp               # skip registering the MCP server
+init --no-daemon            # skip starting the sync daemon
+init --no-build             # skip the workspace build
 ```
+
+`--sync` and `--seed-repo` both take a comma-separated list of directories, so a single
+`init --yes --sync ~/work/a,~/work/b --seed-repo ~/work/a` wires two folders into the brain
+and seeds from one of them.
 
 > Not yet published to npm — for now the tools run from the built `dist/` in this repo.
 > `commonwealth init` and the plugin's auto-provisioning already work from the built repo;
@@ -177,7 +190,9 @@ relevance-gated injection at session start are wired by the plugin (see above).
 
 A **per-user, local** allow/deny list decides which project folders are in scope. Only
 sessions whose folder is in scope are ever captured or injected — personal projects stay
-out. It lives in `~/.commonwealth/config.json` and is never synced.
+out. It lives in `~/.commonwealth/config.json` (overridable via `$COMMONWEALTH_CONFIG`) and
+is never synced. `commonwealth init` always ensures this file exists (creating an empty
+`{ "allow": [], "deny": [] }` if missing), so it is present even when no folder is allow-listed.
 
 ```bash
 CURATE="node /path/to/Commonwealth/packages/curate/dist/index.js"

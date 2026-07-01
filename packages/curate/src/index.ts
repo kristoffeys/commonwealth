@@ -192,15 +192,20 @@ async function cmdCapture(dir: string, args: string[]): Promise<void> {
       dir: { type: "string" },
       cwd: { type: "string" },
       from: { type: "string" },
+      // Explicit imports (e.g. seeding a chosen repo) bypass the per-session scope gate,
+      // which exists to filter out-of-scope *sessions*, not deliberate imports.
+      force: { type: "boolean" },
     },
     allowPositionals: false,
   });
 
   const cwd = typeof values.cwd === "string" ? values.cwd : process.cwd();
-  const config = await loadUserConfig();
-  if (!isInScope(cwd, config)) {
-    console.error(`[commonwealth-curate] ${cwd} is out of scope; capturing nothing`);
-    return;
+  if (!values.force) {
+    const config = await loadUserConfig();
+    if (!isInScope(cwd, config)) {
+      console.error(`[commonwealth-curate] ${cwd} is out of scope; capturing nothing`);
+      return;
+    }
   }
 
   const raw =
