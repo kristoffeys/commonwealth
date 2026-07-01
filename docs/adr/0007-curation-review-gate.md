@@ -16,7 +16,7 @@ becoming canon: a GitHub PR per promotion, or a lightweight in-repo queue.
 **A lightweight in-repo staging review queue.**
 
 - Proposed notes are written to a `staging/` area in the brain, never straight to canon.
-- A `commons-curate` CLI (and later an MCP tool + the M4 plugin) lists pending notes and
+- A `commonwealth-curate` CLI (and later an MCP tool + the M4 plugin) lists pending notes and
   **approves** (move into the canonical kind folder, commit) or **rejects** (discard)
   them. Approval is the human/trusted-agent gate; junk never auto-lands.
 - Curation is pluggable via a `Curator` seam. The **default curator** is deterministic:

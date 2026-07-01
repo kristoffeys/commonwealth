@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { findSecrets } from "@commons/core";
+import { findSecrets } from "@commonwealth/core";
 import { simpleGit, type SimpleGit } from "simple-git";
 
 /** Note-kind folders whose staged markdown is scanned for secrets before commit. */

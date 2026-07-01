@@ -1,11 +1,11 @@
 {
-  "name": "@commons/cli",
+  "name": "@commonwealth/cli",
   "version": "0.0.0",
-  "description": "The unified `commons` CLI — starting with the zero-config `init` onboarding wizard",
+  "description": "The unified `commonwealth` CLI — starting with the zero-config `init` onboarding wizard",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "commons": "./dist/index.js"
+    "commonwealth": "./dist/index.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,8 +17,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@commons/core": "workspace:*",
-    "@commons/curate": "workspace:*",
-    "@commons/seed": "workspace:*"
+    "@commonwealth/core": "workspace:*",
+    "@commonwealth/curate": "workspace:*",
+    "@commonwealth/seed": "workspace:*"
   }
 }

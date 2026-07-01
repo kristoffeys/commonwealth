@@ -1,7 +1,7 @@
 {
-  "name": "@commons/core",
+  "name": "@commonwealth/core",
   "version": "0.0.0",
-  "description": "Core substrate for Commons: schema, note IO, scaffold, and the derived index",
+  "description": "Core substrate for Commonwealth: schema, note IO, scaffold, and the derived index",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",

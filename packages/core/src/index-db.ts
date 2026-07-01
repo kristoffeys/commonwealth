@@ -23,7 +23,7 @@ export interface SearchResult {
 
 /** Repo-relative location of the derived, disposable SQLite index. */
 const INDEX_DIR = "index";
-const DB_FILE = "commons.db";
+const DB_FILE = "commonwealth.db";
 
 /** Absolute path to the SQLite index db for a brain. */
 function dbPath(brainDir: string): string {
@@ -53,7 +53,7 @@ function toRow(note: Note): IndexRow {
 
 /**
  * (Re)build the derived SQLite FTS5 index from the markdown notes under `brainDir`.
- * The index lives at `index/commons.db`, is gitignored, and is fully disposable —
+ * The index lives at `index/commonwealth.db`, is gitignored, and is fully disposable —
  * it can always be rebuilt from the files. See ADR-0005.
  *
  * Performs a FULL rebuild each call (DROP + CREATE) so the result is a pure function
@@ -184,12 +184,12 @@ function byCreatedDesc(a: Note, b: Note): number {
   return byId(a, b);
 }
 
-function commonsMarkdown(notes: Note[]): string {
+function commonwealthMarkdown(notes: Note[]): string {
   const active = notes.filter(isActiveWorkState).sort(byId);
   const decisions = notes.filter((n) => n.frontmatter.kind === "decision").sort(byCreatedDesc);
 
   const lines: string[] = [];
-  lines.push("# Commons");
+  lines.push("# Commonwealth");
   lines.push("");
   lines.push("> Generated router. Do not edit by hand — regenerated from the note set (ADR-0003).");
   lines.push("");
@@ -241,7 +241,7 @@ function indexMarkdown(kind: NoteKind, notes: Note[]): string {
 }
 
 /**
- * Regenerate derived, never-hand-merged artifacts from the note set: the `COMMONS.md`
+ * Regenerate derived, never-hand-merged artifacts from the note set: the `COMMONWEALTH.md`
  * router (links to active work-state + recent decisions) and per-folder `INDEX.md`.
  * Idempotent — output is a pure function of the files (ADR-0003), so running twice
  * yields byte-identical files.
@@ -249,7 +249,7 @@ function indexMarkdown(kind: NoteKind, notes: Note[]): string {
 export async function regenerateDerived(brainDir: string): Promise<void> {
   const notes = await listNotes(brainDir);
 
-  await fs.writeFile(path.join(brainDir, "COMMONS.md"), commonsMarkdown(notes), "utf8");
+  await fs.writeFile(path.join(brainDir, "COMMONWEALTH.md"), commonwealthMarkdown(notes), "utf8");
 
   for (const kind of NOTE_KINDS) {
     const dir = path.join(brainDir, KIND_DIR[kind]);

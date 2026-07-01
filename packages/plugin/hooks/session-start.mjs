@@ -35,6 +35,9 @@ async function main() {
 
 main().catch((err) => {
   // Never propagate to stdout; stderr is safe (Claude Code shows it as hook diagnostics).
-  console.error("[commons] session-start hook error:", err instanceof Error ? err.message : err);
+  console.error(
+    "[commonwealth] session-start hook error:",
+    err instanceof Error ? err.message : err,
+  );
   process.exit(0);
 });

@@ -1,4 +1,4 @@
-import { listNotes, search, writeNote } from "@commons/core";
+import { listNotes, search, writeNote } from "@commonwealth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SyncEngine } from "../src/engine";
 import { makeFixture, type Fixture } from "./helpers";

@@ -6,17 +6,17 @@ export { runInit, findRepoRoot, defaultBrainDir } from "./init.js";
 export type { InitOptions, InitDeps, InitResult, InitBySource } from "./init.js";
 export { defaultInitDeps } from "./deps.js";
 
-/** Print `commons` usage to stderr. */
+/** Print `commonwealth` usage to stderr. */
 function printUsage(): void {
   process.stderr.write(
     [
-      "commons — git-backed markdown team-brain",
+      "commonwealth — git-backed markdown team-brain",
       "",
       "Usage:",
-      "  commons init [--brain <dir>] [--yes] [--reseed]",
+      "  commonwealth init [--brain <dir>] [--yes] [--reseed]",
       "",
       "Options:",
-      "  --brain <dir>   Create/use the brain at <dir> (default: ~/.commons/brains/<project>)",
+      "  --brain <dir>   Create/use the brain at <dir> (default: ~/.commonwealth/brains/<project>)",
       "  --yes           Seed without the confirmation prompt",
       "  --reseed        Re-seed even if this project already resolves to a brain",
       "",
@@ -25,7 +25,7 @@ function printUsage(): void {
 }
 
 /**
- * `commons` CLI entry. Parses argv, dispatches `init`, prints a one-line summary to
+ * `commonwealth` CLI entry. Parses argv, dispatches `init`, prints a one-line summary to
  * stderr, and resolves the exit code. Diagnostics go to stderr; there is no stdout data
  * contract for `init`. Unknown commands and `--help` print usage.
  *

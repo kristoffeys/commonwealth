@@ -8,8 +8,8 @@
 ## Context
 
 Some settings belong to the whole team and should travel with the brain (feature toggles,
-name, remotes) — as opposed to the per-user, per-machine scope config (`~/.commons/…`,
-ADR-0008) which must stay local. The brain already has a `.commons/config.json` stub; it
+name, remotes) — as opposed to the per-user, per-machine scope config (`~/.commonwealth/…`,
+ADR-0008) which must stay local. The brain already has a `.commonwealth/config.json` stub; it
 should become the typed home for shared/global settings. First requested feature: an
 optional **auto-ADR** — when a decision is made in a project, record it as an ADR that
 lives in the brain.
@@ -17,11 +17,11 @@ lives in the brain.
 ## Decision
 
 1. **Two config layers, kept distinct** (documented in the README):
-   - **Per-user, local, unsynced** — `~/.commons/config.json`: scope allow/deny (ADR-0008).
-   - **Brain-level, shared, synced** — `<brain>/.commons/config.json`: `name`, `remotes`,
+   - **Per-user, local, unsynced** — `~/.commonwealth/config.json`: scope allow/deny (ADR-0008).
+   - **Brain-level, shared, synced** — `<brain>/.commonwealth/config.json`: `name`, `remotes`,
      `curation`, and a typed `features: Record<string, boolean>` map. Because it's in the
      repo, feature settings apply to the whole team.
-2. **`@commons/core` owns brain config**: `loadBrainConfig` (never throws; fills defaults),
+2. **`@commonwealth/core` owns brain config**: `loadBrainConfig` (never throws; fills defaults),
    `saveBrainConfig`, `setFeature`, `isFeatureEnabled` (unknown/unset ⇒ `false`), and a
    `FEATURE_FLAGS` registry (name + description + default). Scaffold writes the `features`
    block with all flags defaulted **off**.
@@ -42,7 +42,7 @@ lives in the brain.
 - One clear, synced place for team-wide toggles; trivial to add future flags.
 - auto-ADR reuses existing machinery (decision kind + review queue + scope) — small,
   testable surface now; the agentic extraction lands with the M4b hook.
-- Two files named `config.json` in different roots (`~/.commons` vs `<brain>/.commons`);
+- Two files named `config.json` in different roots (`~/.commonwealth` vs `<brain>/.commonwealth`);
   the README's Configuration section disambiguates them.
 
 ## Alternatives considered

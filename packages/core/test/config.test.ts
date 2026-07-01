@@ -14,7 +14,7 @@ import { initBrain } from "../src/scaffold";
 let dir: string;
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "commons-config-"));
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-config-"));
 });
 afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });
@@ -50,7 +50,7 @@ describe("brain config on a scaffolded brain", () => {
 
 describe("loadBrainConfig resilience", () => {
   it("returns defaults without throwing when no config file exists", async () => {
-    const config = await loadBrainConfig(dir); // fresh mkdtemp, no .commons
+    const config = await loadBrainConfig(dir); // fresh mkdtemp, no .commonwealth
     expect(config.features.autoAdr).toBe(false);
     expect(config.remotes).toEqual([]);
     expect(config.curation).toEqual({});
@@ -58,7 +58,7 @@ describe("loadBrainConfig resilience", () => {
   });
 
   it("fills a missing feature key when the file omits it", async () => {
-    await fs.mkdir(path.join(dir, ".commons"), { recursive: true });
+    await fs.mkdir(path.join(dir, ".commonwealth"), { recursive: true });
     await fs.writeFile(
       brainConfigPath(dir),
       `${JSON.stringify({ name: "partial", schemaVersion: 1, remotes: [], curation: {}, features: {} }, null, 2)}\n`,
@@ -69,7 +69,7 @@ describe("loadBrainConfig resilience", () => {
   });
 
   it("preserves unknown feature keys and lets file values win", async () => {
-    await fs.mkdir(path.join(dir, ".commons"), { recursive: true });
+    await fs.mkdir(path.join(dir, ".commonwealth"), { recursive: true });
     await fs.writeFile(
       brainConfigPath(dir),
       `${JSON.stringify({ features: { autoAdr: true, futureFlag: true } }, null, 2)}\n`,

@@ -19,9 +19,9 @@ const distEntry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 let brainDir: string;
 
 beforeAll(async () => {
-  // Build core + mcp so the dist entry (and its @commons/core import) exist.
+  // Build core + mcp so the dist entry (and its @commonwealth/core import) exist.
   execFileSync("pnpm", ["-r", "build"], { cwd: repoRoot, stdio: "pipe" });
-  brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "commons-mcp-smoke-"));
+  brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-mcp-smoke-"));
 }, 120_000);
 
 afterAll(async () => {
@@ -33,7 +33,7 @@ describe("built binary over stdio", () => {
     const transport = new StdioClientTransport({
       command: "node",
       args: [distEntry],
-      env: { ...process.env, COMMONS_BRAIN_DIR: brainDir },
+      env: { ...process.env, COMMONWEALTH_BRAIN_DIR: brainDir },
     });
     const client = new Client({ name: "smoke", version: "0.0.0" });
     await client.connect(transport);

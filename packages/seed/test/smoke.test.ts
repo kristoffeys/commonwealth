@@ -23,7 +23,7 @@ function git(cwd: string, args: string[]): void {
   });
 }
 
-describe("commons-seed built CLI (smoke)", () => {
+describe("commonwealth-seed built CLI (smoke)", () => {
   let fixture: string;
 
   beforeAll(() => {

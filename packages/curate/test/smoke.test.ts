@@ -17,9 +17,9 @@ const distEntry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 let brainDir: string;
 
 beforeAll(async () => {
-  // Build core + curate so the dist entry (and its @commons/core import) exist.
+  // Build core + curate so the dist entry (and its @commonwealth/core import) exist.
   execFileSync("pnpm", ["-r", "build"], { cwd: repoRoot, stdio: "pipe" });
-  brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "commons-curate-smoke-"));
+  brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-smoke-"));
 }, 120_000);
 
 afterAll(async () => {
@@ -44,12 +44,12 @@ describe("built binary", () => {
   });
 
   it("reports scope check for a cwd (exit 0, prints in/out-scope)", async () => {
-    // COMMONS_CONFIG points at a non-existent temp file → empty config → everything in scope.
+    // COMMONWEALTH_CONFIG points at a non-existent temp file → empty config → everything in scope.
     const configPath = path.join(brainDir, "config.json");
     const out = execFileSync("node", [distEntry, "scope", "check", "--cwd", brainDir], {
       cwd: repoRoot,
       stdio: "pipe",
-      env: { ...process.env, COMMONS_CONFIG: configPath },
+      env: { ...process.env, COMMONWEALTH_CONFIG: configPath },
     });
     expect(out.toString().trim()).toBe("in-scope");
   });

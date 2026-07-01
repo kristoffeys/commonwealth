@@ -146,7 +146,7 @@ on our timeline in June — sensitive to scope creep.
 
 ## Derived artifacts (generated, gitignored or `merge=union`)
 
-- **`COMMONS.md`** — the router: entry point for humans and agents, links to active
+- **`COMMONWEALTH.md`** — the router: entry point for humans and agents, links to active
   work-state and recent decisions. Regenerated, never hand-merged.
 - **Per-folder `INDEX.md`** — table of contents per kind.
 - **`index/` (SQLite + vectors)** — search index; fully disposable, rebuilt from files.
@@ -154,7 +154,7 @@ on our timeline in June — sensitive to scope creep.
 
 ## Schema versioning
 
-`.commons/schema-version` pins the schema. The daemon migrates on version bump. Keeping
+`.commonwealth/schema-version` pins the schema. The daemon migrates on version bump. Keeping
 the schema in-repo means a brain is self-describing and portable — clone it anywhere and
 the tooling knows how to read it.
 

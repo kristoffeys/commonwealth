@@ -19,7 +19,7 @@ Four mechanisms, in priority order:
 1. **Atomic, append-only notes — one fact per file**, named `<date>-<slug>-<shortid>`
    (shortid = short hash). Concurrent writers create distinct files → git unions them →
    no conflict. This is the primary mechanism.
-2. **Derived, never-hand-merged indexes.** `COMMONS.md`, per-folder `INDEX.md`, backlinks
+2. **Derived, never-hand-merged indexes.** `COMMONWEALTH.md`, per-folder `INDEX.md`, backlinks
    are regenerated from the note set (idempotent). Backstopped by a `merge=union`
    `.gitattributes` driver on append-only files.
 3. **Scoped write queue for the rare true edit.** Editing an existing note serializes

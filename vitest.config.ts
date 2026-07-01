@@ -4,8 +4,8 @@ export default defineConfig({
   resolve: {
     alias: {
       // Resolve workspace packages to their source so tests run without a build step.
-      "@commons/core": new URL("./packages/core/src/index.ts", import.meta.url).pathname,
-      "@commons/seed": new URL("./packages/seed/src/index.ts", import.meta.url).pathname,
+      "@commonwealth/core": new URL("./packages/core/src/index.ts", import.meta.url).pathname,
+      "@commonwealth/seed": new URL("./packages/seed/src/index.ts", import.meta.url).pathname,
     },
   },
   test: {

@@ -25,7 +25,7 @@ basic-memory (cloud), Mem0/Cognee/Zep (opaque index), and Notion (block DB).
   per-project repos keep permissions and blast radius simple.)
 - **Remote = any git host.** GitHub by default (fits our OSS + Projects workflow), but
   the design must not assume GitHub-only. Self-host / BYO-remote is first-class.
-- **A local working copy** lives on each member's machine (e.g. `~/.commons/<brain>`),
+- **A local working copy** lives on each member's machine (e.g. `~/.commonwealth/<brain>`),
   kept in sync by the daemon (below). The agent reads/writes the local copy; the daemon
   moves commits to/from the remote.
 - **A derived index** (SQLite + embeddings) is built _from_ the markdown for fast
@@ -41,8 +41,8 @@ acme-brain/                      # a git repo = one project's brain
 ├── work-state/                  # current status per workstream
 ├── people/                      # people-threads: one file per person/relationship
 ├── index/                       # DERIVED, gitignored (SQLite + vectors)
-├── .commons/                    # config: schema version, curation rules, remotes
-└── COMMONS.md                   # human+agent entry point (the router / TOC)
+├── .commonwealth/                    # config: schema version, curation rules, remotes
+└── COMMONWEALTH.md                   # human+agent entry point (the router / TOC)
 ```
 
 ## 2. Concurrency: design it out
@@ -63,7 +63,7 @@ teammates writing "at the same time" create two _different_ files. Git merges th
 
 ### b) Derived, never-hand-merged indexes
 
-`COMMONS.md`, per-folder tables of contents, backlink graphs, roll-ups — all
+`COMMONWEALTH.md`, per-folder tables of contents, backlink graphs, roll-ups — all
 **regenerated from the note files**, not hand-edited. So the high-contention "index"
 file is never the subject of a manual merge. Two strategies, combined:
 

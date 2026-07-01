@@ -18,11 +18,11 @@ substrate, then the auto bridge), because those are the moat.
 the concurrency model proven.
 
 - Define + document the schema (done: [`02-data-model.md`](02-data-model.md)).
-- Repo scaffold: folders, `COMMONS.md`, `.commons/` config, `.gitattributes`
+- Repo scaffold: folders, `COMMONWEALTH.md`, `.commonwealth/` config, `.gitattributes`
   (`merge=union` on derived/append files).
 - Atomic-note writer: `<date>-<slug>-<shortid>` naming; union-merge verified with a
   concurrent-write test.
-- Derived index generator (SQLite; embeddings can come later) + `COMMONS.md`/`INDEX.md`
+- Derived index generator (SQLite; embeddings can come later) + `COMMONWEALTH.md`/`INDEX.md`
   regeneration.
 - **Exit:** two people writing concurrently never conflict; index rebuilds from files.
 
@@ -31,7 +31,7 @@ the concurrency model proven.
 **Goal:** the agent reads the brain before acting and writes back.
 
 - MCP server: `search`, `read`, `remember`, `list-work-state`, `who-is`.
-- Manual `/commons` commands.
+- Manual `/commonwealth` commands.
 - **Exit:** in Claude Code, `recall` surfaces a real note; `remember` lands a note in
   staging.
 

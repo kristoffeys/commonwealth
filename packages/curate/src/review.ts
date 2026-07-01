@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { KIND_DIR, type Note } from "@commons/core";
+import { KIND_DIR, type Note } from "@commonwealth/core";
 import { listStaged, stagedAbsPath } from "./staging.js";
 
 /** All notes currently awaiting review in the staging queue. */

@@ -14,7 +14,7 @@ per-machine daemon that watches and continuously syncs.
 
 ## Decision
 
-**A resident, per-machine daemon** (`@commons/sync`, bin `commons-sync`).
+**A resident, per-machine daemon** (`@commonwealth/sync`, bin `commonwealth-sync`).
 
 - Watches each registered brain working copy for filesystem changes and, on change,
   commits and pushes.
@@ -25,7 +25,7 @@ per-machine daemon that watches and continuously syncs.
   (acquire → rebase → apply → push → retry), so concurrent changes never race (#7).
 - On a genuine same-file conflict, **never overwrites**: writes both versions as sibling
   notes and records a conflict marker for review (#8).
-- After every pull, rebuilds the derived index and regenerates `COMMONS.md`/`INDEX.md`.
+- After every pull, rebuilds the derived index and regenerates `COMMONWEALTH.md`/`INDEX.md`.
 
 The sync **engine** (pure-ish functions: `syncOnce`, `commitChange`, the queue, conflict
 resolution) is factored out from the long-running watcher so it is unit-testable against
@@ -39,7 +39,7 @@ temp git repos (a bare remote + two clones) without running the daemon.
   a filesystem watcher, a poll loop. Mitigated by keeping all correctness-critical logic
   in the testable engine and treating the daemon as a thin runner.
 - Claude Code hooks (M4) still exist but become thin — they can nudge the daemon (or fall
-  back to a one-shot `commons-sync sync`) rather than owning sync logic.
+  back to a one-shot `commonwealth-sync sync`) rather than owning sync logic.
 
 ## Alternatives considered
 

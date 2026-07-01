@@ -1,11 +1,11 @@
 {
-  "name": "@commons/sync",
+  "name": "@commonwealth/sync",
   "version": "0.0.0",
   "description": "Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "commons-sync": "./dist/index.js"
+    "commonwealth-sync": "./dist/index.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,7 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@commons/core": "workspace:*",
+    "@commonwealth/core": "workspace:*",
     "chokidar": "^4.0.0",
     "simple-git": "^3.27.0"
   }

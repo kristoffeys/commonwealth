@@ -9,13 +9,13 @@ let root: string;
 beforeEach(async () => {
   // A real temp dir so walk-up / stat see actual files. realpath so macOS /var vs
   // /private/var symlinks don't break path-prefix comparisons.
-  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "commons-registry-")));
+  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-registry-")));
 });
 
 afterEach(async () => {
-  delete process.env.COMMONS_REGISTRY;
-  delete process.env.COMMONS_CONFIG;
-  delete process.env.COMMONS_BRAIN_DIR;
+  delete process.env.COMMONWEALTH_REGISTRY;
+  delete process.env.COMMONWEALTH_CONFIG;
+  delete process.env.COMMONWEALTH_BRAIN_DIR;
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -26,15 +26,15 @@ async function mkdir(...segments: string[]): Promise<string> {
   return dir;
 }
 
-/** Turn `dir` into a brain by writing `.commons/config.json`. */
+/** Turn `dir` into a brain by writing `.commonwealth/config.json`. */
 async function makeBrain(dir: string): Promise<string> {
-  await fs.mkdir(path.join(dir, ".commons"), { recursive: true });
-  await fs.writeFile(path.join(dir, ".commons", "config.json"), "{}\n", "utf8");
+  await fs.mkdir(path.join(dir, ".commonwealth"), { recursive: true });
+  await fs.writeFile(path.join(dir, ".commonwealth", "config.json"), "{}\n", "utf8");
   return dir;
 }
 
 describe("resolveBrainDir", () => {
-  it("reads a .commons/brain marker file, walking up and expanding relative to the marker", async () => {
+  it("reads a .commonwealth/brain marker file, walking up and expanding relative to the marker", async () => {
     const project = await mkdir("proj");
     const nested = await mkdir("proj", "src", "deep");
     const brain = await makeBrain(await mkdir("acme-brain"));
@@ -42,7 +42,7 @@ describe("resolveBrainDir", () => {
     await setBrainMarker(project, path.relative(project, brain));
 
     // Force env/registry to something else to prove the marker wins.
-    process.env.COMMONS_BRAIN_DIR = "/should/not/be/used";
+    process.env.COMMONWEALTH_BRAIN_DIR = "/should/not/be/used";
     expect(await resolveBrainDir(nested)).toBe(brain);
   });
 
@@ -61,7 +61,7 @@ describe("resolveBrainDir", () => {
     expect(await resolveBrainDir(brain)).toBe(other);
   });
 
-  it("maps via the user registry file, honoring $COMMONS_REGISTRY", async () => {
+  it("maps via the user registry file, honoring $COMMONWEALTH_REGISTRY", async () => {
     const registryPath = path.join(root, "registry.json");
     const brain = await makeBrain(await mkdir("mapped-brain"));
     const workRoot = await mkdir("work");
@@ -71,7 +71,7 @@ describe("resolveBrainDir", () => {
       JSON.stringify({ mappings: [{ prefix: workRoot, brain }] }),
       "utf8",
     );
-    process.env.COMMONS_REGISTRY = registryPath;
+    process.env.COMMONWEALTH_REGISTRY = registryPath;
     expect(await resolveBrainDir(cwd)).toBe(brain);
   });
 
@@ -84,7 +84,7 @@ describe("resolveBrainDir", () => {
       JSON.stringify({ mappings: [{ prefix: "~", brain }] }),
       "utf8",
     );
-    process.env.COMMONS_REGISTRY = registryPath;
+    process.env.COMMONWEALTH_REGISTRY = registryPath;
     const underHome = path.join(os.homedir(), "some", "project");
     expect(await resolveBrainDir(underHome, { registryPath })).toBe(brain);
   });
@@ -94,7 +94,7 @@ describe("resolveBrainDir", () => {
     const cwd = await mkdir("loose", "project");
     expect(await resolveBrainDir(cwd, { env: brain })).toBe(brain);
     // Also via process.env.
-    process.env.COMMONS_BRAIN_DIR = brain;
+    process.env.COMMONWEALTH_BRAIN_DIR = brain;
     expect(await resolveBrainDir(cwd)).toBe(brain);
   });
 
@@ -118,7 +118,7 @@ describe("resolveBrainDir", () => {
     expect(await resolveBrainDir(workshop, { registryPath })).toBeNull();
   });
 
-  it("honors a registry.json sibling of $COMMONS_CONFIG", async () => {
+  it("honors a registry.json sibling of $COMMONWEALTH_CONFIG", async () => {
     const configDir = await mkdir("cfg");
     const registryPath = path.join(configDir, "registry.json");
     const brain = await makeBrain(await mkdir("cfg-brain"));
@@ -129,7 +129,7 @@ describe("resolveBrainDir", () => {
       JSON.stringify({ mappings: [{ prefix: workRoot, brain }] }),
       "utf8",
     );
-    process.env.COMMONS_CONFIG = path.join(configDir, "config.json");
+    process.env.COMMONWEALTH_CONFIG = path.join(configDir, "config.json");
     expect(await resolveBrainDir(cwd)).toBe(brain);
   });
 });

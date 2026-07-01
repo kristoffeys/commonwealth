@@ -4,13 +4,13 @@ argument-hint: [what to remember]
 allowed-tools: Bash
 ---
 
-# /commons remember
+# /commonwealth remember
 
 Manually capture a piece of knowledge into the team brain's **staging review queue**
-(ADR-0007). It is _staged_, not canon — someone approves it later with `/commons promote`.
+(ADR-0007). It is _staged_, not canon — someone approves it later with `/commonwealth promote`.
 
-The note kind defaults to `memory`. The brain is resolved from `COMMONS_BRAIN_DIR` (set by
-the Commons plugin's registry) or the current directory.
+The note kind defaults to `memory`. The brain is resolved from `COMMONWEALTH_BRAIN_DIR` (set by
+the Commonwealth plugin's registry) or the current directory.
 
 Stage the following into the brain, choosing an appropriate short title and, if it is a
 clear decision, using `--kind decision` (only staged if the team enabled the `autoAdr`

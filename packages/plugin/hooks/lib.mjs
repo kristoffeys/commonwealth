@@ -1,4 +1,4 @@
-// The testable core of the Commons Claude Code hooks. Everything the hooks need from the
+// The testable core of the Commonwealth Claude Code hooks. Everything the hooks need from the
 // outside world (brain resolution, the scope gate, context injection, capture, and
 // candidate extraction) is passed in as `deps` so unit tests can drive the control flow
 // without a real brain, a real `claude` binary, or an LLM. `realDeps()` supplies the
@@ -115,7 +115,7 @@ export function buildSessionStartOutput(context) {
  * feature flag (curate enforces this, ADR-0009), so extraction may propose them freely.
  */
 const EXTRACTION_PROMPT = [
-  "You are the Commons capture agent. Read the attached Claude Code session transcript and",
+  "You are the Commonwealth capture agent. Read the attached Claude Code session transcript and",
   "extract durable team knowledge worth remembering: memories (facts/how-tos), work-state",
   "(what's in progress), people notes, and — only if a real decision was made — decisions.",
   "",
@@ -168,12 +168,12 @@ async function run(cmd, args, { input, cwd, env } = {}) {
 /**
  * Build the production `deps` for the hooks.
  *
- * - `resolveBrainDir` comes from `@commons/core`'s brain registry (issue #14).
- * - `isInScope` shells out to the vendored `commons-curate scope check` so the plugin is
+ * - `resolveBrainDir` comes from `@commonwealth/core`'s brain registry (issue #14).
+ * - `isInScope` shells out to the vendored `commonwealth-curate scope check` so the plugin is
  *   self-contained (no direct import of curate internals) and honors ADR-0008 exactly as
  *   the CLI does.
- * - `getContext` / `capture` spawn the vendored `commons-curate` binary (`context` /
- *   `capture --from -`) with `COMMONS_BRAIN_DIR` set to the resolved brain — reusing all of
+ * - `getContext` / `capture` spawn the vendored `commonwealth-curate` binary (`context` /
+ *   `capture --from -`) with `COMMONWEALTH_BRAIN_DIR` set to the resolved brain — reusing all of
  *   curate's real work (relevance selection, dedupe, scope, autoAdr gate).
  * - `extractCandidates` shells out to `claude -p` with {@link EXTRACTION_PROMPT} and parses
  *   the JSON array it prints; if `claude` is unavailable or the output is not a JSON array,
@@ -202,7 +202,7 @@ export function realDeps(overrides = {}) {
 
   async function getContext(brain, cwd) {
     const res = await run(nodeBin, [curateEntry, "context", "--cwd", cwd], {
-      env: { COMMONS_BRAIN_DIR: brain },
+      env: { COMMONWEALTH_BRAIN_DIR: brain },
     });
     if (res.code !== 0) return "";
     return res.stdout.trimEnd();
@@ -213,7 +213,7 @@ export function realDeps(overrides = {}) {
     // absent. (`--from -` would be treated as a literal file path and fail.)
     const res = await run(nodeBin, [curateEntry, "capture", "--cwd", cwd], {
       input: JSON.stringify(candidates),
-      env: { COMMONS_BRAIN_DIR: brain },
+      env: { COMMONWEALTH_BRAIN_DIR: brain },
     });
     // `capture` prints one line per staged note to stdout; count them for the summary.
     const staged = res.code === 0 ? res.stdout.split("\n").filter((l) => l.trim().length > 0) : [];
@@ -244,13 +244,13 @@ export function realDeps(overrides = {}) {
   };
 }
 
-// --- Inlined brain registry (mirrors @commons/core/src/registry.ts) --------------------
-// Inlined as pure fs/path JS rather than `import("@commons/core")`: the hooks run as
+// --- Inlined brain registry (mirrors @commonwealth/core/src/registry.ts) --------------------
+// Inlined as pure fs/path JS rather than `import("@commonwealth/core")`: the hooks run as
 // standalone .mjs where a bare specifier isn't resolvable at runtime, which would make
 // every session silently do nothing. Keep in sync with packages/core/src/registry.ts.
 
-const MARKER_REL = path.join(".commons", "brain");
-const BRAIN_CONFIG_REL = path.join(".commons", "config.json");
+const MARKER_REL = path.join(".commonwealth", "brain");
+const BRAIN_CONFIG_REL = path.join(".commonwealth", "config.json");
 
 function expandPath(entry, base) {
   const home = os.homedir();
@@ -292,11 +292,11 @@ async function isFile(file) {
 }
 
 function resolveRegistryPath() {
-  if (process.env.COMMONS_REGISTRY) return process.env.COMMONS_REGISTRY;
-  if (process.env.COMMONS_CONFIG) {
-    return path.join(path.dirname(process.env.COMMONS_CONFIG), "registry.json");
+  if (process.env.COMMONWEALTH_REGISTRY) return process.env.COMMONWEALTH_REGISTRY;
+  if (process.env.COMMONWEALTH_CONFIG) {
+    return path.join(path.dirname(process.env.COMMONWEALTH_CONFIG), "registry.json");
   }
-  return path.join(os.homedir(), ".commons", "registry.json");
+  return path.join(os.homedir(), ".commonwealth", "registry.json");
 }
 
 async function loadRegistryMappings(registryPath) {
@@ -317,9 +317,9 @@ async function loadRegistryMappings(registryPath) {
 }
 
 /**
- * Resolve the brain for `startDir`: (1) nearest `.commons/brain` marker → (2) nearest
- * ancestor that is itself a brain (`.commons/config.json`) → (3) user registry prefix
- * mapping → (4) `$COMMONS_BRAIN_DIR` → (5) null. Pure fs/path; never throws. Exported for
+ * Resolve the brain for `startDir`: (1) nearest `.commonwealth/brain` marker → (2) nearest
+ * ancestor that is itself a brain (`.commonwealth/config.json`) → (3) user registry prefix
+ * mapping → (4) `$COMMONWEALTH_BRAIN_DIR` → (5) null. Pure fs/path; never throws. Exported for
  * tests so the real resolution path is covered (not just injected fakes).
  */
 export async function realResolveBrainDir(startDir) {
@@ -342,7 +342,7 @@ export async function realResolveBrainDir(startDir) {
       if (isUnder(start, expandPath(m.prefix))) return expandPath(m.brain);
     }
   }
-  const env = process.env.COMMONS_BRAIN_DIR;
+  const env = process.env.COMMONWEALTH_BRAIN_DIR;
   if (env && env.length > 0) return path.resolve(env);
   return null;
 }

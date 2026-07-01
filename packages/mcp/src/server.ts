@@ -1,4 +1,4 @@
-import { NOTE_KINDS, type Note } from "@commons/core";
+import { NOTE_KINDS, type Note } from "@commonwealth/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { resolveBrainDir } from "./brain.js";
@@ -15,14 +15,14 @@ function summarizeNote(note: Note): string {
 }
 
 /**
- * Build the Commons MCP server with the five M1 tools wired to the pure handlers in
- * `tools.ts`. Every tool reads/writes the brain only through `@commons/core`, keeping
+ * Build the Commonwealth MCP server with the five M1 tools wired to the pure handlers in
+ * `tools.ts`. Every tool reads/writes the brain only through `@commonwealth/core`, keeping
  * markdown the source of truth (ADR-0003).
  *
  * @param brainDir Absolute path to the brain repo; defaults to {@link resolveBrainDir}.
  */
 export function createServer(brainDir: string = resolveBrainDir()): McpServer {
-  const server = new McpServer({ name: "commons", version: "0.0.0" });
+  const server = new McpServer({ name: "commonwealth", version: "0.0.0" });
 
   server.registerTool(
     "search",

@@ -3,8 +3,8 @@ import path from "node:path";
 import { SCHEMA_VERSION } from "./schema.js";
 
 /**
- * Brain-level (shared, synced) configuration, stored at `<brain>/.commons/config.json`
- * (ADR-0009). Distinct from the per-user, unsynced scope config at `~/.commons/config.json`
+ * Brain-level (shared, synced) configuration, stored at `<brain>/.commonwealth/config.json`
+ * (ADR-0009). Distinct from the per-user, unsynced scope config at `~/.commonwealth/config.json`
  * (ADR-0008). Because it lives in the repo, `features` apply to the whole team.
  */
 export interface BrainConfig {
@@ -61,9 +61,9 @@ export function defaultBrainConfig(name: string): BrainConfig {
 }
 
 /** Path of the brain config relative to the brain root. */
-const CONFIG_REL = path.join(".commons", "config.json");
+const CONFIG_REL = path.join(".commonwealth", "config.json");
 
-/** Absolute path to a brain's shared config file (`<brainDir>/.commons/config.json`). */
+/** Absolute path to a brain's shared config file (`<brainDir>/.commonwealth/config.json`). */
 export function brainConfigPath(brainDir: string): string {
   return path.join(brainDir, CONFIG_REL);
 }
@@ -110,7 +110,7 @@ export async function loadBrainConfig(brainDir: string): Promise<BrainConfig> {
 
 /**
  * Persist a brain's shared config as pretty (2-space) JSON with a trailing newline at
- * {@link brainConfigPath}, creating the `.commons/` parent directory if needed.
+ * {@link brainConfigPath}, creating the `.commonwealth/` parent directory if needed.
  */
 export async function saveBrainConfig(brainDir: string, config: BrainConfig): Promise<void> {
   const file = brainConfigPath(brainDir);

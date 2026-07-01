@@ -8,7 +8,7 @@ import { SCHEMA_VERSION } from "../src/schema";
 let dir: string;
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "commons-scaffold-"));
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-scaffold-"));
 });
 afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });
@@ -40,11 +40,13 @@ describe("initBrain", () => {
     }
   });
 
-  it("writes .commons metadata pinned to SCHEMA_VERSION", async () => {
+  it("writes .commonwealth metadata pinned to SCHEMA_VERSION", async () => {
     await initBrain(dir, { name: "acme-brain" });
-    const version = await fs.readFile(path.join(dir, ".commons", "schema-version"), "utf8");
+    const version = await fs.readFile(path.join(dir, ".commonwealth", "schema-version"), "utf8");
     expect(version.trim()).toBe(String(SCHEMA_VERSION));
-    const config = JSON.parse(await fs.readFile(path.join(dir, ".commons", "config.json"), "utf8"));
+    const config = JSON.parse(
+      await fs.readFile(path.join(dir, ".commonwealth", "config.json"), "utf8"),
+    );
     expect(config.name).toBe("acme-brain");
     expect(config.schemaVersion).toBe(SCHEMA_VERSION);
     expect(config.features.autoAdr).toBe(false); // feature flags default off (ADR-0009)
@@ -53,13 +55,13 @@ describe("initBrain", () => {
   it("writes union-merge .gitattributes and index-ignoring .gitignore", async () => {
     await initBrain(dir);
     const attrs = await fs.readFile(path.join(dir, ".gitattributes"), "utf8");
-    expect(attrs).toContain("COMMONS.md merge=union");
+    expect(attrs).toContain("COMMONWEALTH.md merge=union");
     expect(attrs).toContain("INDEX.md merge=union");
     const ignore = await fs.readFile(path.join(dir, ".gitignore"), "utf8");
     expect(ignore).toContain("index/");
     expect(ignore).toContain("staging/"); // per-user review queue, never synced (ADR-0008)
     expect(ignore).toContain("*.db");
-    await expect(fs.stat(path.join(dir, "COMMONS.md"))).resolves.toBeDefined();
+    await expect(fs.stat(path.join(dir, "COMMONWEALTH.md"))).resolves.toBeDefined();
   });
 
   it("is byte-idempotent: a second run produces identical files", async () => {

@@ -1,4 +1,4 @@
-// Bundle the vendored runtime for the Commons plugin.
+// Bundle the vendored runtime for the Commonwealth plugin.
 //
 // The plugin must run standalone on a user's machine with `node` and no pnpm workspace, so
 // we copy the built `dist/` of the packages it drives (mcp, curate, sync) plus their
@@ -24,7 +24,7 @@ const PACKAGES = ["mcp", "curate", "sync"];
 
 /** Runtime node_modules to copy alongside each package (transitive, best-effort). */
 const RUNTIME_DEPS = [
-  "@commons/core",
+  "@commonwealth/core",
   "better-sqlite3",
   "bindings",
   "file-uri-to-path",

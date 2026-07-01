@@ -8,7 +8,7 @@ import { writeNote } from "../src/notes";
 let dir: string;
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "commons-index-"));
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-index-"));
 });
 afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });
@@ -63,11 +63,11 @@ describe("search", () => {
 });
 
 describe("regenerateDerived", () => {
-  it("is byte-idempotent for COMMONS.md and INDEX.md across runs", async () => {
+  it("is byte-idempotent for COMMONWEALTH.md and INDEX.md across runs", async () => {
     await seed();
     await regenerateDerived(dir);
     const read = async () => ({
-      commons: await fs.readFile(path.join(dir, "COMMONS.md"), "utf8"),
+      commonwealth: await fs.readFile(path.join(dir, "COMMONWEALTH.md"), "utf8"),
       memIndex: await fs.readFile(path.join(dir, "memory", "INDEX.md"), "utf8"),
     });
     const first = await read();
@@ -89,8 +89,8 @@ describe("regenerateDerived", () => {
       fields: { status: "done" },
     });
     await regenerateDerived(dir);
-    const commons = await fs.readFile(path.join(dir, "COMMONS.md"), "utf8");
-    expect(commons).toContain("Migration underway");
-    expect(commons).not.toContain("Old rollout");
+    const commonwealth = await fs.readFile(path.join(dir, "COMMONWEALTH.md"), "utf8");
+    expect(commonwealth).toContain("Migration underway");
+    expect(commonwealth).not.toContain("Old rollout");
   });
 });

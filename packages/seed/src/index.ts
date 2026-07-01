@@ -17,23 +17,23 @@ const PREVIEW_SAMPLE_LIMIT = 10;
 function printUsage(): void {
   process.stderr.write(
     [
-      "commons-seed — produce cold-start seed candidates from a repo",
+      "commonwealth-seed — produce cold-start seed candidates from a repo",
       "",
       "Usage:",
-      "  commons-seed preview [--repo <dir>]   Summarize candidates for eyeballing",
-      "  commons-seed gather  [--repo <dir>]   Emit candidates as JSON (pipe to curate)",
+      "  commonwealth-seed preview [--repo <dir>]   Summarize candidates for eyeballing",
+      "  commonwealth-seed gather  [--repo <dir>]   Emit candidates as JSON (pipe to curate)",
       "",
       "Pipe into curate to stage them:",
-      "  commons-seed gather | commons-curate capture",
+      "  commonwealth-seed gather | commonwealth-curate capture",
       "",
     ].join("\n"),
   );
 }
 
 /**
- * Run the `commons-seed` CLI. `preview` prints a human summary; `gather` prints the
+ * Run the `commonwealth-seed` CLI. `preview` prints a human summary; `gather` prints the
  * candidates as a JSON array (and nothing else) on stdout for piping into
- * `commons-curate capture`. Returns the process exit code.
+ * `commonwealth-curate capture`. Returns the process exit code.
  *
  * @param argv Arguments after `node <script>` (i.e. `process.argv.slice(2)`).
  * @returns Exit code: 0 on success, 2 on usage error.

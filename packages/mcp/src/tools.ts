@@ -9,16 +9,16 @@ import {
   type Note,
   type NoteKind,
   type SearchResult,
-} from "@commons/core";
+} from "@commonwealth/core";
 
 /**
- * Pure handler layer for the Commons MCP server.
+ * Pure handler layer for the Commonwealth MCP server.
  *
  * Each function takes an explicit `brainDir` plus typed args and returns a plain JS
  * result object — no MCP framing. `server.ts` adapts these into MCP tools, and the
  * tests exercise them directly. All logic lives here; the server is a thin shell.
  *
- * Markdown files are the source of truth: every read/write goes through `@commons/core`,
+ * Markdown files are the source of truth: every read/write goes through `@commonwealth/core`,
  * never a parallel store (ADR-0003, ADR-0005).
  */
 

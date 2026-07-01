@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { initBrain } from "@commons/core";
+import { initBrain } from "@commonwealth/core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,7 +10,7 @@ import { createServer } from "../src/server.js";
 let brainDir: string;
 
 beforeEach(async () => {
-  brainDir = await fs.mkdtemp(path.join(tmpdir(), "commons-mcp-server-"));
+  brainDir = await fs.mkdtemp(path.join(tmpdir(), "commonwealth-mcp-server-"));
   await initBrain(brainDir, { name: "test-brain" });
 });
 

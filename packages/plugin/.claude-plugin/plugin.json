@@ -1,13 +1,13 @@
 {
-  "name": "commons",
+  "name": "commonwealth",
   "version": "0.0.0",
-  "description": "Commons — a multiplayer, git-backed, agent-readable second brain for teams. Registers the Commons MCP server, SessionStart/SessionEnd hooks, and /commons commands.",
+  "description": "Commonwealth — a multiplayer, git-backed, agent-readable second brain for teams. Registers the Commonwealth MCP server, SessionStart/SessionEnd hooks, and /commonwealth commands.",
   "author": {
-    "name": "Commons"
+    "name": "Commonwealth"
   },
   "license": "Apache-2.0",
   "mcpServers": {
-    "commons-brain": {
+    "commonwealth-brain": {
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/vendor/mcp/index.js"]
     }
