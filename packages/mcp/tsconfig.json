@@ -1,8 +1,13 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": "src",
-    "outDir": "dist"
+    // No rootDir: typecheck (tsc --noEmit) pulls @commons/core source in via `paths`
+    // below, which would violate a src-only rootDir. tsup owns the actual build/emit.
+    "paths": {
+      // Resolve the workspace dep to source so typecheck needs no prior build of core.
+      // tsup still externalizes @commons/core at build time (it's a dependency).
+      "@commons/core": ["../core/src/index.ts"]
+    }
   },
   "include": ["src"]
 }
