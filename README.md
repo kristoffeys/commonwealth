@@ -221,12 +221,6 @@ Conventions and non-negotiable design principles live in
 | [`docs/04-roadmap.md`](docs/04-roadmap.md)           | Phased build plan and open questions                                      |
 | [`docs/adr/`](docs/adr)                              | Architecture Decision Records                                             |
 
-## Status
-
-Early build. **M0** (substrate), **M1** (MCP server), **M2** (resident sync daemon), and
-**M3** (curation engine + in-repo review queue) are done; **M4** (the Claude Code plugin
-— auto-provisioning + the capture/inject lifecycle hooks) is next. Dogfood partner:
-**Antenna** (a potential first user). This repo is itself the first brain.
 
 ## License
 
