@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { initBrain } from "@commonwealth/core";
+import { initBrain, listNotes } from "@commonwealth/core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 // The REAL production wiring — not the injected fakes the other tests use. These guard the
 // two silent-failure bugs the M4b verifier caught: an unresolvable core import and a broken
@@ -63,7 +63,7 @@ describe("realDeps().capture (real curate binary over stdin)", () => {
     execFileSync("pnpm", ["-r", "build"], { cwd: repoRoot, stdio: "pipe" });
   }, 180_000);
 
-  it("stages a candidate through the real binary (proves stdin, not --from -)", async () => {
+  it("captures a candidate through the real binary (proves stdin, not --from -)", async () => {
     const brain = path.join(tmp, "brain");
     await initBrain(brain);
     const deps = realDeps({ curateEntry });
@@ -73,7 +73,11 @@ describe("realDeps().capture (real curate binary over stdin)", () => {
     ]);
 
     expect(result.captured).toBe(1);
-    const staged = await fs.readdir(path.join(brain, "staging", "memory"));
-    expect(staged.filter((f) => f.endsWith(".md"))).toHaveLength(1);
+    // autoPromote defaults on (ADR-0014), so the captured note lands straight in canon; the
+    // staging queue is left empty. Asserting canon proves the full stdin → capture → promote path.
+    const canon = await listNotes(brain);
+    expect(canon.filter((n) => n.frontmatter.kind === "memory")).toHaveLength(1);
+    const staged = await fs.readdir(path.join(brain, "staging", "memory")).catch(() => []);
+    expect(staged.filter((f) => f.endsWith(".md"))).toHaveLength(0);
   });
 });
