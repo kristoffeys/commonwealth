@@ -213,8 +213,18 @@ async function cmdCapture(dir: string, args: string[]): Promise<void> {
   const candidates = parseCandidates(raw);
 
   const result = await captureCandidates(dir, candidates);
-  for (const note of result.staged) {
-    console.log(`${note.frontmatter.id}  [${note.frontmatter.kind}]  ${note.frontmatter.title}`);
+  // One stdout line per captured note (the SessionEnd hook counts these lines). When
+  // autoPromote landed them in canon we prefix the canonical path; otherwise the staged id.
+  // `result.promoted[i]` aligns with `result.staged[i]` (promotion iterates staged in order).
+  if (result.promoted.length > 0) {
+    result.staged.forEach((note, i) => {
+      const canonPath = result.promoted[i] ?? `${note.frontmatter.kind}/${note.frontmatter.id}.md`;
+      console.log(`promoted  ${canonPath}  [${note.frontmatter.kind}]  ${note.frontmatter.title}`);
+    });
+  } else {
+    for (const note of result.staged) {
+      console.log(`${note.frontmatter.id}  [${note.frontmatter.kind}]  ${note.frontmatter.title}`);
+    }
   }
   for (const r of result.rejected) {
     const extra = r.duplicateOf ? ` (of ${r.duplicateOf})` : "";

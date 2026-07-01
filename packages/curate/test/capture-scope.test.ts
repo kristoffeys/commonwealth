@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setFeature } from "@commonwealth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureCandidates } from "../src/capture.js";
 import { isInScope, loadUserConfig, saveUserConfig } from "../src/scope.js";
@@ -32,6 +33,9 @@ beforeEach(async () => {
   configDir = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-capscope-cfg-"));
   configPath = path.join(configDir, "config.json");
   process.env.COMMONWEALTH_CONFIG = configPath;
+  // This suite isolates the per-user scope gate; turn autoPromote off so a captured note stays
+  // observable in `staging/` rather than being promoted straight to canon (ADR-0014).
+  await setFeature(brainDir, "autoPromote", false);
 });
 
 afterEach(async () => {

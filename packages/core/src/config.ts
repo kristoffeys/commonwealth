@@ -35,6 +35,14 @@ export const FEATURE_FLAGS: ReadonlyArray<{
     description: "Auto-create ADR/decision notes in the brain when a decision is captured",
     default: false,
   },
+  {
+    name: "autoPromote",
+    description:
+      "Auto-promote captured notes straight into canon instead of holding them in the review " +
+      "queue. Curation gating (dedup/validation) still applies; only the manual review step is " +
+      "skipped (ADR-0014). Set false to require manual /commonwealth:promote.",
+    default: true,
+  },
 ];
 
 /** Build the default `features` map from {@link FEATURE_FLAGS} (each flag at its default). */

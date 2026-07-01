@@ -193,19 +193,23 @@ The daemon commits + pushes on change, pulls on a poll interval, rebuilds the se
 index, and — on a genuine same-file conflict — keeps **both** versions as sibling notes
 (never overwrites) with a conflict record for review.
 
-### 4. Review auto-captured knowledge
+### 4. Auto-promotion (and optional review)
 
-Curated notes land in a `staging/` queue (never straight to canon). Review and promote
-them with the `commonwealth-curate` CLI:
+By default (`autoPromote`, ADR-0014) captured notes promote **straight into canon** — the
+curation engine still dedupes near-identical notes, drops trivial ones, and scrubs secrets
+first; only the manual review step is skipped. Turn the per-brain flag off to hold captures
+in a `staging/` queue for approval instead:
 
 ```bash
-node /path/to/Commonwealth/packages/curate/dist/index.js list --dir "$HOME/my-brain"
+CURATE="node /path/to/Commonwealth/packages/curate/dist/index.js"
+# require manual review for this brain (team-wide, synced in .commonwealth/config.json):
+#   set features.autoPromote = false, then:
+$CURATE list --dir "$HOME/my-brain"          # what's pending
 #   approve <id...> | reject <id...> | approve-all
 ```
 
-The curation engine dedupes near-identical notes and drops trivial ones before they
-reach the queue; approval moves a note into canon. Automatic capture at session end and
-relevance-gated injection at session start are wired by the plugin (see above).
+Automatic capture at session end and relevance-gated injection at session start are wired
+by the plugin (see above).
 
 ### 5. Keep personal projects out of the brain (scope)
 
@@ -231,8 +235,9 @@ Default (no config) = everything in scope; add a deny (or a narrow allow) to exc
 A fresh brain shouldn't be empty. Seeding is part of `commonwealth init` (see [Getting
 started](#one-command-commonwealth-init)): it detects your repo, mines its existing
 knowledge (git history — merged PRs + notable commits — ADRs, and agent-config like
-`CLAUDE.md` / `.cursorrules` / `AGENTS.md`), previews what it found, and on confirm stages
-the candidates into the review queue. Pass `--no-seed` to create the brain without mining.
+`CLAUDE.md` / `.cursorrules` / `AGENTS.md`), previews what it found, and on confirm captures
+the candidates. With `autoPromote` on (the default) they land in canon; with it off they
+stage into the review queue. Pass `--no-seed` to create the brain without mining.
 
 A teammate running `init` where a brain already exists **joins** it instead of re-seeding
 (TTFV ≈ 0 — they clone an already-full brain). Or drive the pieces à la carte:
@@ -240,10 +245,12 @@ A teammate running `init` where a brain already exists **joins** it instead of r
 ```bash
 SEED="node /path/to/Commonwealth/packages/seed/dist/index.js"
 $SEED gather --repo "$PWD" | commonwealth-curate capture --dir "$HOME/my-brain"
-commonwealth-curate list --dir "$HOME/my-brain"                    # review, then approve
+commonwealth-curate list --dir "$HOME/my-brain"                    # pending (if autoPromote off)
 ```
 
-Everything lands in the staging review queue first — nothing enters canon unreviewed.
+With `autoPromote` on (default) captures — including seeded mines — land in canon after the
+dedup/validation/secret gates. Set the per-brain `autoPromote` flag to `false` to route
+everything through the `staging/` review queue first (ADR-0014).
 
 ## Configuration
 
