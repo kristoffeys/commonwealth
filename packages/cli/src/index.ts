@@ -15,10 +15,19 @@ export type {
   OnboardResult,
   WizardAnswers,
   WizardDefaults,
+  WizardDeps,
   WizardOutcome,
 } from "./onboard.js";
-export { isInteractive, createReadlinePrompter, parseConfirm, parseText } from "./prompt.js";
+export {
+  isInteractive,
+  createReadlinePrompter,
+  parseConfirm,
+  parseText,
+  parseSelection,
+} from "./prompt.js";
 export type { Prompter } from "./prompt.js";
+export { findGitRepos } from "./discover.js";
+export type { FindGitReposOptions } from "./discover.js";
 
 /** Print `commonwealth` usage to stderr. */
 function printUsage(): void {
@@ -28,20 +37,24 @@ function printUsage(): void {
       "",
       "Usage:",
       "  commonwealth init [--brain <dir>] [--yes] [--reseed] [--auto-adr] [--remote <url>]",
+      "                    [--sync <dir,dir,...>] [--seed-repo <dir,dir,...>]",
       "                    [--no-scope] [--no-seed] [--no-mcp] [--no-daemon] [--no-build]",
       "",
       "`init` is a single idempotent command: it builds the workspace (if needed), creates or",
-      "joins the brain and seeds it, adds this folder to the capture allowlist, registers the",
-      "MCP server, and starts the sync daemon. Run in a terminal without --yes for an interactive",
-      "wizard; with --yes (or non-interactively) it uses defaults + flags and never prompts.",
+      "joins the brain, syncs one or more folders into it (allowlist + brain marker), seeds it",
+      "from one or more repos, registers the MCP server, and starts the sync daemon. Run in a",
+      "terminal without --yes for an interactive wizard that scans for and lets you multi-select",
+      "folders/repos; with --yes (or non-interactively) it uses defaults + flags and never prompts.",
       "",
       "Options:",
-      "  --brain <dir>   Create/use the brain at <dir> (default: ~/.commonwealth/brains/<project>)",
-      "  --yes           Run non-interactively; skip the wizard and all prompts",
-      "  --reseed        Re-seed even if this project already resolves to a brain",
-      "  --auto-adr      Enable auto-ADR capture for the brain",
-      "  --remote <url>  Add <url> as the brain's git origin remote",
-      "  --no-scope      Skip adding this folder to the capture allowlist",
+      "  --brain <dir>          Create/use the brain at <dir> (default: ~/.commonwealth/brains/<project>)",
+      "  --yes                  Run non-interactively; skip the wizard and all prompts",
+      "  --reseed               Re-seed even if this project already resolves to a brain",
+      "  --auto-adr             Enable auto-ADR capture for the brain",
+      "  --remote <url>         Add <url> as the brain's git origin remote",
+      "  --sync <dir,dir,...>   Folders to sync into the brain (default: this repo)",
+      "  --seed-repo <dir,...>  Repos to seed from now (default: the --sync folders)",
+      "  --no-scope             Skip adding folders to the capture allowlist",
       "  --no-seed       Create the brain but skip gathering/staging seed candidates",
       "  --no-mcp        Skip registering the MCP server with the claude CLI",
       "  --no-daemon     Skip starting the sync daemon",
@@ -97,6 +110,8 @@ export async function run(argv: string[]): Promise<number> {
     reseed?: boolean;
     "auto-adr"?: boolean;
     remote?: string;
+    sync?: string;
+    "seed-repo"?: string;
   };
   try {
     ({ values } = parseArgs({
@@ -107,6 +122,8 @@ export async function run(argv: string[]): Promise<number> {
         reseed: { type: "boolean", default: false },
         "auto-adr": { type: "boolean", default: false },
         remote: { type: "string" },
+        sync: { type: "string" },
+        "seed-repo": { type: "string" },
       },
       allowPositionals: false,
     }));
@@ -121,6 +138,16 @@ export async function run(argv: string[]): Promise<number> {
   const claudePresent = hasExecutable("claude");
   const deps = defaultOnboardDeps({ curateEntry: process.env.COMMONWEALTH_CURATE_BIN });
 
+  // Parse a comma-separated dir list into resolved absolute paths (blanks dropped).
+  const splitDirs = (raw: string | undefined): string[] | undefined => {
+    if (raw === undefined) return undefined;
+    const dirs = raw
+      .split(",")
+      .map((d) => d.trim())
+      .filter((d) => d.length > 0);
+    return dirs.length > 0 ? dirs : undefined;
+  };
+
   let opts: OnboardOptions;
   let prompter: Prompter | null = null;
 
@@ -129,6 +156,7 @@ export async function run(argv: string[]): Promise<number> {
       // Interactive terminal, no --yes: run the wizard.
       const defaults: WizardDefaults = {
         brain: defaultBrainDir(repoRoot),
+        repoRoot,
         scope: true,
         seed: true,
         mcp: claudePresent,
@@ -149,6 +177,8 @@ export async function run(argv: string[]): Promise<number> {
       return 0;
     } else {
       // --yes: defaults + explicit flags, non-interactive.
+      const syncFolders = splitDirs(values.sync) ?? [repoRoot];
+      const seedRepos = splitDirs(values["seed-repo"]) ?? (seed ? syncFolders : []);
       opts = {
         brain: values.brain,
         yes: true,
@@ -160,6 +190,8 @@ export async function run(argv: string[]): Promise<number> {
         scope,
         autoAdr: values["auto-adr"],
         remote: values.remote,
+        syncFolders,
+        seedRepos,
       };
     }
 
@@ -167,8 +199,10 @@ export async function run(argv: string[]): Promise<number> {
 
     process.stderr.write(
       `init: mode=${result.mode} brain=${result.brainDir} built=${result.built} ` +
-        `staged=${result.staged} scope=${result.scope} autoAdr=${result.autoAdr} ` +
-        `remote=${result.remote} mcp=${result.mcp} daemon=${result.daemon}\n`,
+        `staged=${result.staged} scopedFolders=${result.scopedFolders} ` +
+        `seededRepos=${result.seededRepos} scope=${result.scope} autoAdr=${result.autoAdr} ` +
+        `remote=${result.remote} mcp=${result.mcp} daemon=${result.daemon} ` +
+        `scopeConfig=${result.scopeConfigPath}\n`,
     );
     return 0;
   } finally {

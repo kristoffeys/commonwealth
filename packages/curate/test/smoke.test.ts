@@ -43,6 +43,34 @@ describe("built binary", () => {
     expect(contents.startsWith("#!")).toBe(true);
   });
 
+  it("capture --force stages even when the cwd is out of scope (explicit import)", async () => {
+    // Non-empty allow that does NOT cover the cwd → the cwd is out of scope.
+    const configPath = path.join(brainDir, "force-config.json");
+    await fs.writeFile(configPath, JSON.stringify({ allow: ["/nowhere"], deny: [] }));
+    const candidate = JSON.stringify([
+      { kind: "memory", title: "Forced import", body: "a durable fact imported via seeding" },
+    ]);
+    const env = { ...process.env, COMMONWEALTH_CONFIG: configPath };
+
+    // Without --force: out of scope → nothing staged.
+    const off = execFileSync("node", [distEntry, "capture", "--dir", brainDir], {
+      cwd: repoRoot,
+      input: candidate,
+      env,
+      stdio: "pipe",
+    });
+    expect(off.toString().trim()).toBe("");
+
+    // With --force: scope bypassed → one note staged.
+    const on = execFileSync("node", [distEntry, "capture", "--dir", brainDir, "--force"], {
+      cwd: repoRoot,
+      input: candidate,
+      env,
+      stdio: "pipe",
+    });
+    expect(on.toString()).toContain("Forced import");
+  });
+
   it("reports scope check for a cwd (exit 0, prints in/out-scope)", async () => {
     // COMMONWEALTH_CONFIG points at a non-existent temp file → empty config → everything in scope.
     const configPath = path.join(brainDir, "config.json");

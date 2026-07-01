@@ -1,8 +1,10 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import { createInterface } from "node:readline";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import * as core from "@commonwealth/core";
 import type { NewNoteInput } from "@commonwealth/core";
 import { gatherCandidates } from "@commonwealth/seed";
@@ -49,7 +51,7 @@ function makeStage(
 ): (brainDir: string, candidates: NewNoteInput[]) => Promise<{ captured: number }> {
   return (brainDir, candidates) =>
     new Promise((resolve) => {
-      const child = spawn("node", [curateEntry, "capture", "--dir", brainDir], {
+      const child = spawn("node", [curateEntry, "capture", "--dir", brainDir, "--force"], {
         stdio: ["pipe", "pipe", "inherit"],
       });
 
@@ -156,16 +158,38 @@ function hasExecutable(name: string): boolean {
  * @param opts Optional overrides ({@link DefaultOnboardDepsOptions}).
  * @returns A fully-wired {@link OnboardDeps}.
  */
+/**
+ * The Commonwealth install root (the monorepo checkout), found by walking up from THIS
+ * module for `pnpm-workspace.yaml`. This is where the built per-package dist binaries
+ * live — resolved from the CLI's own location, NOT the user's cwd, so `init` works when
+ * run inside an arbitrary project. Returns null when not running from a workspace checkout
+ * (e.g. a future npm-global install), in which case build/spawn steps degrade gracefully.
+ */
+function commonwealthRoot(): string | null {
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (;;) {
+    if (existsSync(path.join(dir, "pnpm-workspace.yaml"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
 export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): OnboardDeps {
   const log = (m: string): void => {
     process.stderr.write(m + "\n");
   };
 
-  const repoRoot = opts.repoRoot ?? findRepoRoot(process.cwd());
+  // Resolve tool binaries from the Commonwealth install, not the target project's cwd.
+  const repoRoot = opts.repoRoot ?? commonwealthRoot() ?? findRepoRoot(process.cwd());
+  const isWorkspace = existsSync(path.join(repoRoot, "pnpm-workspace.yaml"));
   const distEntry = (pkg: string): string =>
     path.join(repoRoot, "packages", pkg, "dist", "index.js");
 
   const ensureBuilt = async (): Promise<{ built: boolean; skipped?: string }> => {
+    if (!isWorkspace) {
+      return { built: false, skipped: "not a workspace checkout; assuming an installed build" };
+    }
     const missing = REQUIRED_DIST_PACKAGES.filter((pkg) => !existsSync(distEntry(pkg)));
     if (missing.length === 0) return { built: false };
     if (!hasExecutable("pnpm")) {
@@ -312,10 +336,97 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
     }
   };
 
+  const writeMarker = async (
+    folder: string,
+    brainDir: string,
+  ): Promise<{ written: boolean; skipped?: string }> => {
+    try {
+      await core.setBrainMarker(folder, brainDir);
+      return { written: true };
+    } catch (err) {
+      return { written: false, skipped: `marker write failed (${(err as Error).message})` };
+    }
+  };
+
+  const seedFrom = async (
+    brainDir: string,
+    repoDir: string,
+  ): Promise<{ staged: number; skipped?: string }> => {
+    let curateEntry: string;
+    try {
+      curateEntry = resolveCurateEntry(opts.curateEntry);
+    } catch (err) {
+      return { staged: 0, skipped: `commonwealth-curate not found: ${(err as Error).message}` };
+    }
+    const seedEntry = distEntry("seed");
+    if (!existsSync(seedEntry)) return { staged: 0, skipped: "seed CLI not built" };
+
+    return new Promise((resolve) => {
+      const gather = spawn("node", [seedEntry, "gather", "--repo", repoDir], {
+        stdio: ["ignore", "pipe", "inherit"],
+      });
+      const capture = spawn("node", [curateEntry, "capture", "--dir", brainDir, "--force"], {
+        stdio: ["pipe", "pipe", "inherit"],
+      });
+
+      let settled = false;
+      const done = (result: { staged: number; skipped?: string }): void => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+
+      gather.on("error", (err) =>
+        done({ staged: 0, skipped: `seed spawn failed (${err.message})` }),
+      );
+      capture.on("error", (err) =>
+        done({ staged: 0, skipped: `capture spawn failed (${err.message})` }),
+      );
+
+      gather.stdout.pipe(capture.stdin);
+
+      let out = "";
+      capture.stdout.setEncoding("utf8");
+      capture.stdout.on("data", (chunk: string) => {
+        out += chunk;
+      });
+
+      capture.on("close", (code) => {
+        if (code !== 0) {
+          done({ staged: 0, skipped: `capture exited with code ${code ?? "null"}` });
+          return;
+        }
+        const staged = out.split("\n").filter((line) => line.trim().length > 0).length;
+        done({ staged });
+      });
+    });
+  };
+
+  const ensureUserConfig = async (): Promise<{ path: string }> => {
+    const configPath =
+      process.env.COMMONWEALTH_CONFIG ?? path.join(os.homedir(), ".commonwealth", "config.json");
+    if (!existsSync(configPath)) {
+      try {
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        await fs.writeFile(
+          configPath,
+          `${JSON.stringify({ allow: [], deny: [] }, null, 2)}\n`,
+          "utf8",
+        );
+      } catch (err) {
+        log(`Could not create scope config at ${configPath}: ${(err as Error).message}`);
+      }
+    }
+    return { path: configPath };
+  };
+
   return {
     ensureBuilt,
     init,
     configureScope,
+    writeMarker,
+    seedFrom,
+    ensureUserConfig,
     setAutoAdr,
     setRemote,
     registerMcp,

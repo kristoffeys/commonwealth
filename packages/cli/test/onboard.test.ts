@@ -10,6 +10,9 @@ function makeDeps(over: Partial<OnboardDeps> = {}): OnboardDeps {
     ensureBuilt: vi.fn(async () => ({ built: true })),
     init: vi.fn(async () => INIT_RESULT),
     configureScope: vi.fn(async () => ({ added: true })),
+    writeMarker: vi.fn(async () => ({ written: true })),
+    seedFrom: vi.fn(async () => ({ staged: 4 })),
+    ensureUserConfig: vi.fn(async () => ({ path: "/home/.commonwealth/config.json" })),
     setAutoAdr: vi.fn(async () => ({ set: true })),
     setRemote: vi.fn(async () => ({ set: true })),
     registerMcp: vi.fn(async () => ({ registered: true })),
@@ -28,6 +31,9 @@ describe("runOnboard", () => {
     expect(deps.ensureBuilt).toHaveBeenCalledTimes(1);
     expect(deps.init).toHaveBeenCalledTimes(1);
     expect(deps.configureScope).toHaveBeenCalledTimes(1);
+    expect(deps.writeMarker).toHaveBeenCalledTimes(1);
+    expect(deps.seedFrom).toHaveBeenCalledTimes(1);
+    expect(deps.ensureUserConfig).toHaveBeenCalledTimes(1);
     expect(deps.registerMcp).toHaveBeenCalledWith("/b");
     expect(deps.startDaemon).toHaveBeenCalledWith("/b");
 
@@ -36,7 +42,10 @@ describe("runOnboard", () => {
       mode: "new",
       built: true,
       staged: 4,
-      scope: "added",
+      scopedFolders: 1,
+      seededRepos: 1,
+      scopeConfigPath: "/home/.commonwealth/config.json",
+      scope: "added 1",
       autoAdr: "skipped",
       remote: "skipped",
       mcp: "registered",
@@ -165,7 +174,7 @@ describe("runOnboard", () => {
     expect(deps.configureScope).toHaveBeenCalledTimes(1);
     expect(deps.setAutoAdr).toHaveBeenCalledWith("/b", true);
     expect(deps.setRemote).toHaveBeenCalledWith("/b", "git@x:y.git");
-    expect(result.scope).toBe("added");
+    expect(result.scope).toBe("added 1");
     expect(result.autoAdr).toBe("enabled");
     expect(result.remote).toBe("set");
   });
@@ -191,24 +200,100 @@ describe("runOnboard", () => {
     expect(result.remote).toBe("skipped");
   });
 
-  it("scope idempotency: an already-added scope surfaces its skipped note", async () => {
+  it("scope idempotency: an already-allowed scope emits a WARNING and counts zero added", async () => {
+    const log = vi.fn();
     const deps = makeDeps({
       configureScope: vi.fn(async () => ({ added: false, skipped: "already allowed" })),
       setRemote: vi.fn(async () => ({ set: false, skipped: "origin exists" })),
+      log,
     });
     const result = await runOnboard("/repo", { yes: true, remote: "git@x:y.git" }, deps);
 
-    expect(result.scope).toBe("already allowed");
+    expect(result.scope).toBe("none added");
+    expect(result.scopedFolders).toBe(0);
     expect(result.remote).toBe("origin exists");
+    const warned = log.mock.calls
+      .map((c) => c[0] as string)
+      .some((m) => m.startsWith("WARNING: scope step skipped") && m.includes("already allowed"));
+    expect(warned).toBe(true);
   });
 
-  it("decline (confirm=false): none of the new deps are called either", async () => {
+  it("decline (confirm=false): none of the loop deps or ensureUserConfig are called", async () => {
     const deps = makeDeps({ confirm: vi.fn(async () => false) });
     await runOnboard("/repo", { brain: "/b", autoAdr: true, remote: "git@x:y.git" }, deps);
 
     expect(deps.configureScope).not.toHaveBeenCalled();
+    expect(deps.writeMarker).not.toHaveBeenCalled();
+    expect(deps.seedFrom).not.toHaveBeenCalled();
+    expect(deps.ensureUserConfig).not.toHaveBeenCalled();
     expect(deps.setAutoAdr).not.toHaveBeenCalled();
     expect(deps.setRemote).not.toHaveBeenCalled();
+  });
+
+  it("multi syncFolders: loops configureScope + writeMarker over every folder", async () => {
+    const deps = makeDeps();
+    const folders = ["/a", "/b", "/c"];
+    const result = await runOnboard("/repo", { yes: true, syncFolders: folders }, deps);
+
+    expect(deps.configureScope).toHaveBeenCalledTimes(3);
+    expect(deps.writeMarker).toHaveBeenCalledTimes(3);
+    for (const f of folders) {
+      expect(deps.configureScope).toHaveBeenCalledWith(f);
+      expect(deps.writeMarker).toHaveBeenCalledWith(f, "/b");
+    }
+    expect(result.scopedFolders).toBe(3);
+  });
+
+  it("multi seedRepos: loops seedFrom over every repo and sums staged", async () => {
+    const seedFrom = vi.fn(async () => ({ staged: 2 }));
+    const deps = makeDeps({ seedFrom });
+    const repos = ["/r1", "/r2", "/r3"];
+    const result = await runOnboard("/repo", { yes: true, seedRepos: repos }, deps);
+
+    expect(seedFrom).toHaveBeenCalledTimes(3);
+    for (const r of repos) expect(seedFrom).toHaveBeenCalledWith("/b", r);
+    expect(result.staged).toBe(6);
+    expect(result.seededRepos).toBe(3);
+  });
+
+  it("ensureUserConfig is ALWAYS called, even with --no-scope and no seed", async () => {
+    const deps = makeDeps();
+    const result = await runOnboard("/repo", { yes: true, scope: false, seed: false }, deps);
+
+    expect(deps.configureScope).not.toHaveBeenCalled();
+    expect(deps.seedFrom).not.toHaveBeenCalled();
+    expect(deps.ensureUserConfig).toHaveBeenCalledTimes(1);
+    expect(result.scopeConfigPath).toBe("/home/.commonwealth/config.json");
+  });
+
+  it("a skipped seedFrom emits a WARNING line", async () => {
+    const log = vi.fn();
+    const deps = makeDeps({
+      seedFrom: vi.fn(async () => ({ staged: 0, skipped: "seed CLI not built" })),
+      log,
+    });
+    const result = await runOnboard("/repo", { yes: true, seedRepos: ["/r1"] }, deps);
+
+    const warned = log.mock.calls
+      .map((c) => c[0] as string)
+      .some((m) => m.startsWith("WARNING: seed step skipped") && m.includes("seed CLI not built"));
+    expect(warned).toBe(true);
+    expect(result.seededRepos).toBe(0);
+    expect(result.staged).toBe(0);
+  });
+
+  it("a skipped configureScope emits a WARNING line", async () => {
+    const log = vi.fn();
+    const deps = makeDeps({
+      configureScope: vi.fn(async () => ({ added: false, skipped: "curate not found" })),
+      log,
+    });
+    await runOnboard("/repo", { yes: true, syncFolders: ["/a"] }, deps);
+
+    const warned = log.mock.calls
+      .map((c) => c[0] as string)
+      .some((m) => m.startsWith("WARNING: scope step skipped") && m.includes("curate not found"));
+    expect(warned).toBe(true);
   });
 
   it("idempotency surfaced: already-registered MCP + already-running daemon reflected without error", async () => {
