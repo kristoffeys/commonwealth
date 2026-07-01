@@ -18,7 +18,7 @@
    env, so every repo that shared the one registration would talk to one brain — defeating the
    per-repo routing the registry (ADR-0011) exists to provide.
 
-The plugin (`packages/plugin`) already declares the `commonwealth-brain` MCP server and the
+The plugin (`packages/plugin`) already declares the `commonwealth` MCP server and the
 `SessionStart`/`SessionEnd` hooks. A Claude Code plugin installs at USER scope (global) and its
 `SessionStart` hook receives the real session cwd on stdin, which the MCP server process cannot
 see reliably. That is exactly the shape per-repo routing needs.
@@ -28,7 +28,7 @@ see reliably. That is exactly the shape per-repo routing needs.
 1. **The MCP is distributed via the plugin, installed at USER scope through a repo marketplace.**
    The repo root ships `.claude-plugin/marketplace.json` declaring the `commonwealth` plugin at
    `./packages/plugin`. Teammates run `claude plugin marketplace add kristoffeys/commonwealth`
-   then `claude plugin install commonwealth@commonwealth`; the plugin's `commonwealth-brain`
+   then `claude plugin install commonwealth@commonwealth`; the plugin's `commonwealth`
    server is then available globally in every session.
 2. **Per-repo brain routing is dynamic, from two independent resolvers:**
    - the **SessionStart hook** resolves the real session cwd → the brain via the registry and

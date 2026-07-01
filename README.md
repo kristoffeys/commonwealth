@@ -36,7 +36,7 @@ Claude Code ──MCP──▶ @commonwealth/mcp ──▶ @commonwealth/core �
 ## Install as a Claude Code plugin
 
 The **supported install is the plugin** (ADR-0012). The `@commonwealth/plugin` bundles the MCP
-server + lifecycle hooks and installs at **user scope (global)**, so the `commonwealth-brain`
+server + lifecycle hooks and installs at **user scope (global)**, so the `commonwealth`
 tools (`search`/`read`/`remember`/…) and the auto-bridge are available in **every** session —
 not just the directory you installed from. A session auto-loads relevant brain context at start
 and captures learnings at end — **scope-gated** (personal projects excluded) and routed through
@@ -48,6 +48,11 @@ Add this repo as a marketplace, then install the plugin:
 claude plugin marketplace add kristoffeys/commonwealth   # or a path/fork/mirror of this repo
 claude plugin install commonwealth@commonwealth
 ```
+
+> **Then restart Claude Code and run `/mcp`.** Plugins only (re)load at session start, so a
+> session already running when you install will still show the plugin as "failed to load" —
+> restart, and `/mcp` should list the `commonwealth` server. Open a session inside a synced
+> project (e.g. one you ran `commonwealth init` in) and the right brain loads automatically.
 
 **Per-repo routing is dynamic.** There is no baked-in brain: the SessionStart hook resolves the
 real session cwd → its brain via the registry (ADR-0011), and the MCP server independently
@@ -153,7 +158,7 @@ git remote add origin git@github.com:you/my-brain.git
 ### 2. Read/write the brain from Claude Code (MCP) (done by `init`)
 
 `init` installs the plugin for you (global, user scope), which registers the
-`commonwealth-brain` MCP server. To do it manually, add the marketplace and install the plugin:
+`commonwealth` MCP server. To do it manually, add the marketplace and install the plugin:
 
 ```bash
 claude plugin marketplace add kristoffeys/commonwealth

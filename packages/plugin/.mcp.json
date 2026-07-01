@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "commonwealth-brain": {
+    "commonwealth": {
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/vendor/mcp/index.js"]
     }

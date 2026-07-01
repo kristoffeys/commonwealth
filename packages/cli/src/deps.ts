@@ -331,7 +331,7 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
    *   c) `claude plugin install commonwealth@commonwealth` — skipped if already installed
    *      (checked via `plugin list`);
    *   d) remove a STALE raw `commonwealth` MCP registration (`claude mcp remove -s local`) so
-   *      it doesn't shadow the plugin's `commonwealth-brain` server.
+   *      it doesn't shadow the plugin's `commonwealth` server.
    * The brain is resolved per repo by the plugin + its SessionStart hook, so no brain dir is
    * pinned here.
    */
