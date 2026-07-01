@@ -23,12 +23,25 @@ describe("formatContext", () => {
     expect(formatContext([])).toBe("");
   });
 
+  it("renders a heading encoding the note count on the first line", () => {
+    const out = formatContext([
+      memoryNote("a", "Auth flow", "We use the OAuth device flow.\nSecond line ignored."),
+      memoryNote("b", "Deploy trigger", "Deploys run on push to main."),
+    ]);
+    const firstLine = out.split("\n")[0];
+    expect(firstLine).toBe("## Team brain — 2 relevant note(s)");
+  });
+
+  it("includes a citation-instruction line", () => {
+    const out = formatContext([memoryNote("a", "Auth flow", "We use the OAuth device flow.")]);
+    expect(out).toContain('_Cite any note you use inline, e.g. "📖 from the team brain: TITLE"._');
+  });
+
   it("renders titles, kinds and a snippet", () => {
     const out = formatContext([
       memoryNote("a", "Auth flow", "We use the OAuth device flow.\nSecond line ignored."),
       memoryNote("b", "Deploy trigger", "Deploys run on push to main."),
     ]);
-    expect(out).toContain("## Relevant from the team brain");
     expect(out).toContain("- **Auth flow** (memory) — We use the OAuth device flow.");
     expect(out).toContain("- **Deploy trigger** (memory) — Deploys run on push to main.");
     // Only the first non-empty line becomes the snippet.

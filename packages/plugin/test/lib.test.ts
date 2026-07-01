@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 // Import the plain-ESM hook lib directly (no build step; hooks run it via `node`).
-import { parseCandidateArray, sessionEnd, sessionStart } from "../hooks/lib.mjs";
+import {
+  buildSessionStartOutput,
+  deriveReceipt,
+  parseCandidateArray,
+  sessionEnd,
+  sessionStart,
+} from "../hooks/lib.mjs";
 
 /**
  * Build a fresh set of spy-backed deps for a test. Overrides let each test tune one seam
@@ -94,6 +100,34 @@ describe("sessionEnd", () => {
     );
     expect(result).toEqual({ captured: 0 });
     expect(deps.capture).not.toHaveBeenCalled();
+  });
+});
+
+describe("deriveReceipt", () => {
+  it("reports the note count parsed from the heading", () => {
+    const context = "## Team brain — 3 relevant note(s)\n- **X** (memory) — hi";
+    expect(deriveReceipt(context)).toBe("📖 Loaded 3 note(s) from your team brain.");
+  });
+
+  it("falls back to a generic message when there is no heading/count", () => {
+    expect(deriveReceipt("some context without a heading")).toBe(
+      "📖 Loaded relevant context from your team brain.",
+    );
+  });
+});
+
+describe("buildSessionStartOutput", () => {
+  it("returns null for empty/whitespace context", () => {
+    expect(buildSessionStartOutput("")).toBe(null);
+    expect(buildSessionStartOutput("   \n  ")).toBe(null);
+  });
+
+  it("wraps the context and derives a receipt for real context", () => {
+    const context = "## Team brain — 3 relevant note(s)\n- **X** (memory) — hi";
+    const out = buildSessionStartOutput(context);
+    expect(out?.hookSpecificOutput.hookEventName).toBe("SessionStart");
+    expect(out?.hookSpecificOutput.additionalContext).toBe(context);
+    expect(out?.systemMessage).toContain("3 note");
   });
 });
 

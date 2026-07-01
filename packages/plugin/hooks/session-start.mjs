@@ -5,7 +5,7 @@
 // Hard rule: a hook must never break the session. On ANY error we log to stderr and exit 0
 // (printing nothing), so a missing brain, unreadable config, or thrown dep degrades to
 // "inject nothing" rather than a failed session start.
-import { realDeps, sessionStart } from "./lib.mjs";
+import { buildSessionStartOutput, realDeps, sessionStart } from "./lib.mjs";
 
 /** Read all of stdin as a UTF-8 string. */
 async function readStdin() {
@@ -25,8 +25,11 @@ async function main() {
     input = {};
   }
   const context = await sessionStart(input, realDeps());
-  if (typeof context === "string" && context.length > 0) {
-    process.stdout.write(context);
+  const out = buildSessionStartOutput(context);
+  if (out) {
+    // JSON stdout: `additionalContext` is injected into the model and `systemMessage` (the
+    // value receipt) is shown to the user. When there is nothing to inject, write nothing.
+    process.stdout.write(JSON.stringify(out));
   }
 }
 
