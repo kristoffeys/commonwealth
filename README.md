@@ -1,6 +1,6 @@
-# Commons — a multiplayer second brain for teams
+# Commonwealth — a multiplayer second brain for teams
 
-> Working title: **Commons**. It's the shared, agent-readable context substrate every
+> It's the shared, agent-readable context substrate every
 > team member's AI reads _before_ it acts. Instant onboarding. Anti-bus-factor.
 > Plain markdown. Git-backed. Open source.
 
@@ -10,7 +10,7 @@ layer** of a small team — the _why_ behind decisions, the current work-state, 
 threads with people, the memory that would otherwise walk out the door with whoever
 wrote it.
 
-Commons is that layer, made multiplayer:
+Commonwealth is that layer, made multiplayer:
 
 - **Plain markdown, git-backed.** Your knowledge is files you own, diffable and
   portable. No proprietary store to be locked into or lose.
