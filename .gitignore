@@ -25,3 +25,6 @@ index/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# local Claude Code settings (personal, per-clone)
+.claude/settings.local.json
