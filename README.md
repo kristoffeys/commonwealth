@@ -1,12 +1,12 @@
 # Commons — a multiplayer second brain for teams
 
 > Working title: **Commons**. It's the shared, agent-readable context substrate every
-> team member's AI reads *before* it acts. Instant onboarding. Anti-bus-factor.
+> team member's AI reads _before_ it acts. Instant onboarding. Anti-bus-factor.
 > Plain markdown. Git-backed. Open source.
 
 Most teams have a personal-productivity story (`~/vault`, Obsidian, CLAUDE.md) and an
 enterprise-search story (Glean, Notion AI). Nothing in between owns the **reasoning
-layer** of a small team — the *why* behind decisions, the current work-state, the
+layer** of a small team — the _why_ behind decisions, the current work-state, the
 threads with people, the memory that would otherwise walk out the door with whoever
 wrote it.
 
@@ -26,18 +26,18 @@ Commons is that layer, made multiplayer:
 ## Why now / why us
 
 See [`docs/00-vision.md`](docs/00-vision.md) for the competitive landscape and the
-specific white space (nobody ships *git-backed × true-multiplayer × open-source*),
+specific white space (nobody ships _git-backed × true-multiplayer × open-source_),
 the wedge strategy, and the honest risks.
 
 ## Spec set
 
-| Doc | What it covers |
-|---|---|
-| [`docs/00-vision.md`](docs/00-vision.md) | Positioning, competitors, edge, wedge, risks |
+| Doc                                                  | What it covers                                                            |
+| ---------------------------------------------------- | ------------------------------------------------------------------------- |
+| [`docs/00-vision.md`](docs/00-vision.md)             | Positioning, competitors, edge, wedge, risks                              |
 | [`docs/01-architecture.md`](docs/01-architecture.md) | Git-as-substrate, the concurrency model (the crux), sync daemon, curation |
-| [`docs/02-data-model.md`](docs/02-data-model.md) | The markdown schema: memory / decisions / work-state / people-threads |
-| [`docs/03-distribution.md`](docs/03-distribution.md) | Auto-provisioning into Claude, OSS + monetization |
-| [`docs/04-roadmap.md`](docs/04-roadmap.md) | Phased build plan and open questions |
+| [`docs/02-data-model.md`](docs/02-data-model.md)     | The markdown schema: memory / decisions / work-state / people-threads     |
+| [`docs/03-distribution.md`](docs/03-distribution.md) | Auto-provisioning into Claude, OSS + monetization                         |
+| [`docs/04-roadmap.md`](docs/04-roadmap.md)           | Phased build plan and open questions                                      |
 
 ## Status
 

@@ -15,7 +15,7 @@ distribution and trust wedge. We must pick a license. The comparable cluster: GB
 
 **Apache-2.0.**
 
-Rationale: it is permissive (maximizes adoption, like MIT) *and* includes an express
+Rationale: it is permissive (maximizes adoption, like MIT) _and_ includes an express
 patent grant and contributor terms. For foundational infrastructure that other tools and
 companies will build on — and that we may take into enterprise settings — the patent
 grant is worth the marginally longer headers. Matches Mem0/Cognee, the infra-layer peers.
