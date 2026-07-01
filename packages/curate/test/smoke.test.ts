@@ -42,4 +42,15 @@ describe("built binary", () => {
     expect(shebangs).toHaveLength(1);
     expect(contents.startsWith("#!")).toBe(true);
   });
+
+  it("reports scope check for a cwd (exit 0, prints in/out-scope)", async () => {
+    // COMMONS_CONFIG points at a non-existent temp file → empty config → everything in scope.
+    const configPath = path.join(brainDir, "config.json");
+    const out = execFileSync("node", [distEntry, "scope", "check", "--cwd", brainDir], {
+      cwd: repoRoot,
+      stdio: "pipe",
+      env: { ...process.env, COMMONS_CONFIG: configPath },
+    });
+    expect(out.toString().trim()).toBe("in-scope");
+  });
 });
