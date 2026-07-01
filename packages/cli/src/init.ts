@@ -33,8 +33,12 @@ export interface InitDeps {
   resolveBrain(cwd: string): Promise<string | null>;
   /** Scaffold a fresh brain at `dir` with the given human-readable name. */
   createBrain(dir: string, name: string): Promise<void>;
-  /** Pin `repoDir` to `brainDir` via the `.commonwealth/brain` marker. */
-  writeMarker(repoDir: string, brainDir: string): Promise<void>;
+  /**
+   * Record that `repoDir` maps to `brainDir` in the global brain registry (ADR-0011). The
+   * registry is the default source of truth; the per-project `.commonwealth/brain` marker
+   * remains an optional manual override (`core.setBrainMarker`), not written here.
+   */
+  registerBrain(repoDir: string, brainDir: string): Promise<void>;
   /** Stage candidates into the brain's review queue; returns how many were captured. */
   stage(brainDir: string, candidates: NewNoteInput[]): Promise<{ captured: number }>;
   /** Ask the user a yes/no question; resolves to their answer. */
@@ -87,10 +91,11 @@ export function defaultBrainDir(repoRoot: string): string {
  * Orchestrate `commonwealth init`. Deterministic and side-effect-free except through `deps`.
  *
  * Flow: resolve the repo root and any existing brain. If one exists and we're not
- * reseeding, JOIN it (write the marker, done). Otherwise create a new brain, pin the
- * project to it, gather seed candidates, preview them, and — guarded behind confirmation
- * unless `--yes` — stage them into the review queue. Brain creation and the marker are
- * idempotent and always run; every content write (staging) is gated by `confirm`.
+ * reseeding, JOIN it (register the mapping, done). Otherwise create a new brain, register
+ * the project → brain mapping, gather seed candidates, preview them, and — guarded behind
+ * confirmation unless `--yes` — stage them into the review queue. Brain creation and the
+ * registry mapping are idempotent and always run; every content write (staging) is gated
+ * by `confirm`.
  *
  * @param cwd The directory `commonwealth init` was invoked from.
  * @param opts Parsed CLI flags.
@@ -102,14 +107,14 @@ export async function runInit(cwd: string, opts: InitOptions, deps: InitDeps): P
 
   const existing = await deps.resolveBrain(cwd);
   if (existing !== null && !opts.reseed) {
-    await deps.writeMarker(repoRoot, existing);
+    await deps.registerBrain(repoRoot, existing);
     deps.log(`Joined existing brain at ${existing}. Run the sync daemon to pull.`);
     return { mode: "join", brainDir: existing, staged: 0, gathered: 0 };
   }
 
   const brainDir = opts.brain ?? defaultBrainDir(repoRoot);
   await deps.createBrain(brainDir, path.basename(brainDir));
-  await deps.writeMarker(repoRoot, brainDir);
+  await deps.registerBrain(repoRoot, brainDir);
 
   if (opts.seed === false) {
     deps.log(`Seeding skipped. Brain created at ${brainDir}.`);

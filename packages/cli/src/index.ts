@@ -41,8 +41,9 @@ function printUsage(): void {
       "                    [--no-scope] [--no-seed] [--no-mcp] [--no-daemon] [--no-build]",
       "",
       "`init` is a single idempotent command: it builds the workspace (if needed), creates or",
-      "joins the brain, syncs one or more folders into it (allowlist + brain marker), seeds it",
-      "from one or more repos, registers the MCP server, and starts the sync daemon. Run in a",
+      "joins the brain, syncs one or more folders into it (allowlist + a global-registry mapping",
+      "with a ~/.commonwealth/brains/<name> symlink), seeds it from one or more repos, registers",
+      "the MCP server, and starts the sync daemon. Run in a",
       "terminal without --yes for an interactive wizard that scans for and lets you multi-select",
       "folders/repos; with --yes (or non-interactively) it uses defaults + flags and never prompts.",
       "",
@@ -200,7 +201,8 @@ export async function run(argv: string[]): Promise<number> {
     process.stderr.write(
       `init: mode=${result.mode} brain=${result.brainDir} built=${result.built} ` +
         `staged=${result.staged} scopedFolders=${result.scopedFolders} ` +
-        `seededRepos=${result.seededRepos} scope=${result.scope} autoAdr=${result.autoAdr} ` +
+        `mappedFolders=${result.mappedFolders} seededRepos=${result.seededRepos} ` +
+        `scope=${result.scope} autoAdr=${result.autoAdr} ` +
         `remote=${result.remote} mcp=${result.mcp} daemon=${result.daemon} ` +
         `scopeConfig=${result.scopeConfigPath}\n`,
     );

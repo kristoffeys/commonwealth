@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveBrainDir, setBrainMarker } from "../src/registry";
+import { addRegistryMapping, linkBrain, resolveBrainDir, setBrainMarker } from "../src/registry";
 
 let root: string;
 
@@ -26,10 +26,10 @@ async function mkdir(...segments: string[]): Promise<string> {
   return dir;
 }
 
-/** Turn `dir` into a brain by writing `.commonwealth/config.json`. */
+/** Turn `dir` into a brain by writing the brain-identity file `.commonwealth/schema-version`. */
 async function makeBrain(dir: string): Promise<string> {
   await fs.mkdir(path.join(dir, ".commonwealth"), { recursive: true });
-  await fs.writeFile(path.join(dir, ".commonwealth", "config.json"), "{}\n", "utf8");
+  await fs.writeFile(path.join(dir, ".commonwealth", "schema-version"), "1\n", "utf8");
   return dir;
 }
 
@@ -51,6 +51,24 @@ describe("resolveBrainDir", () => {
     const inside = await mkdir("self-brain", "decisions");
     expect(await resolveBrainDir(inside)).toBe(brain);
     expect(await resolveBrainDir(brain)).toBe(brain);
+  });
+
+  it("does NOT treat a dir with only `.commonwealth/config.json` (scope config) as a brain", async () => {
+    // Regression: the per-user scope config lives at `~/.commonwealth/config.json`; a dir
+    // that merely has that file (no schema-version) must not resolve as a brain, or the home
+    // dir would shadow the registry. A registry mapping must still win.
+    const pseudo = await mkdir("has-scope-config");
+    await fs.mkdir(path.join(pseudo, ".commonwealth"), { recursive: true });
+    await fs.writeFile(
+      path.join(pseudo, ".commonwealth", "config.json"),
+      JSON.stringify({ allow: [], deny: [] }),
+      "utf8",
+    );
+    const registryPath = path.join(root, "registry.json");
+    const brain = await makeBrain(await mkdir("real-brain"));
+    await addRegistryMapping(pseudo, brain, registryPath);
+    // Layer 2 skips `pseudo` (no schema-version) → layer 3 registry resolves the real brain.
+    expect(await resolveBrainDir(pseudo, { registryPath })).toBe(brain);
   });
 
   it("prefers a marker over self-is-brain when both are present", async () => {
@@ -131,5 +149,140 @@ describe("resolveBrainDir", () => {
     );
     process.env.COMMONWEALTH_CONFIG = path.join(configDir, "config.json");
     expect(await resolveBrainDir(cwd)).toBe(brain);
+  });
+});
+
+describe("addRegistryMapping", () => {
+  it("writes a new mapping as valid, absolute JSON", async () => {
+    const registryPath = path.join(root, "sub", "registry.json");
+    const brain = await makeBrain(await mkdir("m-brain"));
+    const prefix = await mkdir("m-work");
+
+    const res = await addRegistryMapping(prefix, brain, registryPath);
+    expect(res).toEqual({ added: true, updated: false });
+
+    const parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      mappings: { prefix: string; brain: string }[];
+    };
+    expect(parsed.mappings).toEqual([{ prefix, brain }]);
+    expect(path.isAbsolute(parsed.mappings[0].prefix)).toBe(true);
+    expect(path.isAbsolute(parsed.mappings[0].brain)).toBe(true);
+  });
+
+  it("is a no-op when the same prefix+brain is added again", async () => {
+    const registryPath = path.join(root, "registry.json");
+    const brain = await makeBrain(await mkdir("m-brain"));
+    const prefix = await mkdir("m-work");
+
+    await addRegistryMapping(prefix, brain, registryPath);
+    const second = await addRegistryMapping(prefix, brain, registryPath);
+    expect(second).toEqual({ added: false, updated: false });
+
+    const parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as { mappings: unknown[] };
+    expect(parsed.mappings).toHaveLength(1);
+  });
+
+  it("updates the brain when the same prefix maps somewhere new", async () => {
+    const registryPath = path.join(root, "registry.json");
+    const brainA = await makeBrain(await mkdir("brain-a"));
+    const brainB = await makeBrain(await mkdir("brain-b"));
+    const prefix = await mkdir("m-work");
+
+    await addRegistryMapping(prefix, brainA, registryPath);
+    const res = await addRegistryMapping(prefix, brainB, registryPath);
+    expect(res).toEqual({ added: false, updated: true });
+
+    const parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      mappings: { prefix: string; brain: string }[];
+    };
+    expect(parsed.mappings).toEqual([{ prefix, brain: brainB }]);
+  });
+
+  it("round-trips: a cwd under a written prefix resolves via resolveBrainDir", async () => {
+    const registryPath = path.join(root, "registry.json");
+    const brain = await makeBrain(await mkdir("rt-brain"));
+    const prefix = await mkdir("rt-work");
+    const cwd = await mkdir("rt-work", "client", "app");
+
+    await addRegistryMapping(prefix, brain, registryPath);
+    // No marker/self-brain shadows it; resolve strictly via the registry mapping.
+    expect(await resolveBrainDir(cwd, { registryPath })).toBe(brain);
+  });
+});
+
+describe("linkBrain", () => {
+  it("creates a symlink pointing at the brain, idempotently", async () => {
+    const brainsDir = path.join(root, "brains");
+    const brain = await makeBrain(await mkdir("link-brain"));
+
+    const first = await linkBrain("link-brain", brain, brainsDir);
+    expect(first.linked).toBe(true);
+    expect(await fs.realpath(first.path)).toBe(await fs.realpath(brain));
+
+    const second = await linkBrain("link-brain", brain, brainsDir);
+    expect(second).toEqual({ path: first.path, linked: true });
+  });
+
+  it("replaces a symlink that points elsewhere", async () => {
+    const brainsDir = path.join(root, "brains");
+    const brainA = await makeBrain(await mkdir("la"));
+    const brainB = await makeBrain(await mkdir("lb"));
+
+    await linkBrain("x", brainA, brainsDir);
+    const res = await linkBrain("x", brainB, brainsDir);
+    expect(res.linked).toBe(true);
+    expect(await fs.realpath(res.path)).toBe(await fs.realpath(brainB));
+  });
+
+  it("does not clobber a real (non-symlink) file/dir at the path", async () => {
+    const brainsDir = path.join(root, "brains");
+    await fs.mkdir(brainsDir, { recursive: true });
+    const realFile = path.join(brainsDir, "taken");
+    await fs.writeFile(realFile, "keep me\n", "utf8");
+    const brain = await makeBrain(await mkdir("k-brain"));
+
+    const res = await linkBrain("taken", brain, brainsDir);
+    expect(res.linked).toBe(false);
+    expect(res.skipped).toBe("exists (not a symlink)");
+    // The real file is untouched.
+    expect(await fs.readFile(realFile, "utf8")).toBe("keep me\n");
+    const stat = await fs.lstat(realFile);
+    expect(stat.isSymbolicLink()).toBe(false);
+  });
+
+  it("rejects an invalid name without throwing", async () => {
+    const brainsDir = path.join(root, "brains");
+    const brain = await makeBrain(await mkdir("i-brain"));
+    expect(await linkBrain("..", brain, brainsDir)).toEqual({
+      path: "",
+      linked: false,
+      skipped: "invalid name",
+    });
+  });
+
+  it("returns skipped (never throws) when the brains dir cannot be created", async () => {
+    // A regular file sits where brainsDir's parent should be → mkdir throws ENOTDIR.
+    const parentFile = path.join(root, "not-a-dir");
+    await fs.writeFile(parentFile, "x\n", "utf8");
+    const brainsDir = path.join(parentFile, "brains");
+    const brain = await makeBrain(await mkdir("guard-brain"));
+    const res = await linkBrain("guard", brain, brainsDir);
+    expect(res.linked).toBe(false);
+    expect(res.skipped).toBeTruthy();
+  });
+});
+
+describe("resolution precedence", () => {
+  it("a marker (layer 1) wins over a registry mapping (layer 3)", async () => {
+    const registryPath = path.join(root, "registry.json");
+    const markerBrain = await makeBrain(await mkdir("marker-brain"));
+    const registryBrain = await makeBrain(await mkdir("registry-brain"));
+    const prefix = await mkdir("pw");
+    const cwd = await mkdir("pw", "app");
+
+    await addRegistryMapping(prefix, registryBrain, registryPath);
+    await setBrainMarker(cwd, markerBrain);
+
+    expect(await resolveBrainDir(cwd, { registryPath })).toBe(markerBrain);
   });
 });
