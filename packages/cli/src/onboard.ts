@@ -1,5 +1,4 @@
 import path from "node:path";
-import { findRepoRoot } from "./init.js";
 import type { InitOptions, InitResult } from "./init.js";
 import type { Prompter } from "./prompt.js";
 import { findGitRepos } from "./discover.js";
@@ -38,7 +37,7 @@ export type OnboardOptions = {
   remote?: string;
   /**
    * Folders to sync into this brain: each is added to the capture allowlist and wired to the
-   * brain via the global user registry (plus a convenience symlink). Default: `[repoRoot]`.
+   * brain via the global user registry (plus a convenience symlink). Default: `[cwd]` (#61).
    */
   syncFolders?: string[];
   /**
@@ -157,9 +156,11 @@ export async function runOnboard(
   const doPlugin = opts.plugin !== false && opts.mcp !== false;
   const doDaemon = opts.daemon !== false;
 
-  const repoRoot = findRepoRoot(cwd);
+  // Default the sync/scope target to the INVOCATION dir, not the git root — `findRepoRoot`
+  // may climb to a parent repo and over-scope every sibling (#61). Mining still uses the git
+  // root (inside `runInit`); the wizard/`--sync` let the user pick folders explicitly.
   const syncFolders =
-    opts.syncFolders && opts.syncFolders.length > 0 ? opts.syncFolders : [repoRoot];
+    opts.syncFolders && opts.syncFolders.length > 0 ? opts.syncFolders : [path.resolve(cwd)];
   const seedRepos =
     opts.seedRepos && opts.seedRepos.length > 0 ? opts.seedRepos : doSeed ? syncFolders : [];
 
@@ -340,10 +341,11 @@ export interface WizardAnswers {
 export interface WizardDefaults {
   brain: string;
   /**
-   * The project's repo root — the fallback sync/seed target when no sibling repos are found, and
-   * the base whose parent is offered as the default scan directory.
+   * The invocation dir — the fallback sync/seed target when no sibling repos are found, and the
+   * base whose parent is offered as the default scan directory. Deliberately NOT the git root:
+   * that can climb above `cwd` and over-scope (#61).
    */
-  repoRoot: string;
+  projectDir: string;
   scope: boolean;
   seed: boolean;
   plugin: boolean;
@@ -392,7 +394,7 @@ export async function runWizard(
 ): Promise<WizardOutcome> {
   const brain = await prompter.text("Brain directory", defaults.brain);
 
-  const scanDefault = path.dirname(defaults.repoRoot);
+  const scanDefault = path.dirname(defaults.projectDir);
   const scanDir = await prompter.text("Scan which directory for projects?", scanDefault);
   const repos = await deps.scan(scanDir);
 
@@ -405,8 +407,8 @@ export async function runWizard(
     const seedDefault = repos.map((r) => syncFolders.includes(r));
     seedRepos = await prompter.select("Repos to SEED from now", items, seedDefault);
   } else {
-    syncFolders = [defaults.repoRoot];
-    seedRepos = [defaults.repoRoot];
+    syncFolders = [defaults.projectDir];
+    seedRepos = [defaults.projectDir];
   }
 
   const plugin = await prompter.confirm(

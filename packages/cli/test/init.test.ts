@@ -123,6 +123,31 @@ describe("runInit", () => {
     expect(deps.stage).toHaveBeenCalledWith("/b", one);
     expect(result.mode).toBe("new");
   });
+
+  it("scopes to the invocation dir, not a climbed parent git root (#61)", async () => {
+    // A parent that IS a git repo, with a child folder that is NOT its own repo.
+    const parent = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-cli-scope-")),
+    );
+    try {
+      execFileSync("git", ["init", "-q", parent], { stdio: "pipe" });
+      const child = path.join(parent, "subproject");
+      await fs.mkdir(child, { recursive: true });
+
+      const deps = makeDeps({
+        gather: vi.fn(async () => ({ candidates: [], bySource: ZERO_SOURCE })),
+      });
+      await runInit(child, { brain: "/b", yes: true }, deps);
+
+      // Registry prefix / mapping base is the invocation dir, NOT the climbed parent repo.
+      expect(deps.registerBrain).toHaveBeenCalledWith(child, "/b");
+      expect(deps.registerBrain).not.toHaveBeenCalledWith(parent, "/b");
+      // Mining still targets the actual git repo (the climbed root).
+      expect(deps.gather).toHaveBeenCalledWith(parent);
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("findRepoRoot", () => {

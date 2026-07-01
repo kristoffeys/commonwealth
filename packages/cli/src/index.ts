@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { parseArgs } from "node:util";
 import { defaultOnboardDeps } from "./deps.js";
-import { defaultBrainDir, findRepoRoot } from "./init.js";
+import { defaultBrainDir } from "./init.js";
 import { runOnboard, runWizard, type OnboardOptions, type WizardDefaults } from "./onboard.js";
 import { createReadlinePrompter, isInteractive, type Prompter } from "./prompt.js";
 
@@ -143,7 +144,8 @@ export async function run(argv: string[]): Promise<number> {
   }
 
   const cwd = process.cwd();
-  const repoRoot = findRepoRoot(cwd);
+  // The scope/registry/brain-name base is the invocation dir, not the git root (#61).
+  const projectDir = path.resolve(cwd);
   const claudePresent = hasExecutable("claude");
   const deps = defaultOnboardDeps({ curateEntry: process.env.COMMONWEALTH_CURATE_BIN });
 
@@ -164,8 +166,8 @@ export async function run(argv: string[]): Promise<number> {
     if (isInteractive() && !values.yes) {
       // Interactive terminal, no --yes: run the wizard.
       const defaults: WizardDefaults = {
-        brain: defaultBrainDir(repoRoot),
-        repoRoot,
+        brain: defaultBrainDir(projectDir),
+        projectDir,
         scope: true,
         seed: true,
         plugin: claudePresent,
@@ -186,7 +188,7 @@ export async function run(argv: string[]): Promise<number> {
       return 0;
     } else {
       // --yes: defaults + explicit flags, non-interactive.
-      const syncFolders = splitDirs(values.sync) ?? [repoRoot];
+      const syncFolders = splitDirs(values.sync) ?? [projectDir];
       const seedRepos = splitDirs(values["seed-repo"]) ?? (seed ? syncFolders : []);
       opts = {
         brain: values.brain,

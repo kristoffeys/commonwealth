@@ -4,7 +4,7 @@ import { parseSelection, type Prompter } from "../src/prompt.js";
 
 const DEFAULTS: WizardDefaults = {
   brain: "/default/brain",
-  repoRoot: "/home/me/projects/thisrepo",
+  projectDir: "/home/me/projects/thisrepo",
   scope: true,
   seed: true,
   plugin: true,
@@ -61,7 +61,7 @@ function fakeScan(repos: string[]): { deps: WizardDeps; scannedFrom: () => strin
 }
 
 describe("runWizard", () => {
-  it("scans the parent of repoRoot by default", async () => {
+  it("scans the parent of projectDir by default", async () => {
     const { prompter } = fakePrompter({});
     const { deps, scannedFrom } = fakeScan([]);
     await runWizard(DEFAULTS, prompter, deps);
@@ -118,7 +118,7 @@ describe("runWizard", () => {
     expect(outcome.opts?.seed).toBe(false);
   });
 
-  it("no repos found: falls back to [repoRoot] for both sync and seed", async () => {
+  it("no repos found: falls back to [projectDir] for both sync and seed", async () => {
     const { prompter } = fakePrompter({
       texts: ["/my/brain", "/p", ""],
       confirms: [true, true, false, true],
@@ -126,8 +126,8 @@ describe("runWizard", () => {
     const { deps } = fakeScan([]);
 
     const outcome = await runWizard(DEFAULTS, prompter, deps);
-    expect(outcome.opts?.syncFolders).toEqual([DEFAULTS.repoRoot]);
-    expect(outcome.opts?.seedRepos).toEqual([DEFAULTS.repoRoot]);
+    expect(outcome.opts?.syncFolders).toEqual([DEFAULTS.projectDir]);
+    expect(outcome.opts?.seedRepos).toEqual([DEFAULTS.projectDir]);
   });
 
   it("carries yes:true so runOnboard does not double-prompt", async () => {

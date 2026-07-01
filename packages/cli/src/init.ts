@@ -103,18 +103,23 @@ export function defaultBrainDir(repoRoot: string): string {
  * @returns A structured summary of what happened.
  */
 export async function runInit(cwd: string, opts: InitOptions, deps: InitDeps): Promise<InitResult> {
+  // The mapping/scope/brain-name base is the INVOCATION dir, not the git root. `findRepoRoot`
+  // may climb above `cwd` to a parent repo (a nested package, or a folder-of-repos sitting
+  // under a stray parent `.git`); using that as the registry prefix over-scopes every sibling
+  // to the wrong brain (#61). The git root stays a separate concern, used only for mining.
+  const projectDir = path.resolve(cwd);
   const repoRoot = findRepoRoot(cwd);
 
   const existing = await deps.resolveBrain(cwd);
   if (existing !== null && !opts.reseed) {
-    await deps.registerBrain(repoRoot, existing);
+    await deps.registerBrain(projectDir, existing);
     deps.log(`Joined existing brain at ${existing}. Run the sync daemon to pull.`);
     return { mode: "join", brainDir: existing, staged: 0, gathered: 0 };
   }
 
-  const brainDir = opts.brain ?? defaultBrainDir(repoRoot);
+  const brainDir = opts.brain ?? defaultBrainDir(projectDir);
   await deps.createBrain(brainDir, path.basename(brainDir));
-  await deps.registerBrain(repoRoot, brainDir);
+  await deps.registerBrain(projectDir, brainDir);
 
   if (opts.seed === false) {
     deps.log(`Seeding skipped. Brain created at ${brainDir}.`);
