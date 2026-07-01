@@ -40,7 +40,7 @@ git clone https://github.com/kristoffeys/team-second-brain.git
 cd team-second-brain
 pnpm install
 pnpm build          # builds @commons/core, @commons/mcp, @commons/sync
-pnpm test           # 54 tests
+pnpm test           # 66 tests
 ```
 
 > Not yet published to npm — for now the tools run from the built `dist/` in this repo.
@@ -106,15 +106,44 @@ The curation engine dedupes near-identical notes and drops trivial ones before t
 reach the queue; approval moves a note into canon. (Automatic capture at session end and
 relevance-gated injection at session start arrive with the M4 plugin.)
 
+### 5. Keep personal projects out of the brain (scope)
+
+A **per-user, local** allow/deny list decides which project folders are in scope. Only
+sessions whose folder is in scope are ever captured or injected — personal projects stay
+out. It lives in `~/.commons/config.json` and is never synced.
+
+```bash
+CURATE="node /path/to/team-second-brain/packages/curate/dist/index.js"
+$CURATE scope allow ~/work          # only capture work under here…
+$CURATE scope deny  ~/work/secret   # …except this (deny wins)
+$CURATE scope check --cwd "$PWD"    # → in-scope | out-of-scope
+$CURATE scope show
+```
+
+Rule: in scope if `(allow is empty OR under an allow entry) AND under no deny entry`.
+Default (no config) = everything in scope; add a deny (or a narrow allow) to exclude.
+
+## Configuration
+
+Commons has two config layers, deliberately separate:
+
+| File                           | Scope                 | Synced?           | Holds                                                 |
+| ------------------------------ | --------------------- | ----------------- | ----------------------------------------------------- |
+| `~/.commons/config.json`       | per-user, per-machine | no                | the folder **scope** allow/deny (above)               |
+| `<brain>/.commons/config.json` | shared with the brain | yes (in the repo) | brain **name**, remotes, and global **feature flags** |
+
+Brain-level feature flags (e.g. an optional `autoAdr` that auto-writes decision records
+into the brain) are on the roadmap (M4).
+
 ## Packages
 
-| Package            | Status | What it is                                                                                               |
-| ------------------ | ------ | -------------------------------------------------------------------------------------------------------- |
-| `@commons/core`    | ✅     | Schema (4 note kinds), atomic note IO, brain scaffold, FTS5 index + derived `COMMONS.md`/`INDEX.md`      |
-| `@commons/mcp`     | ✅     | MCP server exposing a brain to Claude Code (`commons-mcp`)                                               |
-| `@commons/sync`    | ✅     | Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings (`commons-sync`)  |
-| `@commons/curate`  | ✅     | Curation engine (dedupe/relevance) + in-repo review queue (`commons-curate`); capture/inject hooks in M4 |
-| Claude Code plugin | ⏳     | Auto-provisioning + lifecycle hooks (roadmap M4)                                                         |
+| Package            | Status | What it is                                                                                                 |
+| ------------------ | ------ | ---------------------------------------------------------------------------------------------------------- |
+| `@commons/core`    | ✅     | Schema (4 note kinds), atomic note IO, brain scaffold, FTS5 index + derived `COMMONS.md`/`INDEX.md`        |
+| `@commons/mcp`     | ✅     | MCP server exposing a brain to Claude Code (`commons-mcp`)                                                 |
+| `@commons/sync`    | ✅     | Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings (`commons-sync`)    |
+| `@commons/curate`  | ✅     | Curation (dedupe/relevance) + in-repo review queue + per-user scope filter (`commons-curate`); hooks in M4 |
+| Claude Code plugin | ⏳     | Auto-provisioning + lifecycle hooks (roadmap M4)                                                           |
 
 ## Development
 
