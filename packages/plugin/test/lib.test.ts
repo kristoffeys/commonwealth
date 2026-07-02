@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 // Import the plain-ESM hook lib directly (no build step; hooks run it via `node`).
 import {
+  attachReceipt,
   buildSessionStartOutput,
   compactTranscript,
   deriveReceipt,
+  endReceiptMessage,
   parseCandidateArray,
   sessionEnd,
   sessionStart,
@@ -23,6 +25,8 @@ function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
       captured: candidates.length,
       staged: candidates,
     })),
+    saveReceipt: vi.fn(async () => {}),
+    takeReceipt: vi.fn(async () => null),
     ...overrides,
   };
 }
@@ -73,27 +77,37 @@ describe("sessionEnd", () => {
     expect(result).toEqual({ captured: 1, staged: [{ kind: "memory", title: "T", body: "B" }] });
   });
 
-  it("skips (no brain) and NEVER extracts or captures", async () => {
+  it("skips (no brain) and NEVER extracts or captures, but leaves a receipt (#96)", async () => {
     const deps = makeDeps({ resolveBrainDir: vi.fn(async () => null) });
     const result = await sessionEnd({ cwd: "/x", transcript_path: "/tmp/t.jsonl" }, deps);
-    expect(result).toEqual({ skipped: true });
+    expect(result).toEqual({ skipped: true, reason: "no-brain" });
     expect(deps.isInScope).not.toHaveBeenCalled();
     expect(deps.extractCandidates).not.toHaveBeenCalled();
     expect(deps.capture).not.toHaveBeenCalled();
+    // A receipt for THIS cwd is saved so the next SessionStart can explain the silence.
+    expect(deps.saveReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/x", message: expect.stringContaining("no team brain") }),
+    );
   });
 
-  it("skips (out of scope) and NEVER extracts or captures — the scope gate", async () => {
+  it("skips (out of scope) and NEVER extracts or captures — the scope gate — but leaves a receipt", async () => {
     const deps = makeDeps({ isInScope: vi.fn(async () => false) });
     const result = await sessionEnd(
       { cwd: "/personal/secret", transcript_path: "/tmp/t.jsonl" },
       deps,
     );
-    expect(result).toEqual({ skipped: true });
+    expect(result).toEqual({ skipped: true, reason: "out-of-scope" });
     expect(deps.extractCandidates).not.toHaveBeenCalled();
     expect(deps.capture).not.toHaveBeenCalled();
+    expect(deps.saveReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/personal/secret",
+        message: expect.stringContaining("capture scope"),
+      }),
+    );
   });
 
-  it("reports captured:0 and does not call capture when no candidates are extracted", async () => {
+  it("reports captured:0, does not call capture, and leaves a 'nothing worth capturing' receipt", async () => {
     const deps = makeDeps({ extractCandidates: vi.fn(async () => []) });
     const result = await sessionEnd(
       { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
@@ -101,6 +115,72 @@ describe("sessionEnd", () => {
     );
     expect(result).toEqual({ captured: 0 });
     expect(deps.capture).not.toHaveBeenCalled();
+    expect(deps.saveReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("no durable knowledge") }),
+    );
+  });
+
+  it("leaves a count receipt after a real capture", async () => {
+    const deps = makeDeps();
+    await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" }, deps);
+    expect(deps.saveReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/work/acme/app",
+        message: expect.stringContaining("1 note"),
+      }),
+    );
+  });
+
+  it("does not save a receipt when there is no cwd", async () => {
+    const deps = makeDeps();
+    const result = await sessionEnd({}, deps);
+    expect(result).toEqual({ skipped: true, reason: "no-cwd" });
+    expect(deps.saveReceipt).not.toHaveBeenCalled();
+  });
+});
+
+describe("endReceiptMessage (#96)", () => {
+  it("explains a no-brain skip", () => {
+    expect(endReceiptMessage({ skipped: true, reason: "no-brain" })).toContain("no team brain");
+  });
+  it("explains an out-of-scope skip", () => {
+    expect(endReceiptMessage({ skipped: true, reason: "out-of-scope" })).toContain("capture scope");
+  });
+  it("returns null for a no-cwd skip (nothing useful to say)", () => {
+    expect(endReceiptMessage({ skipped: true, reason: "no-cwd" })).toBe(null);
+  });
+  it("reports zero and non-zero capture counts", () => {
+    expect(endReceiptMessage({ captured: 0 })).toContain("no durable knowledge");
+    expect(endReceiptMessage({ captured: 3 })).toContain("3 note(s)");
+  });
+  it("returns null for junk input", () => {
+    expect(endReceiptMessage(null)).toBe(null);
+    expect(endReceiptMessage({})).toBe(null);
+  });
+});
+
+describe("attachReceipt (#96)", () => {
+  it("returns null when there is neither output nor a receipt", () => {
+    expect(attachReceipt(null, null)).toBe(null);
+    expect(attachReceipt(null, "   ")).toBe(null);
+  });
+  it("emits a systemMessage-only output when there is a receipt but no context", () => {
+    expect(attachReceipt(null, "🧠 nothing captured")).toEqual({
+      systemMessage: "🧠 nothing captured",
+    });
+  });
+  it("returns the output unchanged when there is no receipt", () => {
+    const out = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "x" } };
+    expect(attachReceipt(out, null)).toBe(out);
+  });
+  it("appends the receipt to an existing systemMessage without touching additionalContext", () => {
+    const out = {
+      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "CTX" },
+      systemMessage: "📖 Loaded 2 note(s).",
+    };
+    const merged = attachReceipt(out, "🧠 captured 1");
+    expect(merged.systemMessage).toBe("📖 Loaded 2 note(s).\n🧠 captured 1");
+    expect(merged.hookSpecificOutput.additionalContext).toBe("CTX"); // receipt never pollutes context
   });
 });
 

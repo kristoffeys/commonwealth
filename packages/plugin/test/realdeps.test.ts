@@ -89,6 +89,25 @@ describe("realResolveBrainDir (inlined registry — no bare @commonwealth/core i
   });
 });
 
+describe("realDeps() receipt IO (#96) — saveReceipt / takeReceipt round-trip", () => {
+  it("saves a receipt and consumes it once for the matching cwd", async () => {
+    // receiptPath() derives last-session.json as a sibling of $COMMONWEALTH_CONFIG (set above).
+    const deps = realDeps();
+    await deps.saveReceipt({ cwd: "/work/app", message: "🧠 captured 2 note(s)", ts: 1 });
+
+    // A non-matching cwd sees nothing and leaves the receipt in place.
+    expect(await deps.takeReceipt("/somewhere/else")).toBeNull();
+    // The matching cwd gets the message…
+    expect(await deps.takeReceipt("/work/app")).toBe("🧠 captured 2 note(s)");
+    // …and it is one-shot: a second take returns null (file consumed).
+    expect(await deps.takeReceipt("/work/app")).toBeNull();
+  });
+
+  it("takeReceipt returns null when no receipt exists", async () => {
+    expect(await realDeps().takeReceipt("/anything")).toBeNull();
+  });
+});
+
 describe("realDeps().capture (real curate binary over stdin)", () => {
   beforeAll(() => {
     // Build so the spawned curate binary + its @commonwealth/core import exist.

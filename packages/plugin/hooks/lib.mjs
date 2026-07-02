@@ -53,17 +53,66 @@ export async function sessionStart(input, deps) {
  */
 export async function sessionEnd(input, deps) {
   const cwd = input?.cwd;
-  if (typeof cwd !== "string" || cwd.length === 0) return { skipped: true };
+  // No cwd: nothing to say and nowhere to anchor a receipt — skip silently.
+  if (typeof cwd !== "string" || cwd.length === 0) return { skipped: true, reason: "no-cwd" };
 
   const brain = await deps.resolveBrainDir(cwd);
-  if (!brain) return { skipped: true };
+  if (!brain) return await finishEnd(deps, cwd, { skipped: true, reason: "no-brain" });
 
-  if (!(await deps.isInScope(cwd))) return { skipped: true };
+  if (!(await deps.isInScope(cwd)))
+    return await finishEnd(deps, cwd, { skipped: true, reason: "out-of-scope" });
 
   const candidates = await deps.extractCandidates(input.transcript_path);
-  if (!Array.isArray(candidates) || candidates.length === 0) return { captured: 0 };
+  if (!Array.isArray(candidates) || candidates.length === 0)
+    return await finishEnd(deps, cwd, { captured: 0 });
 
-  return await deps.capture(brain, cwd, candidates);
+  const result = await deps.capture(brain, cwd, candidates);
+  return await finishEnd(deps, cwd, result);
+}
+
+/**
+ * Persist a one-line receipt describing what this SessionEnd did, so the NEXT SessionStart in
+ * the same directory can surface it (#96). SessionEnd's own stdout/systemMessage is invisible —
+ * especially after `/clear`, which wipes the transcript — so a visible "here's why nothing was
+ * captured" must be deferred to the next start. Best-effort via `deps.saveReceipt`; returns the
+ * result unchanged so the hook's stderr summary is untouched.
+ */
+async function finishEnd(deps, cwd, result) {
+  const message = endReceiptMessage(result);
+  if (message && typeof deps.saveReceipt === "function") {
+    await deps.saveReceipt({ cwd, message, ts: Date.now() });
+  }
+  return result;
+}
+
+/**
+ * Human-readable one-liner for a {@link sessionEnd} outcome, or `null` when there is nothing
+ * worth telling the user. Turns the silent no-op (#96) into a specific explanation: a skip
+ * says WHY (no brain / out of scope), a zero-capture says the extractor found nothing, and a
+ * real capture reports the count. Pure function.
+ *
+ * @param {{skipped?: boolean, reason?: string, captured?: number}} result
+ * @returns {string | null}
+ */
+export function endReceiptMessage(result) {
+  if (!result || typeof result !== "object") return null;
+  if (result.skipped) {
+    if (result.reason === "no-brain") {
+      return "🧠 Commonwealth: the last session ended in a directory with no team brain mapped, so nothing was captured. Map one in ~/.commonwealth/registry.json (or run `commonwealth init`) to capture here.";
+    }
+    if (result.reason === "out-of-scope") {
+      return "🧠 Commonwealth: the last session's directory is outside your Commonwealth capture scope, so nothing was captured.";
+    }
+    return null; // no-cwd / unknown — nothing useful to surface
+  }
+  if (typeof result.captured === "number") {
+    if (result.captured === 0) {
+      return "🧠 Commonwealth: reviewed the last session but found no durable knowledge worth capturing.";
+    }
+    const n = result.captured;
+    return `🧠 Commonwealth: captured ${n} note(s) from the last session. Run \`commonwealth status\` to review.`;
+  }
+  return null;
 }
 
 /**
@@ -100,6 +149,31 @@ export function buildSessionStartOutput(context) {
     },
     systemMessage: deriveReceipt(context),
   };
+}
+
+/**
+ * Fold a deferred SessionEnd receipt (#96) into the SessionStart output. The receipt is
+ * user-facing only, so it goes in `systemMessage` — never in `additionalContext` (it must not
+ * pollute the model's injected context). Cases:
+ *  - no output + no receipt → `null` (write nothing);
+ *  - no output + a receipt → `{ systemMessage }` alone (a skip/zero-capture still speaks up);
+ *  - output + a receipt → the receipt is appended to the existing `systemMessage`.
+ * Pure function.
+ *
+ * @param {object | null} output          Result of {@link buildSessionStartOutput}.
+ * @param {string | null} receiptMessage  Message from the prior session's {@link endReceiptMessage}.
+ * @returns {object | null}
+ */
+export function attachReceipt(output, receiptMessage) {
+  const msg =
+    typeof receiptMessage === "string" && receiptMessage.trim().length > 0 ? receiptMessage : null;
+  if (!output) return msg ? { systemMessage: msg } : null;
+  if (!msg) return output;
+  const prior =
+    typeof output.systemMessage === "string" && output.systemMessage.length > 0
+      ? `${output.systemMessage}\n${msg}`
+      : msg;
+  return { ...output, systemMessage: prior };
 }
 
 // ---------------------------------------------------------------------------------------
@@ -330,12 +404,59 @@ export function realDeps(overrides = {}) {
     return parseCandidateArray(res.stdout);
   }
 
+  /**
+   * Per-user path for the deferred session receipt (#96). Honors `$COMMONWEALTH_RECEIPT`, then a
+   * `last-session.json` sibling of `$COMMONWEALTH_CONFIG` (so tests that redirect config also
+   * redirect the receipt), then `~/.commonwealth/last-session.json`. Mirrors the registry path
+   * resolution so all per-user state lives together.
+   */
+  function receiptPath() {
+    if (process.env.COMMONWEALTH_RECEIPT) return process.env.COMMONWEALTH_RECEIPT;
+    if (process.env.COMMONWEALTH_CONFIG) {
+      return path.join(path.dirname(process.env.COMMONWEALTH_CONFIG), "last-session.json");
+    }
+    return path.join(os.homedir(), ".commonwealth", "last-session.json");
+  }
+
+  /** Persist the SessionEnd receipt (best-effort; a hook must never break the session). */
+  async function saveReceipt(receipt) {
+    try {
+      const p = receiptPath();
+      await fs.mkdir(path.dirname(p), { recursive: true });
+      await fs.writeFile(p, JSON.stringify(receipt), "utf8");
+    } catch {
+      // Non-fatal: no receipt is strictly better than a broken session start/end.
+    }
+  }
+
+  /**
+   * Read the pending receipt and, if it was left by a session in THIS `cwd`, consume it
+   * (delete → one-shot) and return its message. A receipt for a different directory is left in
+   * place (it'll be overwritten by the next SessionEnd), so a `/clear` — same cwd, immediate
+   * restart — shows exactly the prior session's outcome and nothing stale. Never throws.
+   */
+  async function takeReceipt(cwd) {
+    try {
+      const p = receiptPath();
+      const parsed = JSON.parse(await fs.readFile(p, "utf8"));
+      if (parsed && parsed.cwd === cwd && typeof parsed.message === "string") {
+        await fs.rm(p, { force: true });
+        return parsed.message;
+      }
+    } catch {
+      // No receipt / unreadable — nothing to surface.
+    }
+    return null;
+  }
+
   return {
     resolveBrainDir: realResolveBrainDir,
     isInScope,
     getContext,
     capture,
     extractCandidates,
+    saveReceipt,
+    takeReceipt,
   };
 }
 

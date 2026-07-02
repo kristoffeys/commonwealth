@@ -5,7 +5,7 @@
 // Hard rule: a hook must never break the session. On ANY error we log to stderr and exit 0
 // (printing nothing), so a missing brain, unreadable config, or thrown dep degrades to
 // "inject nothing" rather than a failed session start.
-import { buildSessionStartOutput, realDeps, sessionStart } from "./lib.mjs";
+import { attachReceipt, buildSessionStartOutput, realDeps, sessionStart } from "./lib.mjs";
 
 /** Read all of stdin as a UTF-8 string. */
 async function readStdin() {
@@ -24,11 +24,18 @@ async function main() {
   } catch {
     input = {};
   }
-  const context = await sessionStart(input, realDeps());
-  const out = buildSessionStartOutput(context);
+  const deps = realDeps();
+  const context = await sessionStart(input, deps);
+  const base = buildSessionStartOutput(context);
+  // Surface any deferred receipt from the prior session's SessionEnd (#96): a `/clear` in this
+  // same directory left a one-liner explaining what was (or wasn't) captured. `takeReceipt`
+  // consumes it (one-shot); `attachReceipt` folds it into `systemMessage` only.
+  const receiptMessage =
+    typeof deps.takeReceipt === "function" ? await deps.takeReceipt(input?.cwd) : null;
+  const out = attachReceipt(base, receiptMessage);
   if (out) {
     // JSON stdout: `additionalContext` is injected into the model and `systemMessage` (the
-    // value receipt) is shown to the user. When there is nothing to inject, write nothing.
+    // value receipt + any deferred capture receipt) is shown to the user.
     process.stdout.write(JSON.stringify(out));
   }
 }

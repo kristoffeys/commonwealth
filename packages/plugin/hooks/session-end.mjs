@@ -25,7 +25,10 @@ async function main() {
   }
   const result = await sessionEnd(input, realDeps());
   if (result && result.skipped) {
-    console.error("[commonwealth] session-end: out of scope or no brain; captured nothing");
+    console.error(
+      `[commonwealth] session-end: captured nothing (${result.reason ?? "skipped"}); ` +
+        `the next session in this directory will show why`,
+    );
   } else if (result && typeof result.captured === "number") {
     console.error(`[commonwealth] session-end: staged ${result.captured} candidate note(s)`);
   }
