@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 // Import the plain-ESM hook lib directly (no build step; hooks run it via `node`).
 import {
   buildSessionStartOutput,
+  compactTranscript,
   deriveReceipt,
   parseCandidateArray,
   sessionEnd,
@@ -147,5 +148,46 @@ describe("parseCandidateArray", () => {
     expect(parseCandidateArray("not json")).toEqual([]);
     expect(parseCandidateArray('{"kind":"memory"}')).toEqual([]);
     expect(parseCandidateArray("")).toEqual([]);
+  });
+});
+
+describe("compactTranscript (#84)", () => {
+  it("keeps the whole conversation (head + tail) and elides bulky tool payloads", () => {
+    const bigBlob = "F".repeat(50_000); // a huge tool_result (file read / command output)
+    const jsonl = [
+      JSON.stringify({
+        type: "user",
+        message: { role: "user", content: "early decision: use Postgres" },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "tool_use", name: "Read" }] },
+      }),
+      JSON.stringify({
+        type: "user",
+        message: { role: "user", content: [{ type: "tool_result", content: bigBlob }] },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "late note: cache TTL is 5m" }],
+        },
+      }),
+    ].join("\n");
+
+    const out = compactTranscript(jsonl);
+
+    // The whole session is preserved — the EARLY line is not dropped.
+    expect(out).toContain("early decision: use Postgres");
+    expect(out).toContain("late note: cache TTL is 5m");
+    expect(out).toContain("[tool_use: Read]");
+    // The 50KB tool blob is truncated, not carried whole.
+    expect(out).not.toContain(bigBlob);
+    expect(out.length).toBeLessThan(2000);
+  });
+
+  it("returns empty for content that never parses (caller falls back to raw)", () => {
+    expect(compactTranscript("not json at all\n{also not")).toBe("");
   });
 });
