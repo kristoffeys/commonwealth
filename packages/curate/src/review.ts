@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { KIND_DIR, type Note } from "@commonwealth/core";
+import { pathForNote, type Note } from "@commonwealth/core";
 import { listStaged, stagedAbsPath } from "./staging.js";
 
 /** All notes currently awaiting review in the staging queue. */
@@ -24,7 +24,9 @@ export async function approve(brainDir: string, id: string): Promise<string> {
   if (!note) {
     throw new Error(`No staged note with id "${id}" to approve`);
   }
-  const canonRel = `${KIND_DIR[note.frontmatter.kind]}/${id}.md`;
+  // Promote into the same project subtree the note carries (ADR-0015), mirroring writeNote's
+  // layout: `<project>/<kind>/<id>.md`, or `<kind>/<id>.md` when unattributed.
+  const canonRel = pathForNote(note.frontmatter.kind, id, note.frontmatter.source);
   const canonAbs = path.join(brainDir, canonRel);
   const stagedAbs = stagedAbsPath(brainDir, note);
 

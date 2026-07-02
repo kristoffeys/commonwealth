@@ -8,6 +8,7 @@ import {
   NOTE_KINDS,
   type NoteKind,
   resolveBrainDir,
+  resolveProjectSource,
   setFeature,
 } from "@commonwealth/core";
 import { captureCandidates } from "./capture.js";
@@ -247,7 +248,12 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
     typeof values.from === "string" ? await fs.readFile(values.from, "utf8") : await readStdin();
   const candidates = parseCandidates(raw);
 
-  const result = await captureCandidates(dir, candidates);
+  // Stamp each candidate with its originating project (ADR-0015) from the session cwd, so the
+  // note is filed under `<project>/<kind>/`. An explicit per-candidate source is preserved.
+  const source = (await resolveProjectSource(cwd)) ?? undefined;
+  const stamped = candidates.map((c) => (c.source ? c : { ...c, source }));
+
+  const result = await captureCandidates(dir, stamped);
   // One stdout line per captured note (the SessionEnd hook counts these lines). When
   // autoPromote landed them in canon we prefix the canonical path; otherwise the staged id.
   // `result.promoted[i]` aligns with `result.staged[i]` (promotion iterates staged in order).

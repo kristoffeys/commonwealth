@@ -3,14 +3,22 @@ import path from "node:path";
 import { findSecrets } from "@commonwealth/core";
 import { simpleGit, type SimpleGit } from "simple-git";
 
-/** Note-kind folders whose staged markdown is scanned for secrets before commit. */
+/** Note-kind folders whose markdown is scanned for secrets before commit. */
 const NOTE_DIRS = ["memory", "decisions", "work-state", "people"] as const;
 
-/** True if a repo-relative path is a markdown note file under a note-kind folder. */
+/**
+ * True if a repo-relative path is a markdown note file — i.e. its immediate parent folder is a
+ * note-kind folder (`INDEX.md` excluded). Works for both the flat kind root (`memory/x.md`) and
+ * per-project subtrees (`<project>/memory/x.md`, ADR-0015), so the secret scrub keeps covering
+ * every note regardless of layout.
+ */
 function isNoteFile(rel: string): boolean {
   if (!rel.endsWith(".md")) return false;
-  const top = rel.split("/")[0];
-  return top !== undefined && (NOTE_DIRS as readonly string[]).includes(top);
+  const parts = rel.split("/");
+  const name = parts[parts.length - 1];
+  const parent = parts[parts.length - 2];
+  if (name === "INDEX.md") return false;
+  return parent !== undefined && (NOTE_DIRS as readonly string[]).includes(parent);
 }
 
 /**

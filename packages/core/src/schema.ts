@@ -32,6 +32,12 @@ const baseShape = {
   created: IsoDate,
   updated: IsoDate.optional(),
   author: z.string().optional(),
+  /**
+   * Originating project the note was captured from — a stable repo identity (git `origin`
+   * slug, else the repo-root basename). Lets a shared brain group/filter notes by project
+   * (ADR-0015). Optional: pre-existing and non-project notes are "unattributed".
+   */
+  source: z.string().optional(),
   /** Wikilink targets (`[[id]]` or bare id) to related notes. */
   relates: z.array(z.string()).default([]),
 };

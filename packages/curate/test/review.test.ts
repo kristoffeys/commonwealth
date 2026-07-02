@@ -79,3 +79,19 @@ describe("review", () => {
     await expect(approve(brainDir, "no-such-id")).rejects.toThrow(/no-such-id/);
   });
 });
+
+describe("review — project provenance (ADR-0015)", () => {
+  it("approve promotes a sourced note into its <project>/<kind>/ subtree", async () => {
+    const staged = await stageNote(brainDir, {
+      kind: "memory",
+      title: "Sourced fact",
+      body: "A durable fact captured from a specific project.",
+      source: "acme/widgets",
+    });
+    const id = staged.frontmatter.id;
+    const canonPath = await approve(brainDir, id);
+    expect(canonPath).toBe(`acme-widgets/memory/${id}.md`);
+    const canon = await listNotes(brainDir);
+    expect(canon.map((n) => n.frontmatter.source)).toContain("acme/widgets");
+  });
+});

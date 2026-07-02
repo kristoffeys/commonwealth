@@ -88,3 +88,47 @@ describe("writeNote / readNote / listNotes", () => {
     expect(() => parseNote("---\nkind: nope\n---\nx", "x.md")).toThrow();
   });
 });
+
+describe("project provenance (ADR-0015)", () => {
+  it("writeNote files a sourced note under <project>/<kind>/ and records source frontmatter", async () => {
+    const note = await writeNote(dir, {
+      kind: "memory",
+      title: "Cache TTL is five minutes",
+      body: "The edge cache holds responses for five minutes.",
+      source: "acme/widgets",
+    });
+    expect(note.path).toBe(`acme-widgets/memory/${note.frontmatter.id}.md`);
+    expect(note.frontmatter.source).toBe("acme/widgets");
+    // The file really exists at that path and round-trips.
+    const back = await readNote(dir, note.path);
+    expect(back.frontmatter.source).toBe("acme/widgets");
+  });
+
+  it("writeNote keeps an unattributed note at the kind root (back-compat)", async () => {
+    const note = await writeNote(dir, { kind: "memory", title: "plain", body: "no project here" });
+    expect(note.path).toBe(`memory/${note.frontmatter.id}.md`);
+    expect(note.frontmatter.source).toBeUndefined();
+  });
+
+  it("listNotes finds notes across project subtrees and the flat root, filtered by kind", async () => {
+    await writeNote(dir, { kind: "memory", title: "A", body: "from project one", source: "one" });
+    await writeNote(dir, { kind: "memory", title: "B", body: "from project two", source: "two" });
+    await writeNote(dir, {
+      kind: "decision",
+      title: "D",
+      body: "a decision in project one",
+      source: "one",
+    });
+    await writeNote(dir, { kind: "memory", title: "C", body: "an unattributed memory" });
+
+    const memories = await listNotes(dir, "memory");
+    expect(memories).toHaveLength(3); // A, B, C — across two projects + flat
+    const all = await listNotes(dir);
+    expect(all).toHaveLength(4);
+    // Sourced notes carry their project; the flat one does not.
+    const bySource = Object.fromEntries(
+      all.map((n) => [n.frontmatter.title, n.frontmatter.source]),
+    );
+    expect(bySource).toEqual({ A: "one", B: "two", D: "one", C: undefined });
+  });
+});

@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import matter from "gray-matter";
 import { makeNoteId, pathForNote, shortId, today } from "./ids.js";
-import { Frontmatter, KIND_DIR, NOTE_KINDS, type Note, type NoteKind } from "./schema.js";
+import { Frontmatter, KIND_DIR, type Note, type NoteKind } from "./schema.js";
 
 /**
  * Input to create a new note. `id`, `created` (defaults to today), and the file path are
@@ -15,6 +15,8 @@ export interface NewNoteInput {
   body: string;
   tags?: string[];
   author?: string;
+  /** Originating project (git repo identity); recorded as frontmatter `source` (ADR-0015). */
+  source?: string;
   /** `YYYY-MM-DD`; defaults to today. */
   created?: string;
   /** Extra kind-specific frontmatter fields, validated against the schema. */
@@ -35,6 +37,7 @@ const KEY_ORDER = [
   "created",
   "updated",
   "author",
+  "source",
   "verified",
   "deciders",
   "supersedes",
@@ -81,7 +84,7 @@ export function serializeNote(note: Note): string {
 export async function writeNote(brainDir: string, input: NewNoteInput): Promise<Note> {
   const created = input.created ?? today();
   const id = makeNoteId(input.title, created);
-  const relPath = pathForNote(input.kind, id);
+  const relPath = pathForNote(input.kind, id, input.source);
   const absPath = path.join(brainDir, relPath);
 
   const raw: Record<string, unknown> = {
@@ -91,6 +94,7 @@ export async function writeNote(brainDir: string, input: NewNoteInput): Promise<
     tags: input.tags ?? [],
     created,
     ...(input.author ? { author: input.author } : {}),
+    ...(input.source ? { source: input.source } : {}),
     ...(input.fields ?? {}),
   };
   const frontmatter = Frontmatter.parse(raw);
@@ -110,22 +114,50 @@ export async function readNote(brainDir: string, relPath: string): Promise<Note>
   return parseNote(raw, relPath);
 }
 
-/** List all notes, optionally filtered to one kind. Skips generated `INDEX.md`. */
+/** Folder names that hold notes (the values of {@link KIND_DIR}); a note's parent dir. */
+const KIND_FOLDERS = new Set<string>(Object.values(KIND_DIR));
+
+/** Top-level dirs that never contain notes and must not be walked (derived/local/vcs). */
+const NON_NOTE_DIRS = new Set([".git", ".commonwealth", "index", "staging", "node_modules"]);
+
+/**
+ * List all notes, optionally filtered to one kind. Layout-agnostic (ADR-0015): notes may live
+ * at the kind root (`<kind>/<id>.md`, unattributed) or under a per-project subtree
+ * (`<project>/<kind>/<id>.md`). A file is a note when its PARENT folder is a kind folder and it
+ * is not the generated `INDEX.md`; the authoritative kind comes from frontmatter. Skips derived
+ * (`index/`), local (`staging/`), and vcs dirs so canon never includes staged/derived files.
+ */
 export async function listNotes(brainDir: string, kind?: NoteKind): Promise<Note[]> {
-  const kinds: readonly NoteKind[] = kind ? [kind] : NOTE_KINDS;
-  const notes: Note[] = [];
-  for (const k of kinds) {
-    const dir = path.join(brainDir, KIND_DIR[k]);
-    let entries: string[];
+  const found: string[] = [];
+
+  async function walk(absDir: string): Promise<void> {
+    let entries: import("node:fs").Dirent[];
     try {
-      entries = await fs.readdir(dir);
+      entries = await fs.readdir(absDir, { withFileTypes: true });
     } catch {
-      continue; // folder may not exist yet
+      return; // dir may not exist yet
     }
-    for (const entry of entries.sort()) {
-      if (!entry.endsWith(".md") || entry === "INDEX.md") continue;
-      notes.push(await readNote(brainDir, `${KIND_DIR[k]}/${entry}`));
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (NON_NOTE_DIRS.has(entry.name)) continue;
+        await walk(path.join(absDir, entry.name));
+      } else if (
+        entry.isFile() &&
+        entry.name.endsWith(".md") &&
+        entry.name !== "INDEX.md" &&
+        KIND_FOLDERS.has(path.basename(absDir))
+      ) {
+        found.push(path.relative(brainDir, path.join(absDir, entry.name)));
+      }
     }
+  }
+
+  await walk(brainDir);
+
+  const notes: Note[] = [];
+  for (const rel of found.sort()) {
+    const note = await readNote(brainDir, rel);
+    if (!kind || note.frontmatter.kind === kind) notes.push(note);
   }
   return notes;
 }

@@ -94,3 +94,52 @@ describe("regenerateDerived", () => {
     expect(commonwealth).not.toContain("Old rollout");
   });
 });
+
+describe("project provenance (ADR-0015)", () => {
+  it("search filters by source", async () => {
+    await writeNote(dir, {
+      kind: "memory",
+      title: "cache ttl",
+      body: "edge cache five minutes",
+      source: "one",
+    });
+    await writeNote(dir, {
+      kind: "memory",
+      title: "cache policy",
+      body: "edge cache invalidation rules",
+      source: "two",
+    });
+    await buildIndex(dir);
+
+    const all = await search(dir, "cache");
+    expect(all.length).toBe(2);
+    const onlyOne = await search(dir, "cache", { source: "one" });
+    expect(onlyOne.map((r) => r.title)).toEqual(["cache ttl"]);
+    expect(onlyOne[0]?.source).toBe("one");
+  });
+
+  it("regenerateDerived groups COMMONWEALTH.md by project and writes per-subtree INDEX.md", async () => {
+    await writeNote(dir, {
+      kind: "work-state",
+      title: "WS one",
+      body: "in progress in project one",
+      source: "acme/one",
+    });
+    await writeNote(dir, {
+      kind: "decision",
+      title: "Dec two",
+      body: "a decision in project two",
+      source: "two",
+    });
+    await regenerateDerived(dir);
+
+    const md = await fs.readFile(path.join(dir, "COMMONWEALTH.md"), "utf8");
+    expect(md).toContain("## acme/one");
+    expect(md).toContain("## two");
+    expect(md.indexOf("## acme/one")).toBeLessThan(md.indexOf("## two")); // alphabetical
+
+    // A per-project-per-kind INDEX.md is written in the note's own folder.
+    const idx = await fs.readFile(path.join(dir, "acme-one", "work-state", "INDEX.md"), "utf8");
+    expect(idx).toContain("WS one");
+  });
+});

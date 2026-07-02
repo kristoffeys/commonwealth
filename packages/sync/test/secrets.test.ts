@@ -98,3 +98,29 @@ describe("SyncEngine secret scrub (#16)", () => {
     expect(log).not.toContain(dirtyRel);
   });
 });
+
+describe("SyncEngine secret scrub — project subtree layout (ADR-0015)", () => {
+  it("scrubs a secret in a note under <project>/<kind>/ (scrub is layout-agnostic, #90)", async () => {
+    const engine = new SyncEngine(fx.alice);
+    // A sourced note lands at acme-widgets/memory/<id>.md, not the flat memory/ root.
+    const note = await writeNote(fx.alice, {
+      kind: "memory",
+      title: "Sourced creds note",
+      body: "placeholder",
+      source: "acme/widgets",
+    });
+    expect(note.path.startsWith("acme-widgets/memory/")).toBe(true);
+    const abs = path.join(fx.alice, note.path);
+    await fs.writeFile(
+      abs,
+      `${await fs.readFile(abs, "utf8")}\n\naws key AKIAIOSFODNN7EXAMPLE here\n`,
+    );
+
+    const summary = await engine.syncOnce();
+
+    // The scrub still catches it despite the deeper path.
+    expect(summary.secretsBlocked).toContain(note.path);
+    const log = git(fx.alice, ["log", "--all", "--name-only", "--pretty=format:"]);
+    expect(log).not.toContain(note.path);
+  });
+});
