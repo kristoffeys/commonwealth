@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { makeNoteId, parseNote, serializeNote, writeNote, type Note } from "@commonwealth/core";
-import { openRepo } from "./git.js";
+import { openRepo, scrubStagedSecrets } from "./git.js";
 
 /** One conflicting note, split into its two surviving sibling files. */
 export interface ResolvedConflict {
@@ -134,6 +134,12 @@ export async function resolveConflictsAsSiblings(
   // calls us again. An emptied commit needs `--skip` instead. Swallow both; only a truly
   // unexpected failure with no conflicts and no rebase left in progress re-throws.
   await git.add(["-A"]);
+  // Re-scrub before committing: `add -A` above (re)stages EVERYTHING in the worktree, including
+  // a secret note that the engine's pre-commit scrub deliberately left unstaged (and, for a new
+  // note, untracked — which `rebase --autostash` does not stash). Without this, `rebase --continue`
+  // would fold that secret into the resolution commit and the engine would push it (#98). The
+  // unstaged secret note stays in the worktree and is reported by the engine's step-4 scrub.
+  await scrubStagedSecrets(brainDir);
   try {
     // openRepo injects core.editor=true, so --continue records the resolution commit
     // non-interactively instead of trying to open an editor.

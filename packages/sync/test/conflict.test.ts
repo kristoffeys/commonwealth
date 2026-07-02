@@ -92,4 +92,51 @@ describe("resolveConflictsAsSiblings via SyncEngine", () => {
     // And bob successfully pushed the resolution back up.
     expect(summary.pushed).toBe(true);
   });
+
+  it("never commits or pushes a secret note that is present during conflict resolution (#98)", async () => {
+    const aliceEngine = new SyncEngine(fx.alice);
+    const bobEngine = new SyncEngine(fx.bob);
+    const SECRET = "AKIAIOSFODNN7EXAMPLE"; // a detectable AWS key
+
+    // A shared note both will edit, to force a rebase conflict on bob's sync.
+    const seeded = await writeNote(fx.alice, {
+      kind: "memory",
+      title: "Shared editable fact",
+      body: "original body",
+    });
+    await aliceEngine.syncOnce();
+    await bobEngine.syncOnce();
+    const relPath = seeded.path;
+
+    await editNoteBody(fx.alice, relPath, "ALICE rewrote this");
+    git(fx.alice, ["add", "-A"]);
+    git(fx.alice, ["commit", "-qm", "alice edit"]);
+    await editNoteBody(fx.bob, relPath, "BOB rewrote this");
+    git(fx.bob, ["add", "-A"]);
+    git(fx.bob, ["commit", "-qm", "bob edit"]);
+
+    // Bob also has a brand-new note carrying a secret. Step-1 scrub unstages it (it stays
+    // UNTRACKED in the worktree); the conflict-resolution `add -A` would otherwise re-stage it.
+    const secretNote = await writeNote(fx.bob, {
+      kind: "memory",
+      title: "Deploy key note",
+      body: `The deploy key is ${SECRET} — do not share.`,
+    });
+
+    await aliceEngine.syncOnce();
+    const summary = await bobEngine.syncOnce();
+
+    // The conflict path ran (so this exercises the rebase-continue commit, not the normal path).
+    expect(summary.conflicts.length).toBeGreaterThan(0);
+    // The secret note was reported as withheld…
+    expect(summary.secretsBlocked).toContain(secretNote.path);
+    // …it never entered ANY commit in bob's history (hence never pushed)…
+    const history = git(fx.bob, ["log", "--all", "-p"]);
+    expect(history).not.toContain(SECRET);
+    // …and origin does not have it either.
+    const remoteHistory = git(fx.bob, ["log", "origin/main", "-p"]);
+    expect(remoteHistory).not.toContain(SECRET);
+    // …while the note is preserved locally in the worktree for the user to fix.
+    expect(await fs.readFile(path.join(fx.bob, secretNote.path), "utf8")).toContain(SECRET);
+  });
 });
