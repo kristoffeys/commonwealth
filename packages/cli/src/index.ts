@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { cmdConfig, cmdReseed, delegateCurate, delegateSync } from "./commands.js";
 import { defaultOnboardDeps } from "./deps.js";
 import { defaultBrainDir } from "./init.js";
 import { runOnboard, runWizard, type OnboardOptions, type WizardDefaults } from "./onboard.js";
@@ -37,9 +38,22 @@ function printUsage(): void {
       "commonwealth — git-backed markdown team-brain",
       "",
       "Usage:",
-      "  commonwealth init [--brain <dir>] [--yes] [--reseed] [--auto-adr] [--remote <url>]",
-      "                    [--sync <dir,dir,...>] [--seed-repo <dir,dir,...>]",
-      "                    [--no-scope] [--no-seed] [--no-plugin] [--no-daemon] [--no-build]",
+      "  commonwealth init      [flags]                 onboard: build, create/join brain, plugin, daemon",
+      "  commonwealth reseed    [<repo>...] [--all]     mine repo(s) into the mapped brain and capture",
+      "  commonwealth config    <list | get <k> | set <k> <v>>   read/set the brain's shared config",
+      "  commonwealth status                            review queue + sync-daemon state",
+      "  commonwealth sync      <start | stop | once>   control/run the sync daemon",
+      "  commonwealth pending                           list notes awaiting review",
+      "  commonwealth promote   <id...> | --all         approve staged notes into canon",
+      "  commonwealth reject    <id...>                 discard staged notes",
+      "  commonwealth scope     <show | allow <p> | deny <p> | check>   per-user capture scope",
+      "  commonwealth recall    <query>                 search the brain",
+      "",
+      "All commands resolve the brain from the registry for the current directory — no --dir needed.",
+      "",
+      "init flags: [--brain <dir>] [--yes] [--reseed] [--auto-adr] [--remote <url>]",
+      "            [--sync <dir,dir,...>] [--seed-repo <dir,dir,...>]",
+      "            [--no-scope] [--no-seed] [--no-plugin] [--no-daemon] [--no-build]",
       "",
       "`init` is a single idempotent command: it builds the workspace (if needed), creates or",
       "joins the brain, syncs one or more folders into it (allowlist + a global-registry mapping",
@@ -86,12 +100,43 @@ export async function run(argv: string[]): Promise<number> {
     return command === undefined ? 2 : 0;
   }
 
-  if (command !== "init") {
-    process.stderr.write(`Unknown command: ${command}\n`);
-    printUsage();
-    return 2;
+  // Unified subcommand surface (#93). `reseed`/`config` compose core+seed; the rest delegate to
+  // the registry-aware curate/sync binaries (inheriting cwd, so they hit the mapped brain).
+  switch (command) {
+    case "init":
+      return cmdInit(rest);
+    case "reseed":
+      return cmdReseed(rest);
+    case "config":
+      return cmdConfig(rest);
+    case "status": {
+      const queue = await delegateCurate(["list"]);
+      const daemon = await delegateSync(["status"]);
+      return queue || daemon;
+    }
+    case "sync": {
+      const sub = rest[0] === "once" ? "sync" : (rest[0] ?? "status");
+      return delegateSync([sub, ...rest.slice(1)]);
+    }
+    case "pending":
+      return delegateCurate(["list"]);
+    case "promote":
+      return delegateCurate(rest.includes("--all") ? ["approve-all"] : ["approve", ...rest]);
+    case "reject":
+      return delegateCurate(["reject", ...rest]);
+    case "scope":
+      return delegateCurate(["scope", ...rest]);
+    case "recall":
+      return delegateCurate(["context", "--cwd", process.cwd(), "--query", rest.join(" ")]);
+    default:
+      process.stderr.write(`Unknown command: ${command}\n`);
+      printUsage();
+      return 2;
   }
+}
 
+/** `commonwealth init` — the onboarding orchestrator (build → create/seed/join → plugin → daemon). */
+async function cmdInit(rest: string[]): Promise<number> {
   if (rest.includes("--help") || rest.includes("-h")) {
     printUsage();
     return 0;
