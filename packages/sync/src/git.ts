@@ -28,7 +28,10 @@ function isNoteFile(rel: string): boolean {
  */
 export function openRepo(dir: string): SimpleGit {
   return simpleGit(dir, {
-    config: ["core.editor=true"],
+    // core.quotepath=false: git otherwise octal-escapes and double-quotes non-ASCII paths in
+    // porcelain output (e.g. `"caf\303\251/x.md"`), which broke `isNoteFile` — the trailing quote
+    // fails the `.md` check — so a secret in a non-ASCII-named note was never scanned (#99).
+    config: ["core.editor=true", "core.quotepath=false"],
     // core.editor is on simple-git's block list; we set it to the non-interactive `true`
     // binary purely so unattended `rebase --continue` can record its commit.
     unsafe: { allowUnsafeEditor: true },
@@ -60,11 +63,10 @@ export async function commitAll(dir: string, message: string): Promise<boolean> 
  * Used by the pre-commit secret scrub to know which files a commit is about to include.
  */
 export async function stagedFiles(dir: string): Promise<string[]> {
-  const out = await openRepo(dir).diff(["--cached", "--name-only"]);
-  return out
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
+  // `-z`: NUL-delimited and never quoted/escaped, so non-ASCII paths (and paths with spaces)
+  // come through verbatim and the secret scrub sees every staged note file (#99).
+  const out = await openRepo(dir).diff(["--cached", "--name-only", "-z"]);
+  return out.split("\0").filter((l) => l.length > 0);
 }
 
 /** Remove `files` from the index (`git reset -q -- <files>`), leaving the working tree. */

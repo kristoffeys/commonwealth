@@ -3,6 +3,7 @@ import { parseArgs } from "node:util";
 import { resolveBrainDir } from "@commonwealth/core";
 import { Daemon, isRunning, readPid } from "./daemon.js";
 import { SyncEngine } from "./engine.js";
+import { formatSyncSummary } from "./format.js";
 
 /**
  * Commonwealth sync CLI (`commonwealth-sync`). Subcommands:
@@ -31,21 +32,14 @@ async function resolveDir(dirFlag: string | undefined): Promise<string | null> {
 async function cmdSync(dir: string): Promise<void> {
   const engine = new SyncEngine(dir);
   const summary = await engine.syncOnce();
-  console.error(
-    `[commonwealth-sync] sync: committed=${summary.committed} pulled=${summary.pulled} ` +
-      `pushed=${summary.pushed} conflicts=${summary.conflicts.length}`,
-  );
+  console.error(formatSyncSummary(summary));
 }
 
 async function cmdStart(dir: string, intervalMs: number | undefined): Promise<void> {
   const daemon = new Daemon();
   await daemon.start(dir, {
     intervalMs,
-    onSync: (s) =>
-      console.error(
-        `[commonwealth-sync] sync: committed=${s.committed} pulled=${s.pulled} ` +
-          `pushed=${s.pushed} conflicts=${s.conflicts.length}`,
-      ),
+    onSync: (s) => console.error(formatSyncSummary(s)),
     onError: (err) => console.error("[commonwealth-sync] sync error:", err),
   });
   console.error(`[commonwealth-sync] daemon started on ${dir} (pid ${process.pid})`);

@@ -57,6 +57,21 @@ function candidateText(input: NewNoteInput): string {
   return `${input.title} ${input.body}`;
 }
 
+/**
+ * All candidate text a secret could hide in — title, body, tags, and every kind-specific
+ * field value — flattened for the secret gate so its coverage matches the pre-commit scrub,
+ * which scans the whole serialized note (#99). `fields` values may be strings/arrays/objects,
+ * so JSON-encode them to reach nested secrets.
+ */
+function candidateSecretScanText(input: NewNoteInput): string {
+  const parts = [input.title, input.body, ...(input.tags ?? [])];
+  if (input.author) parts.push(input.author);
+  if (input.source) parts.push(input.source);
+  if (input.fields && Object.keys(input.fields).length > 0)
+    parts.push(JSON.stringify(input.fields));
+  return parts.join("\n");
+}
+
 /** Combined title + body text of an existing note. */
 function noteText(note: Note): string {
   return `${note.frontmatter.title} ${note.body}`;
@@ -129,7 +144,11 @@ export async function curate(
   for (const candidate of candidates) {
     // Secret gate (#16): never stage a candidate carrying a credential. Reject before
     // assess/dedupe so a secret-bearing note is neither staged nor folded into `existing`.
-    if (hasSecrets(`${candidate.title}\n${candidate.body}`)) {
+    // Scan the WHOLE candidate — title, body, tags AND kind-specific fields — not just
+    // title+body: the pre-commit scrub scans the entire serialized note, so a secret in a tag
+    // or field would otherwise pass this gate, promote to canon, then be silently withheld by
+    // the scrub on every sync forever (#99).
+    if (hasSecrets(candidateSecretScanText(candidate))) {
       result.rejected.push({ candidate, reason: "contains-secret" });
       continue;
     }
