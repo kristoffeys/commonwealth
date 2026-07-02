@@ -89,6 +89,34 @@ describe("writeNote / readNote / listNotes", () => {
   });
 });
 
+describe("path containment (#76, #77)", () => {
+  it("readNote refuses a path that escapes the brain", async () => {
+    await expect(readNote(dir, "../outside.md")).rejects.toThrow(/escapes the brain/);
+    await expect(readNote(dir, "../../../../etc/passwd")).rejects.toThrow(/escapes the brain/);
+  });
+
+  it("caller `fields` cannot override the derived id", async () => {
+    const note = await writeNote(dir, {
+      kind: "memory",
+      title: "Honest fact",
+      body: "b",
+      created: "2026-07-01",
+      // A poisoned candidate trying to hijack the id and desync it from the filename.
+      fields: { id: "../../evil", status: "active" },
+    });
+    // The derived id wins, and the file lives at the safe derived path.
+    expect(note.frontmatter.id).toMatch(/^2026-07-01-honest-fact-[0-9a-z]{4}$/);
+    expect(note.path).toBe(`memory/${note.frontmatter.id}.md`);
+    const back = await readNote(dir, note.path);
+    expect(back.frontmatter.id).toBe(note.frontmatter.id);
+  });
+
+  it("parseNote rejects a note whose id is not a single safe segment", () => {
+    const raw = "---\nid: ../../evil\nkind: memory\ntitle: X\ncreated: 2026-07-01\n---\nbody";
+    expect(() => parseNote(raw, "memory/x.md")).toThrow();
+  });
+});
+
 describe("project provenance (ADR-0015)", () => {
   it("writeNote files a sourced note under <project>/<kind>/ and records source frontmatter", async () => {
     const note = await writeNote(dir, {

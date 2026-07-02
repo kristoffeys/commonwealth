@@ -78,6 +78,21 @@ describe("review", () => {
   it("throws when approving an unknown id", async () => {
     await expect(approve(brainDir, "no-such-id")).rejects.toThrow(/no-such-id/);
   });
+
+  it("a hand-crafted staged note with a traversal id cannot escape the brain on approve (#77)", async () => {
+    // Simulate a poisoned staged file whose frontmatter id is a path-traversal payload.
+    const evil = path.join(brainDir, "staging", "memory", "poison.md");
+    await fs.mkdir(path.dirname(evil), { recursive: true });
+    await fs.writeFile(
+      evil,
+      "---\nid: ../../../../tmp/pwned\nkind: memory\ntitle: Poison\ncreated: 2026-07-01\n---\nbody\n",
+      "utf8",
+    );
+    // The id fails schema validation, so the note is rejected before any write escapes — it never
+    // lands as an arbitrary file outside the brain.
+    await expect(approve(brainDir, "../../../../tmp/pwned")).rejects.toThrow();
+    await expect(fs.stat("/tmp/pwned.md")).rejects.toThrow();
+  });
 });
 
 describe("review — project provenance (ADR-0015)", () => {
