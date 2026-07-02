@@ -68,6 +68,21 @@ export function parseNote(raw: string, notePath: string): Note {
   return { frontmatter, body: parsed.content.trim(), path: notePath };
 }
 
+/**
+ * Resolve `relPath` under `brainDir` and assert it stays inside the brain (path containment).
+ * A `relPath` containing `../` — from a malicious MCP `read` arg or an attacker-controlled note
+ * id — would otherwise escape the brain and read/write arbitrary files (#76, #77). Boundary-safe:
+ * `/brain` does not contain `/brainiac`. Returns the resolved absolute path.
+ */
+export function resolveWithinBrain(brainDir: string, relPath: string): string {
+  const base = path.resolve(brainDir);
+  const abs = path.resolve(base, relPath);
+  if (abs !== base && !abs.startsWith(base + path.sep)) {
+    throw new Error(`Path escapes the brain directory: ${relPath}`);
+  }
+  return abs;
+}
+
 /** Serialize a {@link Note} back to canonical `---`-fenced frontmatter + body. */
 export function serializeNote(note: Note): string {
   const ordered = orderFrontmatter(note.frontmatter as unknown as Record<string, unknown>);
@@ -85,9 +100,13 @@ export async function writeNote(brainDir: string, input: NewNoteInput): Promise<
   const created = input.created ?? today();
   const id = makeNoteId(input.title, created);
   const relPath = pathForNote(input.kind, id, input.source);
-  const absPath = path.join(brainDir, relPath);
+  const absPath = resolveWithinBrain(brainDir, relPath);
 
+  // Spread caller `fields` FIRST so the derived, trusted keys below always win. Otherwise a
+  // candidate carrying `fields: { id: "../../evil" }` would override the safe derived id and
+  // desync frontmatter.id from the filename — the injection point behind #77.
   const raw: Record<string, unknown> = {
+    ...(input.fields ?? {}),
     id,
     kind: input.kind,
     title: input.title,
@@ -95,7 +114,6 @@ export async function writeNote(brainDir: string, input: NewNoteInput): Promise<
     created,
     ...(input.author ? { author: input.author } : {}),
     ...(input.source ? { source: input.source } : {}),
-    ...(input.fields ?? {}),
   };
   const frontmatter = Frontmatter.parse(raw);
   const note: Note = { frontmatter, body: input.body.trim(), path: relPath };
@@ -110,7 +128,7 @@ export async function writeNote(brainDir: string, input: NewNoteInput): Promise<
 
 /** Read and parse a single note by its repo-relative path. */
 export async function readNote(brainDir: string, relPath: string): Promise<Note> {
-  const raw = await fs.readFile(path.join(brainDir, relPath), "utf8");
+  const raw = await fs.readFile(resolveWithinBrain(brainDir, relPath), "utf8");
   return parseNote(raw, relPath);
 }
 

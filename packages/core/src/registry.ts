@@ -117,15 +117,22 @@ function resolveRegistryPath(explicit?: string): string {
   return path.join(os.homedir(), ".commonwealth", "registry.json");
 }
 
-/** Parse the registry file into a normalized {@link Registry}; null on missing/invalid. */
-async function loadRegistry(registryPath: string): Promise<Registry | null> {
+/**
+ * Classified result of reading the registry file, so callers can tell "no file yet" (safe to
+ * start empty) apart from "file present but unparseable" (must NOT be clobbered — #78).
+ */
+type RegistryLoad =
+  { status: "ok"; registry: Registry } | { status: "missing" } | { status: "corrupt"; raw: string };
+
+/** Read + classify the registry file. Never throws; distinguishes missing from corrupt. */
+async function readRegistryFile(registryPath: string): Promise<RegistryLoad> {
   const raw = await readFileOrNull(registryPath);
-  if (raw === null) return null;
+  if (raw === null) return { status: "missing" };
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return null;
+    return { status: "corrupt", raw };
   }
   const obj = (typeof parsed === "object" && parsed !== null ? parsed : {}) as Partial<Registry>;
   const mappings = Array.isArray(obj.mappings) ? obj.mappings : [];
@@ -140,7 +147,18 @@ async function loadRegistry(registryPath: string): Promise<Registry | null> {
       clean.push({ prefix: (m as RegistryMapping).prefix, brain: (m as RegistryMapping).brain });
     }
   }
-  return { mappings: clean };
+  return { status: "ok", registry: { mappings: clean } };
+}
+
+/**
+ * Parse the registry file into a normalized {@link Registry}; null on missing OR invalid. Used by
+ * {@link resolveBrainDir}, which must never throw on a bad file — a corrupt registry simply
+ * resolves no mappings (resolution falls through to env). Writers use {@link readRegistryFile}
+ * directly so they can refuse to clobber a corrupt file (#78).
+ */
+async function loadRegistry(registryPath: string): Promise<Registry | null> {
+  const load = await readRegistryFile(registryPath);
+  return load.status === "ok" ? load.registry : null;
 }
 
 /**
@@ -245,8 +263,10 @@ export function defaultBrainsDir(): string {
  * - an identical mapping → no-op (`{ added: false, updated: false }`).
  *
  * Idempotent. Creates the registry's directory if missing and persists pretty (2-space) JSON
- * with a trailing newline. A missing directory is created; genuine IO errors may propagate
- * (the CLI dependency wraps them).
+ * atomically (tmp file + rename) so a crash mid-write cannot corrupt it. A present-but-corrupt
+ * registry is NOT clobbered: it is backed up to `registry.json.corrupt-<ts>` and a clear error is
+ * thrown, so a transient/partial-write corruption never silently wipes every other project's
+ * brain wiring (#78). A missing file is treated as an empty registry (the normal first-run case).
  */
 export async function addRegistryMapping(
   prefix: string,
@@ -256,7 +276,18 @@ export async function addRegistryMapping(
   const absPrefix = expand(prefix);
   const absBrain = expand(brain);
 
-  const registry = (await loadRegistry(registryPath)) ?? { mappings: [] };
+  const load = await readRegistryFile(registryPath);
+  if (load.status === "corrupt") {
+    // Preserve the unparseable file rather than overwrite it, then refuse loudly. Wiring state
+    // is user data; "never silently overwrite" (ADR-0003) applies here as much as to notes.
+    const backup = `${registryPath}.corrupt-${Date.now()}`;
+    await fs.rename(registryPath, backup).catch(() => fs.writeFile(backup, load.raw, "utf8"));
+    throw new Error(
+      `Refusing to overwrite a corrupt registry at ${registryPath} (backed up to ${backup}). ` +
+        `Fix or remove it, then retry.`,
+    );
+  }
+  const registry: Registry = load.status === "ok" ? load.registry : { mappings: [] };
   const existing = registry.mappings.find((m) => expand(m.prefix) === absPrefix);
 
   let added = false;
@@ -273,7 +304,10 @@ export async function addRegistryMapping(
   }
 
   await fs.mkdir(path.dirname(registryPath), { recursive: true });
-  await fs.writeFile(registryPath, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
+  // Atomic write: a crash mid-write leaves the old registry intact rather than a partial file.
+  const tmp = `${registryPath}.${process.pid}.tmp`;
+  await fs.writeFile(tmp, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
+  await fs.rename(tmp, registryPath);
   return { added, updated };
 }
 

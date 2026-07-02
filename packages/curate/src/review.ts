@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { pathForNote, type Note } from "@commonwealth/core";
+import { pathForNote, resolveWithinBrain, type Note } from "@commonwealth/core";
 import { listStaged, stagedAbsPath } from "./staging.js";
 
 /** All notes currently awaiting review in the staging queue. */
@@ -27,7 +27,9 @@ export async function approve(brainDir: string, id: string): Promise<string> {
   // Promote into the same project subtree the note carries (ADR-0015), mirroring writeNote's
   // layout: `<project>/<kind>/<id>.md`, or `<kind>/<id>.md` when unattributed.
   const canonRel = pathForNote(note.frontmatter.kind, id, note.frontmatter.source);
-  const canonAbs = path.join(brainDir, canonRel);
+  // Containment guard (#77): the schema already forbids a `..`/slash id, but assert the resolved
+  // write path stays inside the brain so a crafted id/source can never escape on promote.
+  const canonAbs = resolveWithinBrain(brainDir, canonRel);
   const stagedAbs = stagedAbsPath(brainDir, note);
 
   await fs.mkdir(path.dirname(canonAbs), { recursive: true });

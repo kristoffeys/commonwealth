@@ -24,9 +24,23 @@ export const IsoDate = z.preprocess(
   z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "expected a YYYY-MM-DD date"),
 );
 
+/**
+ * A note `id` must be a single, safe filename segment: it is the file's stem and is joined onto
+ * the brain path to build the canonical write path (`<kind>/<id>.md`). Rejecting slashes and
+ * `..` here — at the one point every note (written or read) is validated — stops a crafted id
+ * (`../../evil`) from escaping the brain on approve/write (#77). Legitimate ids from `makeNoteId`
+ * are `<date>-<slug>-<suffix>`, which never contain these.
+ */
+const SafeId = z
+  .string()
+  .min(1)
+  .refine((s) => !s.includes("/") && !s.includes("\\") && s !== "." && s !== "..", {
+    message: "id must be a single path segment (no '/', '\\\\', or '..')",
+  });
+
 /** Fields common to every note kind. */
 const baseShape = {
-  id: z.string().min(1),
+  id: SafeId,
   title: z.string().min(1),
   tags: z.array(z.string()).default([]),
   created: IsoDate,
