@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { loadBrainConfig, setFeature } from "../src/config";
 import { initBrain } from "../src/scaffold";
 import { SCHEMA_VERSION } from "../src/schema";
 
@@ -138,5 +139,22 @@ describe("initBrain", () => {
     await expect(initBrain(dir, { name: "x" })).resolves.toBeUndefined();
     // Runtime entries survive the re-init.
     await expect(fs.stat(path.join(dir, "acme-widgets", "memory"))).resolves.toBeDefined();
+  });
+
+  it("re-init preserves a team-modified config.json instead of resetting it (#75)", async () => {
+    await initBrain(dir, { name: "acme" });
+    // Team customizes the brain: turn off autoPromote and add a remote.
+    await setFeature(dir, "autoPromote", false);
+    const configPath = path.join(dir, ".commonwealth", "config.json");
+    const customized = JSON.parse(await fs.readFile(configPath, "utf8"));
+    customized.remotes = ["git@github.com:acme/brain.git"];
+    await fs.writeFile(configPath, `${JSON.stringify(customized, null, 2)}\n`, "utf8");
+
+    // A reseed re-runs initBrain on the existing brain — it must NOT clobber the config.
+    await initBrain(dir, { name: "acme" });
+
+    const after = await loadBrainConfig(dir);
+    expect(after.features.autoPromote).toBe(false);
+    expect(after.remotes).toEqual(["git@github.com:acme/brain.git"]);
   });
 });

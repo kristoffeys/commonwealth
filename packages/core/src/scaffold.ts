@@ -117,6 +117,23 @@ async function writeFile(file: string, contents: string): Promise<void> {
 }
 
 /**
+ * Write `contents` to `file` only if it does not already exist (creating parent dirs). Used for
+ * files that hold real, team-modifiable state (`config.json`, the schema-version pin, the git
+ * driver files) so a re-init / `--reseed` on an existing brain never clobbers settings the team
+ * changed — e.g. `remotes`, `curation`, or a `false` `autoPromote` (#75). Uses the `wx` open flag
+ * (fail-if-exists) so the check-and-write is a single atomic syscall, not a TOCTOU race.
+ */
+async function writeFileIfAbsent(file: string, contents: string): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  try {
+    await fs.writeFile(file, contents, { encoding: "utf8", flag: "wx" });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return;
+    throw err;
+  }
+}
+
+/**
  * Initialize a brain repository skeleton at `dir` (see docs/01-architecture.md §1,
  * docs/02-data-model.md). Creates:
  *   - the four kind folders: memory/ decisions/ work-state/ people/ (each with `.gitkeep`)
@@ -150,17 +167,20 @@ export async function initBrain(dir: string, opts: InitBrainOptions = {}): Promi
     await writeFile(path.join(abs, "INDEX.md"), `# ${title} index\n\n_generated_\n`);
   }
 
-  // .commonwealth metadata: schema-version pin + config.json.
-  await writeFile(path.join(dir, ".commonwealth", "schema-version"), `${SCHEMA_VERSION}\n`);
+  // .commonwealth metadata: schema-version pin + config.json. Written only when absent so a
+  // re-init never resets a brain the team already configured (#75): config.json is real,
+  // team-owned data (remotes/curation/autoPromote), recoverable only via git archaeology.
+  await writeFileIfAbsent(path.join(dir, ".commonwealth", "schema-version"), `${SCHEMA_VERSION}\n`);
   const config = defaultBrainConfig(name);
-  await writeFile(
+  await writeFileIfAbsent(
     path.join(dir, ".commonwealth", "config.json"),
     `${JSON.stringify(config, null, 2)}\n`,
   );
 
-  // Git merge/ignore drivers for derived + disposable artifacts (ADR-0003, ADR-0005).
-  await writeFile(path.join(dir, ".gitattributes"), GITATTRIBUTES);
-  await writeFile(path.join(dir, ".gitignore"), GITIGNORE);
+  // Git merge/ignore drivers for derived + disposable artifacts (ADR-0003, ADR-0005). Also
+  // absent-only: they're static, but re-writing them serves no purpose and keeps init a no-op.
+  await writeFileIfAbsent(path.join(dir, ".gitattributes"), GITATTRIBUTES);
+  await writeFileIfAbsent(path.join(dir, ".gitignore"), GITIGNORE);
 
   // Minimal generated router placeholder; real content comes from regenerateDerived.
   const commonwealth = [
