@@ -68,6 +68,20 @@ export function defaultBrainConfig(name: string): BrainConfig {
   };
 }
 
+/** Brains already warned about a schema skew this process, so the warning fires once each. */
+const schemaSkewWarned = new Set<string>();
+
+/** Warn (once per brain per process) that the on-disk config is a newer schema than this code. */
+function warnSchemaSkewOnce(brainDir: string, found: number): void {
+  const key = path.resolve(brainDir);
+  if (schemaSkewWarned.has(key)) return;
+  schemaSkewWarned.add(key);
+  console.error(
+    `[commonwealth] brain at ${key} is schema v${found} but this build understands v${SCHEMA_VERSION}; ` +
+      `some fields may not be read correctly — upgrade Commonwealth.`,
+  );
+}
+
 /** Path of the brain config relative to the brain root. */
 const CONFIG_REL = path.join(".commonwealth", "config.json");
 
@@ -101,6 +115,13 @@ export async function loadBrainConfig(brainDir: string): Promise<BrainConfig> {
 
   const obj = (typeof parsed === "object" && parsed !== null ? parsed : {}) as Partial<BrainConfig>;
 
+  // Detect a brain written by a NEWER schema than this code understands (#101): silently
+  // proceeding could mis-read forward-version fields. Warn once per brain rather than throw —
+  // the config still loads best-effort — so a version skew is at least visible.
+  if (typeof obj.schemaVersion === "number" && obj.schemaVersion > SCHEMA_VERSION) {
+    warnSchemaSkewOnce(brainDir, obj.schemaVersion);
+  }
+
   return {
     name: typeof obj.name === "string" ? obj.name : defaults.name,
     schemaVersion:
@@ -123,7 +144,12 @@ export async function loadBrainConfig(brainDir: string): Promise<BrainConfig> {
 export async function saveBrainConfig(brainDir: string, config: BrainConfig): Promise<void> {
   const file = brainConfigPath(brainDir);
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  // Atomic write (tmp + rename): a crash mid-write must not leave a torn config.json, which
+  // `loadBrainConfig` would fail to parse and silently replace with defaults — flipping
+  // team settings like `autoPromote` back on (#101). Rename is atomic on the same filesystem.
+  const tmp = `${file}.${process.pid}.tmp`;
+  await fs.writeFile(tmp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  await fs.rename(tmp, file);
 }
 
 /**

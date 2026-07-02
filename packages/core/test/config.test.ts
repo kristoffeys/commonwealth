@@ -1,14 +1,16 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   brainConfigPath,
   defaultBrainConfig,
   isFeatureEnabled,
   loadBrainConfig,
+  saveBrainConfig,
   setFeature,
 } from "../src/config";
+import { SCHEMA_VERSION } from "../src/schema";
 import { initBrain } from "../src/scaffold";
 
 let dir: string;
@@ -78,5 +80,40 @@ describe("loadBrainConfig resilience", () => {
     const config = await loadBrainConfig(dir);
     expect(config.features.autoAdr).toBe(true);
     expect(config.features.futureFlag).toBe(true);
+  });
+});
+
+describe("saveBrainConfig durability (#101)", () => {
+  it("writes atomically and leaves no temp file behind", async () => {
+    const cfg = defaultBrainConfig("acme");
+    cfg.remotes = ["git@github.com:acme/brain.git"];
+    await saveBrainConfig(dir, cfg);
+
+    // Round-trips…
+    const back = await loadBrainConfig(dir);
+    expect(back.remotes).toEqual(["git@github.com:acme/brain.git"]);
+    // …and no `.tmp` sidecar is left in .commonwealth/ (rename cleaned it up).
+    const entries = await fs.readdir(path.join(dir, ".commonwealth"));
+    expect(entries.some((e) => e.endsWith(".tmp"))).toBe(false);
+  });
+
+  it("warns once when the on-disk config is a newer schema than this build", async () => {
+    await fs.mkdir(path.join(dir, ".commonwealth"), { recursive: true });
+    await fs.writeFile(
+      brainConfigPath(dir),
+      `${JSON.stringify({ name: "future", schemaVersion: SCHEMA_VERSION + 5, features: {} })}\n`,
+      "utf8",
+    );
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    let skewWarnings: string[];
+    try {
+      await loadBrainConfig(dir);
+      await loadBrainConfig(dir); // second read must NOT warn again (once per brain)
+      // Capture BEFORE mockRestore(), which clears mock.calls.
+      skewWarnings = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes("schema v"));
+    } finally {
+      warn.mockRestore();
+    }
+    expect(skewWarnings).toHaveLength(1);
   });
 });

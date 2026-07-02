@@ -122,7 +122,20 @@ export async function writeNote(brainDir: string, input: NewNoteInput): Promise<
   await fs.mkdir(path.dirname(absPath), { recursive: true });
   const tmp = `${absPath}.${shortId()}.tmp`;
   await fs.writeFile(tmp, content, "utf8");
-  await fs.rename(tmp, absPath);
+  // Publish via link+unlink rather than rename so an id collision fails CLOSED: `fs.link`
+  // throws EEXIST if the note path already exists, whereas `fs.rename` would silently
+  // overwrite the existing note (#101). makeNoteId's random suffix makes a real collision
+  // astronomically rare, but "never silently overwrite" is a core invariant (ADR-0003).
+  try {
+    await fs.link(tmp, absPath);
+  } catch (err) {
+    await fs.rm(tmp, { force: true });
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`Refusing to overwrite an existing note at ${relPath} (id collision)`);
+    }
+    throw err;
+  }
+  await fs.rm(tmp, { force: true });
   return note;
 }
 
