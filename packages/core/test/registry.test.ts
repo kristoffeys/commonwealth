@@ -296,6 +296,40 @@ describe("linkBrain", () => {
   });
 });
 
+describe("addRegistryMapping — corrupt-file safety (#78)", () => {
+  it("refuses to clobber a corrupt registry, backs it up, and preserves the original", async () => {
+    const registryPath = path.join(root, "registry.json");
+    // A partial/corrupt write: invalid JSON that still holds real wiring bytes.
+    const corrupt = '{ "mappings": [ { "prefix": "/a", "brain": "/b" }';
+    await fs.writeFile(registryPath, corrupt, "utf8");
+
+    await expect(addRegistryMapping("/new", "/new-brain", registryPath)).rejects.toThrow(/corrupt/);
+
+    // The corrupt file is not silently replaced with a one-entry registry.
+    const files = await fs.readdir(root);
+    const backup = files.find((f) => f.startsWith("registry.json.corrupt-"));
+    expect(backup).toBeTruthy();
+    // The original bytes survive (in the backup, since we rename it aside).
+    expect(await fs.readFile(path.join(root, backup!), "utf8")).toBe(corrupt);
+  });
+
+  it("treats a missing registry as empty and creates it (normal first run)", async () => {
+    const registryPath = path.join(root, "sub", "registry.json");
+    const res = await addRegistryMapping("/proj", "/brain", registryPath);
+    expect(res.added).toBe(true);
+    const written = JSON.parse(await fs.readFile(registryPath, "utf8"));
+    expect(written.mappings).toHaveLength(1);
+  });
+
+  it("preserves existing mappings when adding a new one", async () => {
+    const registryPath = path.join(root, "registry.json");
+    await addRegistryMapping("/one", "/brain-one", registryPath);
+    await addRegistryMapping("/two", "/brain-two", registryPath);
+    const written = JSON.parse(await fs.readFile(registryPath, "utf8"));
+    expect(written.mappings).toHaveLength(2);
+  });
+});
+
 describe("resolution precedence", () => {
   it("a marker (layer 1) wins over a registry mapping (layer 3)", async () => {
     const registryPath = path.join(root, "registry.json");
