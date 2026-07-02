@@ -115,14 +115,68 @@ export function buildSessionStartOutput(context) {
  * feature flag (curate enforces this, ADR-0009), so extraction may propose them freely.
  */
 const EXTRACTION_PROMPT = [
-  "You are the Commonwealth capture agent. Read the attached Claude Code session transcript and",
-  "extract durable team knowledge worth remembering: memories (facts/how-tos), work-state",
-  "(what's in progress), people notes, and — only if a real decision was made — decisions.",
+  "You are the Commonwealth capture agent. The Claude Code session transcript is provided on STDIN",
+  "as `role: text` lines (bulky tool outputs elided; tool calls shown as [tool_use: name]).",
+  "Read it and extract durable team knowledge worth remembering: memories (facts/how-tos),",
+  "work-state (what's in progress), people notes, and — only if a real decision was made — decisions.",
   "",
   "Output ONLY a JSON array (no prose, no code fence) of objects shaped:",
   '  { "kind": "memory|work-state|decision|people", "title": string, "body": string, "tags"?: string[] }',
   "Skip trivia, secrets, and anything ephemeral. If nothing is worth capturing, output [].",
 ].join("\n");
+
+/**
+ * Last-resort cap for the payload piped to the extraction agent. Stdin has no ARG_MAX limit,
+ * but an enormous payload can still blow a model context window. This applies only AFTER
+ * {@link compactTranscript} has stripped the bulky tool payloads, so in practice a whole
+ * session fits; only pathologically long sessions get trimmed (tail kept — recent work). (#84)
+ */
+const MAX_TRANSCRIPT_BYTES = 2_000_000;
+
+/**
+ * Reduce a Claude Code transcript (JSONL) to the conversational signal the capture agent
+ * needs — user/assistant text and tool *names* — dropping the bulky `tool_result` payloads
+ * (file reads, command output) that dominate size. This preserves the WHOLE session (early
+ * decisions included), unlike a byte-tail cap. Falls back to the raw transcript if the lines
+ * don't parse as the expected shape, so a schema change never makes capture worse. (#84)
+ */
+export function compactTranscript(raw) {
+  const out = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    let obj;
+    try {
+      obj = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    const msg = obj?.message ?? obj;
+    const role = obj?.type ?? msg?.role ?? "?";
+    const content = msg?.content;
+    if (typeof content === "string") {
+      out.push(`${role}: ${content}`);
+    } else if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block?.type === "text" && typeof block.text === "string") {
+          out.push(`${role}: ${block.text}`);
+        } else if (block?.type === "tool_use" && block.name) {
+          out.push(`${role} [tool_use: ${block.name}]`);
+        } else if (block?.type === "tool_result") {
+          const text =
+            typeof block.content === "string"
+              ? block.content
+              : Array.isArray(block.content)
+                ? block.content.map((c) => c?.text ?? "").join(" ")
+                : "";
+          // Keep only a short head of each tool result — enough for context, not the whole blob.
+          out.push(`[tool_result] ${text.slice(0, 400)}`);
+        }
+      }
+    }
+  }
+  return out.join("\n");
+}
 
 /**
  * Run a command, resolving with `{ code, stdout, stderr }`. Never rejects — a missing
@@ -159,9 +213,13 @@ async function run(cmd, args, { input, cwd, env } = {}) {
       resolve({ code, stdout, stderr });
     });
     if (typeof input === "string") {
-      child.stdin.write(input);
+      // Ignore EPIPE etc. if the child exits before consuming stdin — an unhandled stream
+      // 'error' would crash the hook process and break the session (#84 hardening).
+      child.stdin.on("error", () => {});
+      child.stdin.write(input, () => child.stdin.end());
+    } else {
+      child.stdin.end();
     }
-    child.stdin.end();
   });
 }
 
@@ -229,9 +287,29 @@ export function realDeps(overrides = {}) {
     } catch {
       return [];
     }
-    const prompt = `${EXTRACTION_PROMPT}\n\n--- TRANSCRIPT (JSONL) ---\n${transcript}`;
-    const res = await run(claudeBin, ["-p", prompt]);
-    if (res.code !== 0) return []; // `claude` unavailable or errored → capture nothing.
+    // The payload goes on STDIN, never in argv: real sessions are multiple MB and a single
+    // argv element that large throws spawn E2BIG (ARG_MAX ~1MB), which silently captured
+    // nothing for every real session (#84). Compact first (keeps the whole conversation, drops
+    // bulky tool payloads); fall back to raw if the transcript didn't parse as expected.
+    const compact = compactTranscript(transcript);
+    let payload = compact.length > 0 ? compact : transcript;
+    // Only if the COMPACTED payload is still enormous do we trim — tail kept (recent work).
+    if (payload.length > MAX_TRANSCRIPT_BYTES) {
+      const tail = payload.slice(payload.length - MAX_TRANSCRIPT_BYTES);
+      const nl = tail.indexOf("\n");
+      payload = nl >= 0 ? tail.slice(nl + 1) : tail; // drop the partial leading line
+    }
+    const res = await run(claudeBin, ["-p", EXTRACTION_PROMPT], { input: payload });
+    if (res.code !== 0) {
+      // `claude` unavailable/errored, or a stdin/pipe failure — capture nothing, but leave a
+      // breadcrumb so a silently-empty capture is at least visible in the hook's stderr log.
+      if (res.error || res.stderr) {
+        console.error(
+          `[commonwealth] capture: extraction produced nothing (${res.error?.code ?? res.code ?? "no code"})`,
+        );
+      }
+      return [];
+    }
     return parseCandidateArray(res.stdout);
   }
 
@@ -250,7 +328,11 @@ export function realDeps(overrides = {}) {
 // every session silently do nothing. Keep in sync with packages/core/src/registry.ts.
 
 const MARKER_REL = path.join(".commonwealth", "brain");
-const BRAIN_CONFIG_REL = path.join(".commonwealth", "config.json");
+// A brain is identified by `.commonwealth/schema-version`, NOT `.commonwealth/config.json`.
+// The latter name collides with the per-user scope config at `~/.commonwealth/config.json`
+// (ADR-0008), so keying off it makes `$HOME` resolve as a brain and shadow the registry for
+// every project under home. Mirror core's registry.ts BRAIN_IDENTITY_REL (ADR-0011, #74).
+const BRAIN_IDENTITY_REL = path.join(".commonwealth", "schema-version");
 
 function expandPath(entry, base) {
   const home = os.homedir();
@@ -327,7 +409,7 @@ async function loadRegistryMappings(registryPath) {
 /**
  * Resolve the brain for `startDir`: (1) nearest `.commonwealth/brain` marker whose target
  * exists (a dangling marker is skipped so it falls through, #68) → (2) nearest ancestor that
- * is itself a brain (`.commonwealth/config.json`) → (3) user registry prefix mapping →
+ * is itself a brain (`.commonwealth/schema-version`, #74) → (3) user registry prefix mapping →
  * (4) `$COMMONWEALTH_BRAIN_DIR` → (5) null. Pure fs/path; never throws. Exported for tests so
  * the real resolution path is covered (not just injected fakes).
  */
@@ -348,7 +430,7 @@ export async function realResolveBrainDir(startDir) {
     }
   }
   for (const dir of walkUp(start)) {
-    if (await isFile(path.join(dir, BRAIN_CONFIG_REL))) return dir;
+    if (await isFile(path.join(dir, BRAIN_IDENTITY_REL))) return dir;
   }
   const mappings = await loadRegistryMappings(resolveRegistryPath());
   if (mappings) {

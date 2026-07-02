@@ -67,6 +67,26 @@ describe("realResolveBrainDir (inlined registry — no bare @commonwealth/core i
   it("returns null when there is no brain, marker, registry, or env", async () => {
     expect(await realResolveBrainDir(path.join(tmp, "plain"))).toBeNull();
   });
+
+  it("does NOT treat a dir with only .commonwealth/config.json as a brain (#74)", async () => {
+    // Simulates the $HOME collision: ~/.commonwealth/config.json (the per-user scope config)
+    // must not make an ancestor resolve as a brain, or it shadows the registry for every
+    // project beneath it. A registry mapping under that ancestor must win.
+    const homeish = path.join(tmp, "homeish");
+    const project = path.join(homeish, "projects", "app");
+    const brain = path.join(tmp, "real-brain");
+    await fs.mkdir(path.join(homeish, ".commonwealth"), { recursive: true });
+    await fs.writeFile(path.join(homeish, ".commonwealth", "config.json"), "{}\n"); // scope config
+    await fs.mkdir(project, { recursive: true });
+    await initBrain(brain); // a real brain (has schema-version)
+    await fs.writeFile(
+      process.env.COMMONWEALTH_REGISTRY as string,
+      JSON.stringify({ mappings: [{ prefix: path.join(homeish, "projects"), brain }] }),
+    );
+
+    // config.json at `homeish` no longer hijacks; the registry mapping resolves.
+    expect(await realResolveBrainDir(project)).toBe(brain);
+  });
 });
 
 describe("realDeps().capture (real curate binary over stdin)", () => {
@@ -91,5 +111,37 @@ describe("realDeps().capture (real curate binary over stdin)", () => {
     expect(canon.filter((n) => n.frontmatter.kind === "memory")).toHaveLength(1);
     const staged = await fs.readdir(path.join(brain, "staging", "memory")).catch(() => []);
     expect(staged.filter((f) => f.endsWith(".md"))).toHaveLength(0);
+  });
+
+  it("extracts from a multi-MB transcript without E2BIG — transcript goes on stdin, not argv (#84)", async () => {
+    // A transcript larger than ARG_MAX (~1MB): if it were passed as a `claude -p` argv element
+    // the spawn throws E2BIG and extraction silently returns []. Piping it on stdin must work.
+    const transcriptPath = path.join(tmp, "transcript.jsonl");
+    const bigLine = JSON.stringify({ role: "user", content: "x".repeat(2000) }) + "\n";
+    await fs.writeFile(transcriptPath, bigLine.repeat(1600)); // ~3.3 MB, > ARG_MAX
+
+    // Stub `claude`: read stdin, and only emit a candidate if the transcript actually arrived
+    // there (proving stdin delivery). If argv were used, the spawn would have E2BIG'd instead.
+    const stub = path.join(tmp, "claude-stub.mjs");
+    await fs.writeFile(
+      stub,
+      [
+        "let s = '';",
+        "process.stdin.on('data', (d) => (s += d));",
+        "process.stdin.on('end', () => {",
+        "  const got = s.length > 1_000_000;",
+        "  process.stdout.write(got ? JSON.stringify([{kind:'memory',title:'from stdin',body:'the transcript arrived on stdin, no E2BIG'}]) : '[]');",
+        "});",
+      ].join("\n"),
+    );
+    const stubBin = path.join(tmp, "claude-stub.sh");
+    await fs.writeFile(stubBin, `#!/bin/sh\nexec "${process.execPath}" "${stub}"\n`);
+    await fs.chmod(stubBin, 0o755);
+
+    const deps = realDeps({ claudeBin: stubBin });
+    const candidates = await deps.extractCandidates(transcriptPath);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].title).toBe("from stdin");
   });
 });
