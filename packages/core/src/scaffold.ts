@@ -90,6 +90,13 @@ async function initGitRepo(dir: string): Promise<void> {
  * surprise, so `initBrain` refuses unless `force` is set.
  */
 async function isSafeToInit(dir: string): Promise<boolean> {
+  // A directory that is ALREADY a brain (has the identity file) is always safe to re-init:
+  // initBrain is idempotent and no longer overwrites config (ADR-0013/#75), so re-scaffolding
+  // for a reseed is a no-op on existing state. This lets `commonwealth init --reseed` run on a
+  // populated brain whose root also holds runtime entries (`staging/`, `.DS_Store`, and the
+  // per-project note folders from ADR-0015) that predate/aren't in BRAIN_ENTRIES (#61-followup).
+  if (existsSync(path.join(dir, ".commonwealth", "schema-version"))) return true;
+
   let entries: string[];
   try {
     entries = await fs.readdir(dir);

@@ -126,4 +126,17 @@ describe("initBrain", () => {
     await expect(initBrain(dir, { force: true })).resolves.toBeUndefined();
     await expect(fs.stat(path.join(dir, "memory"))).resolves.toBeDefined();
   });
+
+  it("re-inits an existing brain even with runtime entries present (reseed) without force", async () => {
+    await initBrain(dir, { name: "x" });
+    // Simulate a lived-in brain: review queue, macOS cruft, and a per-project note folder
+    // (ADR-0015) — none of which are in BRAIN_ENTRIES.
+    await fs.mkdir(path.join(dir, "staging", "memory"), { recursive: true });
+    await fs.mkdir(path.join(dir, "acme-widgets", "memory"), { recursive: true });
+    await fs.writeFile(path.join(dir, ".DS_Store"), "\0\0");
+    // Reseed re-runs initBrain on the existing brain; it must NOT throw (was the crash).
+    await expect(initBrain(dir, { name: "x" })).resolves.toBeUndefined();
+    // Runtime entries survive the re-init.
+    await expect(fs.stat(path.join(dir, "acme-widgets", "memory"))).resolves.toBeDefined();
+  });
 });
