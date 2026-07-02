@@ -3,6 +3,7 @@ import {
   listNotes,
   readNote,
   regenerateDerived,
+  resolveProjectSource,
   search,
   writeNote,
   type Frontmatter,
@@ -94,7 +95,10 @@ export async function remember(
   brainDir: string,
   { kind, title, body, tags, author }: RememberArgs,
 ): Promise<RememberResult> {
-  const note = await writeNote(brainDir, { kind, title, body, tags, author });
+  // Attribute the note to the project the MCP is running in (ADR-0015), so it files under
+  // <project>/<kind>/ like hook-captured notes. Best-effort: unresolved → unattributed.
+  const source = (await resolveProjectSource(process.cwd())) ?? undefined;
+  const note = await writeNote(brainDir, { kind, title, body, tags, author, source });
   // Refresh disposable derived artifacts so the write is visible to reads/search.
   await buildIndex(brainDir);
   await regenerateDerived(brainDir);

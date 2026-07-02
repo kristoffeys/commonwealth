@@ -29,9 +29,30 @@ export function makeNoteId(title: string, created: string, suffix: string = shor
   return `${created}-${slugify(title)}-${suffix}`;
 }
 
-/** Repo-relative path for a note of a given kind and id. */
-export function pathForNote(kind: NoteKind, id: string): string {
-  return `${KIND_DIR[kind]}/${id}.md`;
+/**
+ * A filesystem-safe single path segment for a project `source` (ADR-0015). The source may be
+ * an `owner/repo` slug; we flatten separators so a project is exactly one folder level
+ * (`<project>/<kind>/<id>.md`), keeping the tree a fixed depth. The full source stays in
+ * frontmatter. Empty/invalid input yields "" (→ unattributed, note lives at the kind root).
+ */
+export function sourceSegment(source: string | undefined): string {
+  if (typeof source !== "string") return "";
+  const seg = source
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "")
+    .slice(0, 80);
+  return seg;
+}
+
+/**
+ * Repo-relative path for a note. With a project `source` the note lives under a per-project
+ * subtree (`<project>/<kind>/<id>.md`, ADR-0015); without one it stays at the kind root
+ * (`<kind>/<id>.md`) — which is also the back-compat location for pre-provenance notes.
+ */
+export function pathForNote(kind: NoteKind, id: string, source?: string): string {
+  const seg = sourceSegment(source);
+  return seg ? `${seg}/${KIND_DIR[kind]}/${id}.md` : `${KIND_DIR[kind]}/${id}.md`;
 }
 
 /** `YYYY-MM-DD` for a given date (defaults to now). */

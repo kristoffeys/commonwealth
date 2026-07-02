@@ -2,10 +2,12 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { listNotes } from "./notes.js";
-import { KIND_DIR, NOTE_KINDS, type Note, type NoteKind } from "./schema.js";
+import { type Note, type NoteKind } from "./schema.js";
 
 export interface SearchOptions {
   kind?: NoteKind;
+  /** Restrict to notes from one originating project (frontmatter `source`; ADR-0015). */
+  source?: string;
   /** Max results (default 20). */
   limit?: number;
 }
@@ -15,6 +17,8 @@ export interface SearchResult {
   kind: NoteKind;
   title: string;
   path: string;
+  /** Originating project, when the note carries one. */
+  source?: string;
   /** Highlighted excerpt around the match. */
   snippet: string;
   /** Relevance score (higher = better). */
@@ -38,6 +42,7 @@ interface IndexRow {
   tags: string;
   body: string;
   path: string;
+  source: string;
 }
 
 function toRow(note: Note): IndexRow {
@@ -48,6 +53,7 @@ function toRow(note: Note): IndexRow {
     tags: note.frontmatter.tags.join(" "),
     body: note.body,
     path: note.path,
+    source: note.frontmatter.source ?? "",
   };
 }
 
@@ -71,13 +77,13 @@ export async function buildIndex(brainDir: string): Promise<{ indexed: number }>
     // `path` is UNINDEXED: stored/returned but not part of the full-text match.
     db.exec(
       "CREATE VIRTUAL TABLE notes_fts USING fts5(" +
-        "id, kind, title, tags, body, path UNINDEXED" +
+        "id, kind, title, tags, body, path UNINDEXED, source UNINDEXED" +
         ");",
     );
 
     const insert = db.prepare(
-      "INSERT INTO notes_fts (id, kind, title, tags, body, path) " +
-        "VALUES (@id, @kind, @title, @tags, @body, @path);",
+      "INSERT INTO notes_fts (id, kind, title, tags, body, path, source) " +
+        "VALUES (@id, @kind, @title, @tags, @body, @path, @source);",
     );
     const insertAll = db.transaction((rows: IndexRow[]) => {
       for (const row of rows) insert.run(row);
@@ -133,13 +139,17 @@ export async function search(
     // it to expose a positive score where higher = better.
     const params: (string | number)[] = [match];
     let sql =
-      "SELECT id, kind, title, path, " +
+      "SELECT id, kind, title, path, source, " +
       "snippet(notes_fts, 4, '[', ']', '…', 12) AS snippet, " +
       "-bm25(notes_fts) AS score " +
       "FROM notes_fts WHERE notes_fts MATCH ?";
     if (opts?.kind) {
       sql += " AND kind = ?";
       params.push(opts.kind);
+    }
+    if (opts?.source) {
+      sql += " AND source = ?";
+      params.push(opts.source);
     }
     sql += " ORDER BY bm25(notes_fts) LIMIT ?";
     params.push(limit);
@@ -149,6 +159,7 @@ export async function search(
       kind: NoteKind;
       title: string;
       path: string;
+      source: string;
       snippet: string;
       score: number;
     }>;
@@ -158,6 +169,7 @@ export async function search(
       kind: r.kind,
       title: r.title,
       path: r.path,
+      ...(r.source ? { source: r.source } : {}),
       snippet: r.snippet,
       score: r.score,
     }));
@@ -184,56 +196,88 @@ function byCreatedDesc(a: Note, b: Note): number {
   return byId(a, b);
 }
 
-function commonwealthMarkdown(notes: Note[]): string {
-  const active = notes.filter(isActiveWorkState).sort(byId);
-  const decisions = notes.filter((n) => n.frontmatter.kind === "decision").sort(byCreatedDesc);
+/** Display label for a note's originating project; unattributed notes group under a sentinel. */
+const UNATTRIBUTED = "(unattributed)";
+function sourceOf(note: Note): string {
+  return note.frontmatter.source && note.frontmatter.source.length > 0
+    ? note.frontmatter.source
+    : UNATTRIBUTED;
+}
 
+/** Sort project labels alphabetically, with the unattributed bucket always last. */
+function bySourceLabel(a: string, b: string): number {
+  if (a === UNATTRIBUTED) return b === UNATTRIBUTED ? 0 : 1;
+  if (b === UNATTRIBUTED) return -1;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * The generated router, grouped by originating project (ADR-0015): a section per project with
+ * its active work-state and recent decisions, so a shared brain reads project-by-project.
+ */
+function commonwealthMarkdown(notes: Note[]): string {
   const lines: string[] = [];
   lines.push("# Commonwealth");
   lines.push("");
   lines.push("> Generated router. Do not edit by hand — regenerated from the note set (ADR-0003).");
   lines.push("");
 
-  lines.push("## Active work-state");
-  lines.push("");
-  if (active.length === 0) {
-    lines.push("_None._");
-  } else {
-    for (const n of active) {
-      const status = n.frontmatter.kind === "work-state" ? n.frontmatter.status : "";
-      lines.push(`- [${n.frontmatter.title}](${n.path}) — ${status}`);
-    }
+  const bySource = new Map<string, Note[]>();
+  for (const n of notes) {
+    const key = sourceOf(n);
+    (bySource.get(key) ?? bySource.set(key, []).get(key)!).push(n);
   }
-  lines.push("");
+  const sources = [...bySource.keys()].sort(bySourceLabel);
+  if (sources.length === 0) {
+    lines.push("_No notes yet._");
+    lines.push("");
+    return lines.join("\n");
+  }
 
-  lines.push("## Recent decisions");
-  lines.push("");
-  if (decisions.length === 0) {
-    lines.push("_None._");
-  } else {
-    for (const n of decisions) {
-      lines.push(`- [${n.frontmatter.title}](${n.path}) — ${n.frontmatter.created}`);
+  for (const source of sources) {
+    const group = bySource.get(source)!;
+    const active = group.filter(isActiveWorkState).sort(byId);
+    const decisions = group.filter((n) => n.frontmatter.kind === "decision").sort(byCreatedDesc);
+    lines.push(`## ${source}`);
+    lines.push("");
+    lines.push("**Active work-state**");
+    if (active.length === 0) {
+      lines.push("- _None._");
+    } else {
+      for (const n of active) {
+        const status = n.frontmatter.kind === "work-state" ? n.frontmatter.status : "";
+        lines.push(`- [${n.frontmatter.title}](${n.path}) — ${status}`);
+      }
     }
+    lines.push("");
+    lines.push("**Recent decisions**");
+    if (decisions.length === 0) {
+      lines.push("- _None._");
+    } else {
+      for (const n of decisions) {
+        lines.push(`- [${n.frontmatter.title}](${n.path}) — ${n.frontmatter.created}`);
+      }
+    }
+    lines.push("");
   }
-  lines.push("");
 
   return lines.join("\n");
 }
 
-function indexMarkdown(kind: NoteKind, notes: Note[]): string {
-  const ofKind = notes.filter((n) => n.frontmatter.kind === kind).sort(byId);
+/** Generated INDEX.md for one note-containing directory: its notes, linked by filename. */
+function indexMarkdown(dirRel: string, notes: Note[]): string {
+  const sorted = [...notes].sort(byId);
   const lines: string[] = [];
-  lines.push(`# ${KIND_DIR[kind]}`);
+  lines.push(`# ${dirRel}`);
   lines.push("");
   lines.push("> Generated index. Do not edit by hand — regenerated from the note set.");
   lines.push("");
-  if (ofKind.length === 0) {
+  if (sorted.length === 0) {
     lines.push("_None._");
   } else {
-    for (const n of ofKind) {
-      // INDEX.md lives inside the kind folder, so link by filename only.
-      const file = path.posix.basename(n.path);
-      lines.push(`- [${n.frontmatter.title}](${file})`);
+    for (const n of sorted) {
+      // INDEX.md lives in the same folder as the notes, so link by filename only.
+      lines.push(`- [${n.frontmatter.title}](${path.posix.basename(n.path)})`);
     }
   }
   lines.push("");
@@ -242,18 +286,25 @@ function indexMarkdown(kind: NoteKind, notes: Note[]): string {
 
 /**
  * Regenerate derived, never-hand-merged artifacts from the note set: the `COMMONWEALTH.md`
- * router (links to active work-state + recent decisions) and per-folder `INDEX.md`.
- * Idempotent — output is a pure function of the files (ADR-0003), so running twice
- * yields byte-identical files.
+ * router (grouped by project, ADR-0015) and an `INDEX.md` in every directory that holds notes
+ * (`<kind>/` and `<project>/<kind>/`). Idempotent — output is a pure function of the files
+ * (ADR-0003), so running twice yields byte-identical files.
  */
 export async function regenerateDerived(brainDir: string): Promise<void> {
   const notes = await listNotes(brainDir);
 
   await fs.writeFile(path.join(brainDir, "COMMONWEALTH.md"), commonwealthMarkdown(notes), "utf8");
 
-  for (const kind of NOTE_KINDS) {
-    const dir = path.join(brainDir, KIND_DIR[kind]);
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, "INDEX.md"), indexMarkdown(kind, notes), "utf8");
+  // One INDEX.md per directory that actually contains notes — works for both the flat kind
+  // root and per-project subtrees without assuming a fixed set of folders.
+  const byDir = new Map<string, Note[]>();
+  for (const n of notes) {
+    const dir = path.posix.dirname(n.path.split(path.sep).join("/"));
+    (byDir.get(dir) ?? byDir.set(dir, []).get(dir)!).push(n);
+  }
+  for (const [dir, group] of byDir) {
+    const abs = path.join(brainDir, dir);
+    await fs.mkdir(abs, { recursive: true });
+    await fs.writeFile(path.join(abs, "INDEX.md"), indexMarkdown(dir, group), "utf8");
   }
 }
