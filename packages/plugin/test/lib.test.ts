@@ -148,6 +148,19 @@ describe("parseCandidateArray", () => {
     expect(parseCandidateArray("not json")).toEqual([]);
     expect(parseCandidateArray('{"kind":"memory"}')).toEqual([]);
     expect(parseCandidateArray("")).toEqual([]);
+    expect(parseCandidateArray('[{"kind":"memory","title":"","body":"x"}]')).toEqual([]); // empty title
+  });
+
+  it("normalizes an out-of-enum kind to memory instead of dropping the note (#88)", () => {
+    const out = parseCandidateArray(
+      '[{"kind":"architecture","title":"no queue worker","body":"uses defer()+Http::retry()"}]',
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("memory");
+    expect(out[0].title).toBe("no queue worker");
+    // A valid kind is preserved untouched.
+    const ok = parseCandidateArray('[{"kind":"decision","title":"t","body":"b"}]');
+    expect(ok[0].kind).toBe("decision");
   });
 });
 
