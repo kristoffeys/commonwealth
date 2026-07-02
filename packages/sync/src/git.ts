@@ -92,6 +92,22 @@ export async function commitAllExceptSecrets(dir: string, message: string): Prom
   const git = openRepo(dir);
   await git.add(["-A"]);
 
+  const secretsBlocked = await scrubStagedSecrets(dir);
+
+  const status = await git.status();
+  if (status.staged.length === 0) return { committed: false, secretsBlocked };
+  await git.commit(message);
+  return { committed: true, secretsBlocked };
+}
+
+/**
+ * Scan every currently-STAGED markdown note file for secrets and unstage any offenders,
+ * returning the repo-relative paths withheld. Leaves the files modified/uncommitted in the
+ * working tree. This is the reusable core of the pre-commit scrub — call it before ANY commit
+ * that stages with `add -A`, including the conflict-resolution `rebase --continue` path, so a
+ * blocked secret note can never ride along into a commit and get pushed (#98).
+ */
+export async function scrubStagedSecrets(dir: string): Promise<string[]> {
   const secretsBlocked: string[] = [];
   for (const rel of await stagedFiles(dir)) {
     if (!isNoteFile(rel)) continue;
@@ -103,13 +119,8 @@ export async function commitAllExceptSecrets(dir: string, message: string): Prom
     }
     if (findSecrets(content).length > 0) secretsBlocked.push(rel);
   }
-
   await unstage(dir, secretsBlocked);
-
-  const status = await git.status();
-  if (status.staged.length === 0) return { committed: false, secretsBlocked };
-  await git.commit(message);
-  return { committed: true, secretsBlocked };
+  return secretsBlocked;
 }
 
 /** The current branch name, or null if detached / no commits yet. */
