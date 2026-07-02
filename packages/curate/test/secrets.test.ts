@@ -54,6 +54,33 @@ describe("curate secret gate (#16)", () => {
     expect(result.staged[0]?.frontmatter.title).toBe("Deploy pipeline overview");
   });
 
+  it("rejects a candidate hiding a secret in its tags (not just title/body) (#99)", async () => {
+    const result = await curate(brainDir, [
+      {
+        kind: "memory",
+        title: "Bucket naming convention",
+        body: "Deploy buckets follow the team-region-env naming convention across projects.",
+        tags: ["infra", "AKIAIOSFODNN7EXAMPLE"], // secret smuggled into a tag
+      },
+    ]);
+    expect(result.staged).toHaveLength(0);
+    expect(result.rejected[0]?.reason).toBe("contains-secret");
+    expect(await listStaged(brainDir)).toHaveLength(0);
+  });
+
+  it("rejects a candidate hiding a secret in a kind-specific field (#99)", async () => {
+    const result = await curate(brainDir, [
+      {
+        kind: "person",
+        title: "Ops contact",
+        body: "Primary on-call contact for the deploy pipeline and its cloud credentials.",
+        fields: { name: "Dana", org: "token: ghp_abcdefghijklmnopqrstuvwxyz0123456789" },
+      },
+    ]);
+    expect(result.staged).toHaveLength(0);
+    expect(result.rejected[0]?.reason).toBe("contains-secret");
+  });
+
   it("stages a clean candidate unchanged", async () => {
     const result = await curate(brainDir, [
       {
