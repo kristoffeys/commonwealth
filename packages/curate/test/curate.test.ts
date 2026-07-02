@@ -24,6 +24,17 @@ describe("curate", () => {
     expect(result.rejected[0]?.reason).toBe("too-thin");
   });
 
+  it("drops a schema-invalid candidate individually without aborting the batch (#88)", async () => {
+    const result = await curate(brainDir, [
+      // An out-of-enum kind throws in writeNote/Frontmatter.parse; it must not take the batch down.
+      { kind: "architecture" as never, title: "bad kind", body: "this candidate is invalid" },
+      { kind: "memory", title: "Good note survives", body: "a durable fact that must still land" },
+    ]);
+    expect(result.staged.map((n) => n.frontmatter.title)).toEqual(["Good note survives"]);
+    expect(result.rejected).toHaveLength(1);
+    expect(result.rejected[0]?.reason).toMatch(/^invalid:/);
+  });
+
   it("rejects a candidate near-identical to an existing canon note", async () => {
     const canon = await writeNote(brainDir, {
       kind: "memory",

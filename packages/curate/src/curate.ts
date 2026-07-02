@@ -150,10 +150,20 @@ export async function curate(
       });
       continue;
     }
-    const note = await stageNote(brainDir, candidate);
-    result.staged.push(note);
-    // Fold into the existing set so later batch entries dedupe against it too.
-    existing.push(note);
+    // Stage individually-guarded: a single malformed candidate (e.g. an invalid kind or a
+    // field the schema rejects) is dropped on its own rather than aborting the whole batch and
+    // discarding every other valid note in the session (#88).
+    try {
+      const note = await stageNote(brainDir, candidate);
+      result.staged.push(note);
+      // Fold into the existing set so later batch entries dedupe against it too.
+      existing.push(note);
+    } catch (err) {
+      result.rejected.push({
+        candidate,
+        reason: `invalid: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
   }
 
   return result;

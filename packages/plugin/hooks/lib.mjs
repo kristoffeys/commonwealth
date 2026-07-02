@@ -131,6 +131,9 @@ const EXTRACTION_SYSTEM = [
 const EXTRACTION_PROMPT =
   "Extract durable team knowledge from the transcript on stdin. Output ONLY the JSON array.";
 
+/** The four valid note kinds (mirror of core's NOTE_KINDS); extraction kinds normalize to these. */
+const VALID_KINDS = new Set(["memory", "decision", "work-state", "person"]);
+
 /**
  * Last-resort cap for the payload piped to the extraction agent. Stdin has no ARG_MAX limit,
  * but an enormous payload can still blow a model context window. This applies only AFTER
@@ -479,13 +482,20 @@ export function parseCandidateArray(text) {
     return [];
   }
   if (!Array.isArray(parsed)) return [];
-  // Keep only well-formed candidates.
-  return parsed.filter(
-    (c) =>
-      c &&
-      typeof c === "object" &&
-      typeof c.kind === "string" &&
-      typeof c.title === "string" &&
-      typeof c.body === "string",
-  );
+  // Keep well-formed candidates and NORMALIZE the kind: the extraction model drifts and emits
+  // kinds outside the enum (e.g. "architecture"), which would otherwise throw in writeNote and
+  // abort the whole capture batch. Map any unrecognized kind to "memory" so a real note isn't
+  // lost over a label quibble (#88). Downstream curate/schema still validate the rest.
+  return parsed
+    .filter(
+      (c) =>
+        c &&
+        typeof c === "object" &&
+        typeof c.kind === "string" &&
+        typeof c.title === "string" &&
+        c.title.trim().length > 0 &&
+        typeof c.body === "string" &&
+        c.body.trim().length > 0,
+    )
+    .map((c) => ({ ...c, kind: VALID_KINDS.has(c.kind) ? c.kind : "memory" }));
 }
