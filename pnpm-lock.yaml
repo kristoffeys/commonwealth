@@ -47,6 +47,9 @@ importers:
       '@commonwealth/seed':
         specifier: workspace:*
         version: link:../seed
+      '@commonwealth/sync':
+        specifier: workspace:*
+        version: link:../sync
 
   packages/core:
     dependencies:

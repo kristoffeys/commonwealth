@@ -142,6 +142,27 @@ That's it — open a Claude Code session in the project and ask it something you
 already knows. The rest of this section documents the pieces `init` wires up, in case you
 want to run or reconfigure them individually.
 
+### Everyday commands
+
+`init` is for onboarding; day-to-day you use `commonwealth <verb>`. Every command resolves the
+brain from the registry for the current directory — no `--dir`, no re-running `init` (ADR-0016):
+
+```bash
+commonwealth reseed [<repo>...] [--all]   # mine repo(s) into the mapped brain and capture
+commonwealth config list                  # show the brain's config + feature flags
+commonwealth config set autoPromote false # e.g. require manual review before canon
+commonwealth status                       # review queue + sync-daemon state
+commonwealth sync start|stop|once         # control/run the sync daemon
+commonwealth pending                      # notes awaiting review
+commonwealth promote <id...> | --all      # approve staged notes into canon
+commonwealth reject <id...>               # discard staged notes
+commonwealth scope show|allow|deny|check  # per-user capture scope
+commonwealth recall <query>               # search the brain
+```
+
+Tip: to review a bulk reseed instead of auto-landing it, `commonwealth config set autoPromote
+false` first, then `reseed`, then `pending` / `promote`.
+
 ### 1. Create a brain (done by `init`)
 
 A brain is just a git repository. `init` creates one under

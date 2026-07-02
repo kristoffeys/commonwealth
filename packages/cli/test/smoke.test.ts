@@ -77,4 +77,56 @@ describe("built commonwealth binary", () => {
       await fs.rm(project, { recursive: true, force: true });
     }
   });
+
+  it("config + reseed subcommands act on the mapped brain without rerunning init (#93)", async () => {
+    const scratch = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-cli-cmds-")),
+    );
+    const brain = path.join(scratch, "brain");
+    const core = fileURLToPath(new URL("../../core/dist/index.js", import.meta.url));
+    const env = {
+      ...process.env,
+      COMMONWEALTH_BRAIN_DIR: brain,
+      COMMONWEALTH_CONFIG: path.join(scratch, "cfg.json"),
+      COMMONWEALTH_REGISTRY: path.join(scratch, "reg.json"),
+    };
+    try {
+      execFileSync("node", [
+        "-e",
+        `require(${JSON.stringify(core)}).initBrain(${JSON.stringify(brain)},{name:'x'})`,
+      ]);
+
+      // config set/get: flip autoPromote off (review mode) without touching JSON by hand.
+      execFileSync("node", [distEntry, "config", "set", "autoPromote", "false"], {
+        env,
+        stdio: "pipe",
+      });
+      const got = execFileSync("node", [distEntry, "config", "get", "autoPromote"], {
+        env,
+        stdio: "pipe",
+      })
+        .toString()
+        .trim();
+      expect(got).toBe("false");
+
+      // reseed this very repo into the mapped brain; autoPromote off → notes go to the queue.
+      execFileSync("node", [distEntry, "reseed", repoRoot], {
+        env,
+        stdio: "pipe",
+        timeout: 120_000,
+      });
+      const pending = execFileSync("node", [distEntry, "pending"], {
+        env,
+        stdio: "pipe",
+      }).toString();
+      expect(pending.trim().length).toBeGreaterThan(0); // captured notes are awaiting review
+    } finally {
+      await fs.rm(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  it("an unknown subcommand exits non-zero with usage", () => {
+    const res = spawnSync("node", [distEntry, "frobnicate"], { stdio: "pipe" });
+    expect(res.status).not.toBe(0);
+  });
 });

@@ -1,7 +1,7 @@
 {
   "name": "@commonwealth/cli",
   "version": "0.0.0",
-  "description": "The unified `commonwealth` CLI — starting with the zero-config `init` onboarding wizard",
+  "description": "The unified `commonwealth` CLI \u2014 starting with the zero-config `init` onboarding wizard",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
@@ -19,6 +19,7 @@
   "dependencies": {
     "@commonwealth/core": "workspace:*",
     "@commonwealth/curate": "workspace:*",
-    "@commonwealth/seed": "workspace:*"
+    "@commonwealth/seed": "workspace:*",
+    "@commonwealth/sync": "workspace:*"
   }
 }
