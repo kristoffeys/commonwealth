@@ -5,12 +5,12 @@ import {
   regenerateDerived,
   resolveProjectSource,
   search,
-  writeNote,
   type Frontmatter,
   type Note,
   type NoteKind,
   type SearchResult,
 } from "@commonwealth/core";
+import { captureCandidates } from "@commonwealth/curate";
 
 /**
  * Pure handler layer for the Commonwealth MCP server.
@@ -75,21 +75,27 @@ export interface RememberArgs {
   author?: string;
 }
 
-/** Identifier + location of a newly written note. */
+/** Outcome of a {@link remember}: promoted to canon, staged for review, or gate-rejected. */
 export interface RememberResult {
-  id: string;
-  path: string;
+  /** `promoted` = in canon; `staged` = in the review queue; `rejected` = a gate declined it. */
+  status: "promoted" | "staged" | "rejected";
+  /** The note id, when it was accepted (promoted or staged). */
+  id?: string;
+  /** Canonical path when promoted, staging path when staged. */
+  path?: string;
+  /** Why a gate declined the note (e.g. `contains-secret`, `duplicate`), when rejected. */
+  reason?: string;
 }
 
 /**
- * Persist a new atomic note and refresh derived state so it is immediately findable.
+ * Record a note through the SAME curation path as automatic capture (#82): the secret gate,
+ * relevance/dedup gate, and the per-brain `autoPromote` decision all apply. Previously this
+ * wrote straight to canon via `writeNote`, bypassing every gate — so an MCP client could plant a
+ * secret or a duplicate directly into shared canon. Now it delegates to `captureCandidates`,
+ * which stages the note and (unless `autoPromote` is off) approves it into canon.
  *
- * M1 writes straight to canon: `core.writeNote` creates the file, then we rebuild the
- * derived index (`core.buildIndex`) and regenerate routers/indexes
- * (`core.regenerateDerived`) so a subsequent {@link searchNotes} sees the new note.
- *
- * M3 will route this through `memory/_staging/` + the curation gate instead of writing
- * canon directly (docs/01-architecture.md §3 — capture → curate → commit).
+ * On promotion we refresh the disposable derived artifacts so a subsequent {@link searchNotes}
+ * sees the note immediately (staged notes intentionally are NOT indexed until approved).
  */
 export async function remember(
   brainDir: string,
@@ -98,11 +104,30 @@ export async function remember(
   // Attribute the note to the project the MCP is running in (ADR-0015), so it files under
   // <project>/<kind>/ like hook-captured notes. Best-effort: unresolved → unattributed.
   const source = (await resolveProjectSource(process.cwd())) ?? undefined;
-  const note = await writeNote(brainDir, { kind, title, body, tags, author, source });
-  // Refresh disposable derived artifacts so the write is visible to reads/search.
-  await buildIndex(brainDir);
-  await regenerateDerived(brainDir);
-  return { id: note.frontmatter.id, path: note.path };
+  const result = await captureCandidates(brainDir, [
+    {
+      kind,
+      title,
+      body,
+      tags: tags ?? [],
+      ...(author ? { author } : {}),
+      ...(source ? { source } : {}),
+    },
+  ]);
+
+  const rejected = result.rejected[0];
+  if (rejected) return { status: "rejected", reason: rejected.reason };
+
+  const note = result.staged[0];
+  if (!note) return { status: "rejected", reason: "not-staged" };
+
+  if (result.promoted.length > 0) {
+    // autoPromote landed it in canon — refresh derived so reads/search see it now.
+    await buildIndex(brainDir);
+    await regenerateDerived(brainDir);
+    return { status: "promoted", id: note.frontmatter.id, path: result.promoted[0] };
+  }
+  return { status: "staged", id: note.frontmatter.id, path: note.path };
 }
 
 /**
