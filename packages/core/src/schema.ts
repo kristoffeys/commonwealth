@@ -56,45 +56,58 @@ const baseShape = {
   relates: z.array(z.string()).default([]),
 };
 
-export const MemoryFrontmatter = z.object({
-  ...baseShape,
-  kind: z.literal("memory"),
-  status: z.enum(["active", "superseded", "stale"]).default("active"),
-  /** Last time this fact was checked against reality (Kage-style verification). */
-  verified: IsoDate.optional(),
-  sources: z.array(z.string()).default([]),
-  superseded_by: z.string().nullable().optional(),
-});
+export const MemoryFrontmatter = z
+  .object({
+    ...baseShape,
+    kind: z.literal("memory"),
+    status: z.enum(["active", "superseded", "stale"]).default("active"),
+    /** Last time this fact was checked against reality (Kage-style verification). */
+    verified: IsoDate.optional(),
+    sources: z.array(z.string()).default([]),
+    superseded_by: z.string().nullable().optional(),
+  })
+  .passthrough();
 export type MemoryFrontmatter = z.infer<typeof MemoryFrontmatter>;
 
-export const DecisionFrontmatter = z.object({
-  ...baseShape,
-  kind: z.literal("decision"),
-  status: z.enum(["proposed", "accepted", "superseded"]).default("proposed"),
-  supersedes: z.array(z.string()).default([]),
-  superseded_by: z.string().nullable().optional(),
-  deciders: z.array(z.string()).default([]),
-});
+export const DecisionFrontmatter = z
+  .object({
+    ...baseShape,
+    kind: z.literal("decision"),
+    status: z.enum(["proposed", "accepted", "superseded"]).default("proposed"),
+    supersedes: z.array(z.string()).default([]),
+    superseded_by: z.string().nullable().optional(),
+    deciders: z.array(z.string()).default([]),
+  })
+  .passthrough();
 export type DecisionFrontmatter = z.infer<typeof DecisionFrontmatter>;
 
-export const WorkStateFrontmatter = z.object({
-  ...baseShape,
-  kind: z.literal("work-state"),
-  owner: z.string().optional(),
-  status: z.enum(["planned", "in-progress", "blocked", "done"]).default("planned"),
-});
+export const WorkStateFrontmatter = z
+  .object({
+    ...baseShape,
+    kind: z.literal("work-state"),
+    owner: z.string().optional(),
+    status: z.enum(["planned", "in-progress", "blocked", "done"]).default("planned"),
+  })
+  .passthrough();
 export type WorkStateFrontmatter = z.infer<typeof WorkStateFrontmatter>;
 
-export const PersonFrontmatter = z.object({
-  ...baseShape,
-  kind: z.literal("person"),
-  name: z.string().min(1),
-  org: z.string().optional(),
-  role: z.string().optional(),
-});
+export const PersonFrontmatter = z
+  .object({
+    ...baseShape,
+    kind: z.literal("person"),
+    name: z.string().min(1),
+    org: z.string().optional(),
+    role: z.string().optional(),
+  })
+  .passthrough();
 export type PersonFrontmatter = z.infer<typeof PersonFrontmatter>;
 
-/** Discriminated union over `kind` — the validated frontmatter of any note. */
+/**
+ * Discriminated union over `kind` — the validated frontmatter of any note. Each member is
+ * `.passthrough()` so unknown keys survive parse→serialize (#81): a field this build's schema
+ * doesn't know (a user's custom key, or one a newer schema added) is preserved rather than
+ * silently dropped when a note is re-serialized (e.g. sync's conflict sibling rewrite).
+ */
 export const Frontmatter = z.discriminatedUnion("kind", [
   MemoryFrontmatter,
   DecisionFrontmatter,
