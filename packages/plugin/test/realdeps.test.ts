@@ -1,10 +1,9 @@
-import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { initBrain, listNotes } from "@commonwealth/core";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // The REAL production wiring — not the injected fakes the other tests use. These guard the
 // two silent-failure bugs the M4b verifier caught: an unresolvable core import and a broken
 // `capture --from -` invocation.
@@ -109,11 +108,7 @@ describe("realDeps() receipt IO (#96) — saveReceipt / takeReceipt round-trip",
 });
 
 describe("realDeps().capture (real curate binary over stdin)", () => {
-  beforeAll(() => {
-    // Build so the spawned curate binary + its @commonwealth/core import exist.
-    execFileSync("pnpm", ["-r", "build"], { cwd: repoRoot, stdio: "pipe" });
-  }, 180_000);
-
+  // The curate binary + its deps are built once in vitest globalSetup (#111).
   it("captures a candidate through the real binary (proves stdin, not --from -)", async () => {
     const brain = path.join(tmp, "brain");
     await initBrain(brain);

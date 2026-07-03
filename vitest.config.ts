@@ -11,6 +11,9 @@ export default defineConfig({
   test: {
     include: ["packages/**/test/**/*.test.ts"],
     environment: "node",
+    // Build + vendor ONCE up front so no test spawns a concurrent `pnpm -r build` that clobbers
+    // dist/ mid-run (#111). Replaces the per-file build hooks the integration suites used to run.
+    globalSetup: ["./vitest.globalSetup.ts"],
     // Integration suites (sync spawns real git across clones; smoke tests build the
     // workspace) can take several seconds and run under parallel contention, so give
     // them generous headroom instead of the 5s default. Fast unit tests are unaffected.

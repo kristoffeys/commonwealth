@@ -3,7 +3,7 @@ import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 /**
  * End-to-end guard for the BUILT binary (not source): a duplicate shebang (a stray source
@@ -14,10 +14,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const distEntry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 
-beforeAll(() => {
-  execFileSync("pnpm", ["-r", "build"], { cwd: repoRoot, stdio: "pipe" });
-}, 180_000);
-
+// The workspace is built once in vitest globalSetup (#111), so dist/ exists here.
 describe("built commonwealth binary", () => {
   it("`init --help` exits 0", () => {
     expect(() =>
