@@ -73,7 +73,14 @@ The steps below wire the same pieces manually (à la carte).
 git clone https://github.com/kristoffeys/commonwealth.git
 cd Commonwealth
 pnpm install
+pnpm build            # build the CLI + all packages
+pnpm link-cli         # put `commonwealth` on your PATH (pre-npm wrapper → ~/.local/bin, #49)
 ```
+
+> `pnpm link-cli` writes a tiny wrapper to `~/.local/bin/commonwealth` that runs the built CLI
+> from this repo, so every `commonwealth <verb>` below just works. Make sure `~/.local/bin` is
+> on your `PATH`. (npm-published binaries are a later milestone — see the roadmap.) Prefer not
+> to link? Every command also runs as `node /path/to/Commonwealth/packages/cli/dist/index.js <verb>`.
 
 ### One command: `commonwealth init`
 
@@ -81,7 +88,7 @@ From the project you want a brain for, run **one** command. It is fully idempote
 it again anytime, it only does what's still missing:
 
 ```bash
-node /path/to/Commonwealth/packages/cli/dist/index.js init
+commonwealth init
 ```
 
 `init` does the whole setup end to end:
@@ -94,7 +101,9 @@ node /path/to/Commonwealth/packages/cli/dist/index.js init
    per-project `.commonwealth/brain` marker remains an optional manual override.)
 4. **Seeds** the brain from one or more repos — mining git history, ADRs, and agent config
    (`CLAUDE.md` / `.cursorrules` / `AGENTS.md`) — into the review queue.
-5. **Registers** the MCP server with the `claude` CLI, pointed at the new brain.
+5. **Installs** the Commonwealth plugin (global, user scope) — bundling the MCP server + the
+   scope-gated SessionStart/SessionEnd hooks — so every session reads/writes the brain and the
+   right brain is resolved per repo (ADR-0011/0012).
 6. **Starts** the sync daemon for the brain (detached).
 7. **Ensures** your per-user scope config exists at `~/.commonwealth/config.json` (an empty
    `{ "allow": [], "deny": [] }` is created if it is missing) — so it is always present after
@@ -106,7 +115,7 @@ for projects** (default: the parent of the current repo), discovers the git repo
 and lets you **multi-select** which folders to _sync_ into the brain and which repos to _seed_
 from now (seed defaults to your sync selection). Selection accepts `all`, `none`, or a
 comma/space list of the numbered items; Enter keeps the defaults. If no repos are found it
-falls back to the current repo for both. It then asks whether to register MCP, start the
+falls back to the current repo for both. It then asks whether to install the plugin, start the
 daemon, enable auto-ADR, and an optional brain git remote — then a final `Proceed?` before
 making any changes. Declining `Proceed?` prints `Aborted.` and changes nothing.
 
@@ -123,7 +132,7 @@ init --auto-adr             # enable auto-ADR capture for the brain
 init --remote <url>         # add <url> as the brain's git origin remote
 init --no-scope             # skip adding folders to the capture allowlist
 init --no-seed              # create the brain but skip mining/staging candidates
-init --no-mcp               # skip registering the MCP server
+init --no-plugin            # skip installing the plugin (MCP + hooks); alias: --no-mcp
 init --no-daemon            # skip starting the sync daemon
 init --no-build             # skip the workspace build
 ```
@@ -205,9 +214,9 @@ available through these tools:
 teammates' changes converge continuously:
 
 ```bash
-node /path/to/Commonwealth/packages/sync/dist/index.js start --dir "$HOME/my-brain"
-# one-shot instead of resident:  ... sync --dir "$HOME/my-brain"
-# status / stop:                 ... status --dir ...   |   ... stop --dir ...
+commonwealth sync start     # resident daemon for the brain mapped to this repo
+commonwealth sync once      # one-shot sync instead of resident
+commonwealth sync stop      # stop it; `commonwealth status` shows daemon state
 ```
 
 The daemon commits + pushes on change, pulls on a poll interval, rebuilds the search
@@ -219,14 +228,14 @@ index, and — on a genuine same-file conflict — keeps **both** versions as si
 By default (`autoPromote`, ADR-0014) captured notes promote **straight into canon** — the
 curation engine still dedupes near-identical notes, drops trivial ones, and scrubs secrets
 first; only the manual review step is skipped. Turn the per-brain flag off to hold captures
-in a `staging/` queue for approval instead:
+in a `staging/` queue for approval instead. The flag lives in the brain's
+`.commonwealth/config.json`, so it syncs team-wide:
 
 ```bash
-CURATE="node /path/to/Commonwealth/packages/curate/dist/index.js"
-# require manual review for this brain (team-wide, synced in .commonwealth/config.json):
-#   set features.autoPromote = false, then:
-$CURATE list --dir "$HOME/my-brain"          # what's pending
-#   approve <id...> | reject <id...> | approve-all
+commonwealth config set autoPromote false   # require manual review for this brain
+commonwealth pending                        # what's awaiting review
+commonwealth promote <id...> | --all        # approve into canon
+commonwealth reject  <id...>                # discard
 ```
 
 Automatic capture at session end and relevance-gated injection at session start are wired
@@ -241,11 +250,10 @@ is never synced. `commonwealth init` always ensures this file exists (creating a
 `{ "allow": [], "deny": [] }` if missing), so it is present even when no folder is allow-listed.
 
 ```bash
-CURATE="node /path/to/Commonwealth/packages/curate/dist/index.js"
-$CURATE scope allow ~/work          # only capture work under here…
-$CURATE scope deny  ~/work/secret   # …except this (deny wins)
-$CURATE scope check --cwd "$PWD"    # → in-scope | out-of-scope
-$CURATE scope show
+commonwealth scope allow ~/work          # only capture work under here…
+commonwealth scope deny  ~/work/secret   # …except this (deny wins)
+commonwealth scope check                 # → in-scope | out-of-scope (for the cwd)
+commonwealth scope show
 ```
 
 Rule: in scope if `(allow is empty OR under an allow entry) AND under no deny entry`.
@@ -261,12 +269,13 @@ the candidates. With `autoPromote` on (the default) they land in canon; with it 
 stage into the review queue. Pass `--no-seed` to create the brain without mining.
 
 A teammate running `init` where a brain already exists **joins** it instead of re-seeding
-(TTFV ≈ 0 — they clone an already-full brain). Or drive the pieces à la carte:
+(TTFV ≈ 0 — they clone an already-full brain). To re-mine a repo into an existing brain
+later, use the unified verb:
 
 ```bash
-SEED="node /path/to/Commonwealth/packages/seed/dist/index.js"
-$SEED gather --repo "$PWD" | commonwealth-curate capture --dir "$HOME/my-brain"
-commonwealth-curate list --dir "$HOME/my-brain"                    # pending (if autoPromote off)
+commonwealth reseed          # mine the current repo into its mapped brain and capture
+commonwealth reseed --all    # mine every git repo found under the cwd
+commonwealth pending         # review the candidates (if autoPromote is off)
 ```
 
 With `autoPromote` on (default) captures — including seeded mines — land in canon after the
@@ -292,9 +301,8 @@ ahead of the registry when you need to pin one project explicitly (an optional m
 Brain-level **feature flags** are toggled with the CLI and sync with the brain:
 
 ```bash
-CURATE="node /path/to/Commonwealth/packages/curate/dist/index.js"
-$CURATE feature list --dir "$HOME/my-brain"
-$CURATE feature enable autoAdr --dir "$HOME/my-brain"   # opt in per team
+commonwealth config list                 # show name, remotes, and all feature flags
+commonwealth config set autoAdr true      # opt in per team (syncs with the brain)
 ```
 
 `autoAdr` (default **off**): when on, captured **decisions** are auto-recorded as
@@ -308,7 +316,7 @@ scope filter). When off, decision candidates are dropped.
 | `@commonwealth/core`   | ✅     | Schema (4 note kinds), atomic note IO, brain scaffold, FTS5 index + derived `COMMONWEALTH.md`/`INDEX.md`         |
 | `@commonwealth/mcp`    | ✅     | MCP server exposing a brain to Claude Code (`commonwealth-mcp`)                                                  |
 | `@commonwealth/sync`   | ✅     | Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings (`commonwealth-sync`)     |
-| `@commonwealth/curate` | ✅     | Curation (dedupe/relevance) + in-repo review queue + per-user scope filter (`commonwealth-curate`); hooks in M4  |
+| `@commonwealth/curate` | ✅     | Curation (dedupe/relevance) + in-repo review queue + per-user scope filter; drives the plugin's capture/inject hooks |
 | `@commonwealth/plugin` | ✅     | Claude Code plugin: MCP + scope-gated SessionStart/SessionEnd hooks + /commonwealth commands + auto-provisioning |
 | `@commonwealth/seed`   | ✅     | Cold-start seeding: git-history miner + agent-config importer → candidate notes (`commonwealth-seed`)            |
 | `@commonwealth/cli`    | ✅     | The unified `commonwealth` CLI — `init` onboarding wizard (detect → preview → confirm → seed, + join mode)       |
