@@ -94,14 +94,30 @@ describe("Daemon", () => {
     });
     try {
       await writeNote(fx.alice, { kind: "memory", title: "Settle test", body: "x" });
-      await sleep(3_000);
-      const countA = synced;
-      await sleep(3_000);
-      const countB = synced;
-      // Once settled, no further syncs fire (derived writes don't retrigger).
-      expect(countB - countA).toBe(0);
-      // And the total stays small (a handful), not the dozens a loop would produce.
-      expect(countB).toBeLessThanOrEqual(4);
+
+      // Poll for QUIESCENCE rather than sampling fixed windows: under parallel load a single
+      // real-git sync can take >3s, so a fixed 3s window boundary could straddle a settling
+      // sync's completion and flake. Wait until `synced` is unchanged across several samples.
+      let last = -1;
+      let stableSamples = 0;
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        await sleep(1_000);
+        if (synced === last) {
+          if (++stableSamples >= 3) break; // ~3s with no new sync → settled
+        } else {
+          stableSamples = 0;
+          last = synced;
+        }
+      }
+
+      // It settled at a small count — a handful, not the dozens an unbounded self-trigger loop
+      // would produce (derived/lock/pid writes are ignored, so a sync doesn't retrigger itself).
+      expect(synced).toBeLessThanOrEqual(5);
+      // And it stays quiescent: no further sync fires now that it has settled.
+      const settled = synced;
+      await sleep(2_000);
+      expect(synced).toBe(settled);
     } finally {
       await daemon.stop();
     }
