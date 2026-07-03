@@ -4,9 +4,11 @@
     // No rootDir: typecheck (tsc --noEmit) pulls @commonwealth/core source in via `paths`
     // below, which would violate a src-only rootDir. tsup owns the actual build/emit.
     "paths": {
-      // Resolve the workspace dep to source so typecheck needs no prior build of core.
-      // tsup still externalizes @commonwealth/core at build time (it's a dependency).
-      "@commonwealth/core": ["../core/src/index.ts"]
+      // Resolve workspace deps to source so typecheck needs no prior build of core/curate.
+      // tsup still externalizes them at build time (they're dependencies).
+      "@commonwealth/core": ["../core/src/index.ts"],
+      // curate's LIBRARY entry (src/lib.ts) — NOT src/index.ts, which is the CLI (#82).
+      "@commonwealth/curate": ["../curate/src/lib.ts"]
     }
   },
   "include": ["src"]

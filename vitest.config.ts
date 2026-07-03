@@ -6,6 +6,8 @@ export default defineConfig({
       // Resolve workspace packages to their source so tests run without a build step.
       "@commonwealth/core": new URL("./packages/core/src/index.ts", import.meta.url).pathname,
       "@commonwealth/seed": new URL("./packages/seed/src/index.ts", import.meta.url).pathname,
+      // curate's LIBRARY entry (lib.ts), not the CLI index.ts (#82).
+      "@commonwealth/curate": new URL("./packages/curate/src/lib.ts", import.meta.url).pathname,
     },
   },
   test: {
