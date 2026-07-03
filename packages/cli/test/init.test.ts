@@ -4,7 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import type { NewNoteInput } from "@commonwealth/core";
 import { describe, expect, it, vi } from "vitest";
-import { findRepoRoot, runInit, type InitBySource, type InitDeps } from "../src/init.js";
+import {
+  defaultBrainDir,
+  findRepoRoot,
+  runInit,
+  type InitBySource,
+  type InitDeps,
+} from "../src/init.js";
 
 const NOTE: NewNoteInput = { kind: "memory", title: "t", body: "b" };
 
@@ -110,6 +116,32 @@ describe("runInit", () => {
     expect(result.gathered).toBe(0);
   });
 
+  it("--brain overrides an existing brain instead of silently joining it (#103)", async () => {
+    const deps = makeDeps({
+      resolveBrain: vi.fn(async () => "/auto/brain"),
+      gather: vi.fn(async () => ({ candidates: [], bySource: ZERO_SOURCE })),
+    });
+    // Project already resolves to /auto/brain, but the user explicitly names a different one.
+    const result = await runInit("/repo", { brain: "/chosen/brain", yes: true }, deps);
+    expect(result.mode).not.toBe("join");
+    expect(deps.createBrain).toHaveBeenCalledWith("/chosen/brain", expect.any(String));
+    expect(deps.registerBrain).toHaveBeenCalledWith("/repo", "/chosen/brain");
+  });
+
+  it("--reseed without --brain re-mines into the EXISTING brain, not the default (#103)", async () => {
+    const one = candidates(1);
+    const deps = makeDeps({
+      resolveBrain: vi.fn(async () => "/existing/custom-brain"),
+      gather: vi.fn(async () => ({ candidates: one, bySource: ZERO_SOURCE })),
+    });
+    const result = await runInit("/repo", { reseed: true, yes: true }, deps);
+    // Reuses the resolved brain — never re-points the project at ~/.commonwealth/brains/<default>.
+    expect(deps.createBrain).toHaveBeenCalledWith("/existing/custom-brain", expect.any(String));
+    expect(deps.stage).toHaveBeenCalledWith("/existing/custom-brain", one);
+    expect(result.brainDir).toBe("/existing/custom-brain");
+    expect(result.mode).toBe("new");
+  });
+
   it("--reseed: ignores an existing brain and takes the NEW path", async () => {
     const one = candidates(1);
     const deps = makeDeps({
@@ -174,5 +206,20 @@ describe("findRepoRoot", () => {
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("defaultBrainDir (#103)", () => {
+  it("gives same-basename projects in different locations DISTINCT brains", () => {
+    const a = defaultBrainDir("/Users/x/work/app");
+    const b = defaultBrainDir("/Users/x/personal/app");
+    expect(a).not.toBe(b);
+    // Both stay human-readable (keep the basename) and live under ~/.commonwealth/brains/.
+    expect(path.basename(a)).toMatch(/^app-[0-9a-f]{8}$/);
+    expect(path.basename(b)).toMatch(/^app-[0-9a-f]{8}$/);
+  });
+
+  it("is deterministic for a given path (re-init maps to the same brain)", () => {
+    expect(defaultBrainDir("/Users/x/work/app")).toBe(defaultBrainDir("/Users/x/work/app/"));
   });
 });

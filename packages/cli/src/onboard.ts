@@ -159,10 +159,12 @@ export async function runOnboard(
   // Default the sync/scope target to the INVOCATION dir, not the git root — `findRepoRoot`
   // may climb to a parent repo and over-scope every sibling (#61). Mining still uses the git
   // root (inside `runInit`); the wizard/`--sync` let the user pick folders explicitly.
-  const syncFolders =
-    opts.syncFolders && opts.syncFolders.length > 0 ? opts.syncFolders : [path.resolve(cwd)];
-  const seedRepos =
-    opts.seedRepos && opts.seedRepos.length > 0 ? opts.seedRepos : doSeed ? syncFolders : [];
+  // Distinguish "flag omitted" (undefined → default to the invocation dir) from an explicit
+  // empty selection (the wizard's "none" → []), which must be RESPECTED, not silently
+  // overridden to cwd (#103). The cwd is still wired to the brain by runInit below regardless;
+  // this only governs which EXTRA folders get scoped/mapped.
+  const syncFolders = opts.syncFolders ?? [path.resolve(cwd)];
+  const seedRepos = opts.seedRepos ?? (doSeed ? syncFolders : []);
 
   const brainLabel = opts.brain ?? "the project's default brain dir";
   const plan = [

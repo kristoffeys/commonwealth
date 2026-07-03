@@ -54,6 +54,23 @@ describe("runOnboard", () => {
     });
   });
 
+  it("respects an explicit empty syncFolders ('none') instead of scoping cwd (#103)", async () => {
+    const deps = makeDeps();
+    const result = await runOnboard("/repo", { yes: true, syncFolders: [] }, deps);
+    // The user chose to scope NO extra folders — the loop must not run and cwd is not force-scoped.
+    expect(deps.configureScope).not.toHaveBeenCalled();
+    expect(deps.seedFrom).not.toHaveBeenCalled(); // seedRepos defaults to syncFolders → []
+    expect(result.scopedFolders).toBe(0);
+    // The brain is still created/joined and the cwd wired via init (not the syncFolders loop).
+    expect(deps.init).toHaveBeenCalledTimes(1);
+  });
+
+  it("defaults syncFolders to the cwd when the flag is omitted (undefined ≠ [])", async () => {
+    const deps = makeDeps();
+    await runOnboard("/repo", { yes: true }, deps);
+    expect(deps.configureScope).toHaveBeenCalledTimes(1); // cwd scoped by default
+  });
+
   it("--yes: never calls confirm; all steps run", async () => {
     const deps = makeDeps();
     await runOnboard("/repo", { yes: true }, deps);

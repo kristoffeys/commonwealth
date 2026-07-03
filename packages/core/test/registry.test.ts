@@ -330,6 +330,25 @@ describe("addRegistryMapping — corrupt-file safety (#78)", () => {
   });
 });
 
+describe("registry longest-prefix wins (#103)", () => {
+  it("a more-specific prefix wins over a broader one added earlier", async () => {
+    const registryPath = path.join(root, "registry.json");
+    const broadBrain = await makeBrain(await mkdir("broad-brain"));
+    const narrowBrain = await makeBrain(await mkdir("narrow-brain"));
+    const broad = await mkdir("work");
+    const narrow = await mkdir("work", "app");
+    const cwd = await mkdir("work", "app", "src");
+
+    // Broad mapping added FIRST; narrow (more specific) SECOND — order must not decide.
+    await addRegistryMapping(broad, broadBrain, registryPath);
+    await addRegistryMapping(narrow, narrowBrain, registryPath);
+
+    expect(await resolveBrainDir(cwd, { registryPath })).toBe(narrowBrain);
+    // A cwd under only the broad prefix still resolves to the broad brain.
+    expect(await resolveBrainDir(await mkdir("work", "other"), { registryPath })).toBe(broadBrain);
+  });
+});
+
 describe("resolution precedence", () => {
   it("a marker (layer 1) wins over a registry mapping (layer 3)", async () => {
     const registryPath = path.join(root, "registry.json");
