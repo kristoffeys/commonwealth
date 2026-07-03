@@ -70,8 +70,8 @@ describe("readNoteTool", () => {
 });
 
 describe("remember", () => {
-  it("persists a markdown note on disk that parses back", async () => {
-    const { id, path: relPath } = await remember(brainDir, {
+  it("promotes to canon (autoPromote on) a note that parses back on disk", async () => {
+    const result = await remember(brainDir, {
       kind: "memory",
       title: "Deploys happen on Fridays",
       body: "We ship at the end of the week.",
@@ -79,15 +79,51 @@ describe("remember", () => {
       author: "kristof",
     });
 
-    expect(id).toMatch(/deploys/);
-    const abs = path.join(brainDir, relPath);
+    expect(result.status).toBe("promoted");
+    expect(result.id).toMatch(/deploys/);
+    const abs = path.join(brainDir, result.path!);
     await expect(fs.access(abs)).resolves.toBeUndefined();
 
-    const parsed = await readNote(brainDir, relPath);
-    expect(parsed.frontmatter.id).toBe(id);
+    const parsed = await readNote(brainDir, result.path!);
+    expect(parsed.frontmatter.id).toBe(result.id);
     expect(parsed.frontmatter.title).toBe("Deploys happen on Fridays");
     expect(parsed.frontmatter.author).toBe("kristof");
     expect(parsed.body).toBe("We ship at the end of the week.");
+  });
+
+  it("rejects a note carrying a secret — no longer writes straight to canon (#82)", async () => {
+    const result = await remember(brainDir, {
+      kind: "memory",
+      title: "Deploy creds",
+      body: "Authenticate with AKIAIOSFODNN7EXAMPLE against the bucket.",
+    });
+    expect(result.status).toBe("rejected");
+    expect(result.reason).toBe("contains-secret");
+    // Nothing landed in canon.
+    expect(await searchNotes(brainDir, { query: "creds" })).toEqual([]);
+  });
+
+  it("stages for review instead of canon when autoPromote is off (#82)", async () => {
+    const { setFeature } = await import("@commonwealth/core");
+    await setFeature(brainDir, "autoPromote", false);
+    const result = await remember(brainDir, {
+      kind: "memory",
+      title: "Held for review",
+      body: "This should wait in the staging queue for manual approval.",
+    });
+    expect(result.status).toBe("staged");
+    // Staged notes are not in canon / not searchable until approved.
+    expect(await searchNotes(brainDir, { query: "review" })).toEqual([]);
+  });
+
+  it("rejects a near-duplicate of an existing note (#82 dedup gate)", async () => {
+    const body = "The edge cache holds responses for exactly five minutes before revalidating.";
+    expect((await remember(brainDir, { kind: "memory", title: "Cache TTL", body })).status).toBe(
+      "promoted",
+    );
+    const dup = await remember(brainDir, { kind: "memory", title: "Cache TTL", body });
+    expect(dup.status).toBe("rejected");
+    expect(dup.reason).toBe("duplicate");
   });
 
   it("makes the new note findable via a subsequent search (index refresh)", async () => {

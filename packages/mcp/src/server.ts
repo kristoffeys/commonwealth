@@ -105,9 +105,10 @@ export function createServer(brainDir: string | null = process.cwd()): McpServer
     {
       title: "Remember a note",
       description:
-        "Write a new atomic note to the brain (memory, decision, work-state, or person) " +
-        "and refresh the derived index so it is immediately searchable. M1 writes to canon " +
-        "directly; later milestones route this through staging + curation.",
+        "Record a new atomic note in the brain (memory, decision, work-state, or person). It " +
+        "goes through the same curation as automatic capture — the secret gate, dedup, and the " +
+        "brain's autoPromote setting — so it lands in canon (autoPromote on) or the review queue " +
+        "(off), and may be declined (e.g. a secret or a near-duplicate).",
       inputSchema: {
         kind: kindEnum.describe("Which kind of note to create"),
         title: z.string().min(1).describe("Short title / the fact in one line"),
@@ -119,10 +120,15 @@ export function createServer(brainDir: string | null = process.cwd()): McpServer
     async ({ kind, title, body, tags, author }) => {
       if (brainDir === null) return noBrainConfigured();
       const result = await remember(brainDir, { kind, title, body, tags, author });
-      const text = `Remembered "${title}" as ${result.id} (${result.path}).`;
+      const text =
+        result.status === "promoted"
+          ? `Remembered "${title}" as ${result.id} (${result.path}).`
+          : result.status === "staged"
+            ? `Staged "${title}" for review as ${result.id} (${result.path}); approve with /commonwealth:promote.`
+            : `Did not remember "${title}": ${result.reason}.`;
       return {
         content: [{ type: "text", text }],
-        structuredContent: { id: result.id, path: result.path },
+        structuredContent: { ...result },
       };
     },
   );

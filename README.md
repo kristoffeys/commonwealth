@@ -204,7 +204,7 @@ available through these tools:
 | ----------------- | ---------------------------------------------------------- |
 | `search`          | full-text (FTS5) search over the brain                     |
 | `read`            | read a note by path                                        |
-| `remember`        | write a new note (memory / decision / work-state / person) |
+| `remember`        | record a new note through the curation gate (secret + dedup + autoPromote) |
 | `list-work-state` | list active workstreams                                    |
 | `who-is`          | look up a person note                                      |
 
