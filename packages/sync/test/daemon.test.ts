@@ -61,6 +61,24 @@ describe("Daemon", () => {
     await expect(fs.access(path.join(fx.alice, ".commonwealth", "sync.pid"))).rejects.toBeTruthy();
   }, 20_000);
 
+  it("refuses to start a second daemon for the same brain (#100)", async () => {
+    const first = new Daemon();
+    await first.start(fx.alice, { intervalMs: 60_000, debounceMs: 100 });
+    try {
+      const second = new Daemon();
+      // A live daemon already owns this brain → the second must refuse rather than race it.
+      await expect(second.start(fx.alice, { intervalMs: 60_000 })).rejects.toThrow(
+        /already running/,
+      );
+    } finally {
+      await first.stop();
+    }
+    // After the first stops, a fresh start is allowed again.
+    const third = new Daemon();
+    await third.start(fx.alice, { intervalMs: 60_000, debounceMs: 100 });
+    await third.stop();
+  }, 20_000);
+
   it("settles after a write and does not self-trigger an unbounded sync loop", async () => {
     // Regression: regenerateDerived rewrites COMMONWEALTH.md/INDEX.md every sync; if the
     // watcher observed those, each sync would retrigger the next forever. They must be

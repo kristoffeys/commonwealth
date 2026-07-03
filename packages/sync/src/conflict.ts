@@ -86,21 +86,25 @@ export async function resolveConflictsAsSiblings(
   const resolved: ResolvedConflict[] = [];
 
   for (const relPath of conflictedPaths) {
-    const oursRaw = await showStage(brainDir, 2, relPath);
-    const theirsRaw = await showStage(brainDir, 3, relPath);
+    // These stages are always reached via a REBASE (engine pullRebase → `rebase upstream`), and
+    // a rebase inverts the usual sense of ours/theirs: stage :2 is the branch being replayed onto
+    // (upstream = the teammate's REMOTE content) and stage :3 is our own replayed commit (LOCAL).
+    // Label accordingly so the sibling filenames and the review note aren't backwards (#100).
+    const remoteRaw = await showStage(brainDir, 2, relPath);
+    const localRaw = await showStage(brainDir, 3, relPath);
     const abs = path.join(brainDir, relPath);
 
     // Both sides present: split into two siblings, drop the marker-laden original.
-    if (oursRaw !== null && theirsRaw !== null) {
-      const oursPath = await writeSibling(brainDir, relPath, oursRaw, "ours");
-      const theirsPath = await writeSibling(brainDir, relPath, theirsRaw, "theirs");
+    if (localRaw !== null && remoteRaw !== null) {
+      const oursPath = await writeSibling(brainDir, relPath, localRaw, "ours");
+      const theirsPath = await writeSibling(brainDir, relPath, remoteRaw, "theirs");
       await fs.rm(abs, { force: true });
       resolved.push({ original: relPath, oursPath, theirsPath });
       continue;
     }
 
     // One side only (add/delete): keep whichever content exists, verbatim, no markers.
-    const survivor = oursRaw ?? theirsRaw;
+    const survivor = localRaw ?? remoteRaw;
     if (survivor !== null) {
       await fs.writeFile(abs, survivor, "utf8");
       resolved.push({ original: relPath, oursPath: relPath, theirsPath: relPath });
