@@ -1,7 +1,7 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 /**
  * End-to-end guard for the vendored plugin runtime. `bundle.mjs` copies each package's dist
@@ -16,17 +16,10 @@ import { beforeAll, describe, expect, it } from "vitest";
  */
 
 const pluginRoot = fileURLToPath(new URL("..", import.meta.url));
-const bundleScript = path.join(pluginRoot, "scripts", "bundle.mjs");
 const vendoredServer = path.join(pluginRoot, "vendor", "mcp", "index.js");
 
-beforeAll(() => {
-  // Fresh bundle so the test reflects the current tree (bundle.mjs runs `pnpm -r build` itself).
-  const res = spawnSync("node", [bundleScript], { stdio: "pipe", encoding: "utf8" });
-  if (res.status !== 0) {
-    throw new Error(`bundle.mjs failed (code ${res.status}):\n${res.stderr ?? ""}`);
-  }
-}, 240_000);
-
+// The bundle (which runs `pnpm -r build` + vendors the runtime) is produced once in vitest
+// globalSetup (#111), so vendor/ reflects the current tree here.
 describe("vendored plugin MCP server", () => {
   it("starts without a missing-module crash", async () => {
     const child = spawn("node", [vendoredServer], { stdio: ["pipe", "pipe", "pipe"] });
