@@ -85,8 +85,45 @@ describe("writeNote / readNote / listNotes", () => {
     expect(people[0]!.frontmatter.kind).toBe("person");
   });
 
+  it("skips a single malformed note instead of failing the whole read (#80)", async () => {
+    await writeNote(dir, { kind: "memory", title: "Good one", body: "a valid note" });
+    await writeNote(dir, { kind: "memory", title: "Good two", body: "another valid note" });
+    // A corrupt/hand-edited note with unparseable frontmatter lands in the kind folder.
+    await fs.writeFile(
+      path.join(dir, "memory", "broken.md"),
+      "---\nnot: [valid\n---\noops\n",
+      "utf8",
+    );
+
+    // listNotes must return the two good notes, not throw a brain-wide read outage.
+    const notes = await listNotes(dir, "memory");
+    expect(notes.map((n) => n.frontmatter.title).sort()).toEqual(["Good one", "Good two"]);
+  });
+
   it("rejects invalid frontmatter", () => {
     expect(() => parseNote("---\nkind: nope\n---\nx", "x.md")).toThrow();
+  });
+
+  it("preserves unknown frontmatter keys across parse→serialize (#81)", () => {
+    const raw = [
+      "---",
+      "id: 2026-07-01-x-a1b2",
+      "kind: memory",
+      "title: X",
+      "created: 2026-07-01",
+      "customField: keep-me", // not in the schema
+      "forwardVersionKey: 42", // e.g. a field a newer schema added
+      "---",
+      "body",
+    ].join("\n");
+    const note = parseNote(raw, "memory/x.md");
+    // The unknown keys survive parsing…
+    expect((note.frontmatter as Record<string, unknown>).customField).toBe("keep-me");
+    expect((note.frontmatter as Record<string, unknown>).forwardVersionKey).toBe(42);
+    // …and round-trip through serialization (not silently dropped).
+    const round = parseNote(serializeNote(note), "memory/x.md");
+    expect((round.frontmatter as Record<string, unknown>).customField).toBe("keep-me");
+    expect((round.frontmatter as Record<string, unknown>).forwardVersionKey).toBe(42);
   });
 });
 

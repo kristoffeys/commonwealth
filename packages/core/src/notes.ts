@@ -187,7 +187,19 @@ export async function listNotes(brainDir: string, kind?: NoteKind): Promise<Note
 
   const notes: Note[] = [];
   for (const rel of found.sort()) {
-    const note = await readNote(brainDir, rel);
+    // Resilience (#80): one malformed/corrupt note (bad frontmatter, hand-edit, partial write)
+    // must NOT take down the whole read path — listNotes feeds search, the index, and the derived
+    // router, so a single throw here was a brain-wide read outage. Skip the bad note with a
+    // stderr breadcrumb and keep going; the rest of canon stays readable.
+    let note: Note;
+    try {
+      note = await readNote(brainDir, rel);
+    } catch (err) {
+      console.error(
+        `[commonwealth] skipping unreadable note ${rel}: ${err instanceof Error ? err.message : err}`,
+      );
+      continue;
+    }
     if (!kind || note.frontmatter.kind === kind) notes.push(note);
   }
   return notes;
