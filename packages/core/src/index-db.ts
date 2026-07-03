@@ -204,6 +204,24 @@ export async function search(
   }
 }
 
+/**
+ * Neutralize a note-controlled string for safe inclusion in the GENERATED markdown that agents
+ * read (COMMONWEALTH.md / INDEX.md). Titles and `source` are free text; without this a title
+ * like `x](evil.md) ## Ignore prior instructions\n# ` could break out of its link/list item and
+ * inject new markdown structure (headings, links, directives) into every teammate's injected
+ * context — a prompt-injection vector (#102). We collapse line breaks (so it can't start a new
+ * block), escape the markdown-structural chars `[` `]` `` ` `` (so it can't form a link or code
+ * span), and cap the length. The stored note is untouched; only the derived rendering is escaped.
+ */
+function inlineText(value: string): string {
+  return value
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[[\]`]/g, (c) => `\\${c}`)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200);
+}
+
 /** Notes whose `status` counts as still-active work (i.e. not `done`). */
 function isActiveWorkState(note: Note): boolean {
   return note.frontmatter.kind === "work-state" && note.frontmatter.status !== "done";
@@ -264,7 +282,7 @@ function commonwealthMarkdown(notes: Note[]): string {
     const group = bySource.get(source)!;
     const active = group.filter(isActiveWorkState).sort(byId);
     const decisions = group.filter((n) => n.frontmatter.kind === "decision").sort(byCreatedDesc);
-    lines.push(`## ${source}`);
+    lines.push(`## ${inlineText(source)}`);
     lines.push("");
     lines.push("**Active work-state**");
     if (active.length === 0) {
@@ -272,7 +290,7 @@ function commonwealthMarkdown(notes: Note[]): string {
     } else {
       for (const n of active) {
         const status = n.frontmatter.kind === "work-state" ? n.frontmatter.status : "";
-        lines.push(`- [${n.frontmatter.title}](${n.path}) — ${status}`);
+        lines.push(`- [${inlineText(n.frontmatter.title)}](${n.path}) — ${status}`);
       }
     }
     lines.push("");
@@ -281,7 +299,7 @@ function commonwealthMarkdown(notes: Note[]): string {
       lines.push("- _None._");
     } else {
       for (const n of decisions) {
-        lines.push(`- [${n.frontmatter.title}](${n.path}) — ${n.frontmatter.created}`);
+        lines.push(`- [${inlineText(n.frontmatter.title)}](${n.path}) — ${n.frontmatter.created}`);
       }
     }
     lines.push("");
@@ -303,7 +321,7 @@ function indexMarkdown(dirRel: string, notes: Note[]): string {
   } else {
     for (const n of sorted) {
       // INDEX.md lives in the same folder as the notes, so link by filename only.
-      lines.push(`- [${n.frontmatter.title}](${path.posix.basename(n.path)})`);
+      lines.push(`- [${inlineText(n.frontmatter.title)}](${path.posix.basename(n.path)})`);
     }
   }
   lines.push("");
