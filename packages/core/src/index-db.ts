@@ -73,27 +73,39 @@ export async function buildIndex(brainDir: string): Promise<{ indexed: number }>
   try {
     // Full rebuild + read-only queries: the default rollback journal leaves no
     // persistent sidecar files (unlike WAL's -wal/-shm), keeping index/ clean.
-    db.exec("DROP TABLE IF EXISTS notes_fts;");
-    // `path` is UNINDEXED: stored/returned but not part of the full-text match.
-    db.exec(
-      "CREATE VIRTUAL TABLE notes_fts USING fts5(" +
-        "id, kind, title, tags, body, path UNINDEXED, source UNINDEXED" +
-        ");",
-    );
-
-    const insert = db.prepare(
-      "INSERT INTO notes_fts (id, kind, title, tags, body, path, source) " +
-        "VALUES (@id, @kind, @title, @tags, @body, @path, @source);",
-    );
-    const insertAll = db.transaction((rows: IndexRow[]) => {
+    //
+    // Do the DROP + CREATE + inserts in ONE transaction so an interrupt (crash, SIGTERM)
+    // rolls the whole thing back: the db is never left with the old table dropped and the
+    // new one missing/half-populated, which would make `search` throw "no such table"
+    // forever (#101). Either the previous index survives intact, or the new one lands whole.
+    const rebuild = db.transaction((rows: IndexRow[]) => {
+      db.exec("DROP TABLE IF EXISTS notes_fts;");
+      // `path` is UNINDEXED: stored/returned but not part of the full-text match.
+      db.exec(
+        "CREATE VIRTUAL TABLE notes_fts USING fts5(" +
+          "id, kind, title, tags, body, path UNINDEXED, source UNINDEXED" +
+          ");",
+      );
+      const insert = db.prepare(
+        "INSERT INTO notes_fts (id, kind, title, tags, body, path, source) " +
+          "VALUES (@id, @kind, @title, @tags, @body, @path, @source);",
+      );
       for (const row of rows) insert.run(row);
     });
-    insertAll(notes.map(toRow));
+    rebuild(notes.map(toRow));
 
     return { indexed: notes.length };
   } finally {
     db.close();
   }
+}
+
+/** True if the FTS table exists in an already-open db (survives a partial/interrupted build). */
+function hasFtsTable(db: Database.Database): boolean {
+  const row = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'notes_fts'")
+    .get();
+  return row !== undefined;
 }
 
 /**
@@ -126,6 +138,20 @@ export async function search(
     await fs.access(dbPath(brainDir));
   } catch {
     await buildIndex(brainDir);
+  }
+
+  // Self-heal (#101): the db file can exist but lack `notes_fts` — e.g. a build interrupted
+  // before this fix, or an externally-truncated db. Detect the missing table and rebuild once,
+  // so search recovers instead of throwing "no such table: notes_fts" on every call forever.
+  {
+    const probe = new Database(dbPath(brainDir), { readonly: true });
+    let healthy: boolean;
+    try {
+      healthy = hasFtsTable(probe);
+    } finally {
+      probe.close();
+    }
+    if (!healthy) await buildIndex(brainDir);
   }
 
   const match = toMatchQuery(query);

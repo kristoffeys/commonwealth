@@ -1,7 +1,8 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as ids from "../src/ids";
 import { makeNoteId, slugify } from "../src/ids";
 import { listNotes, parseNote, readNote, serializeNote, writeNote } from "../src/notes";
 import type { Note } from "../src/schema";
@@ -114,6 +115,25 @@ describe("path containment (#76, #77)", () => {
   it("parseNote rejects a note whose id is not a single safe segment", () => {
     const raw = "---\nid: ../../evil\nkind: memory\ntitle: X\ncreated: 2026-07-01\n---\nbody";
     expect(() => parseNote(raw, "memory/x.md")).toThrow();
+  });
+
+  it("writeNote refuses to overwrite an existing note on an id collision (#101)", async () => {
+    // Force both writes to derive the SAME id so the second targets an existing file.
+    const spy = vi.spyOn(ids, "makeNoteId").mockReturnValue("2026-07-01-fixed-abcd");
+    try {
+      const first = await writeNote(dir, { kind: "memory", title: "One", body: "first body" });
+      expect(first.path).toBe("memory/2026-07-01-fixed-abcd.md");
+      // The colliding second write must throw, NOT silently overwrite the first.
+      await expect(
+        writeNote(dir, { kind: "memory", title: "Two", body: "second body" }),
+      ).rejects.toThrow(/id collision/);
+      // The original file is intact (not clobbered) and no temp file leaked.
+      expect(await readNote(dir, first.path)).toMatchObject({ body: "first body" });
+      const files = await fs.readdir(path.join(dir, "memory"));
+      expect(files.some((f) => f.endsWith(".tmp"))).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

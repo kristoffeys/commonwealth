@@ -60,6 +60,22 @@ describe("search", () => {
     await buildIndex(dir);
     expect(await search(dir, "   ")).toEqual([]);
   });
+
+  it("self-heals a db that exists but is missing the FTS table (#101)", async () => {
+    await seed();
+    await buildIndex(dir);
+    // Simulate a build interrupted between DROP and CREATE (or an externally-clobbered db):
+    // the file exists but has no notes_fts. Old behavior threw "no such table" forever.
+    const dbFile = path.join(dir, "index", "commonwealth.db");
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(dbFile);
+    db.exec("DROP TABLE IF EXISTS notes_fts;");
+    db.close();
+
+    // search must detect the missing table, rebuild, and return results instead of throwing.
+    const hits = await search(dir, "JWT");
+    expect(hits.map((h) => h.title)).toContain("Auth design");
+  });
 });
 
 describe("regenerateDerived", () => {
