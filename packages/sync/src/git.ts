@@ -22,6 +22,20 @@ function isNoteFile(rel: string): boolean {
 }
 
 /**
+ * Files the pre-commit scrub must scan for secrets: note files PLUS the generated router/index
+ * (COMMONWEALTH.md, every INDEX.md). Those derived files embed note TITLES, so a secret in a
+ * title would ride into them and get pushed even though the note file itself is blocked — the
+ * derived files aren't note-files and so escaped the scrub entirely (#79). Scanning them closes
+ * the leak; they're regenerated each sync, so a blocked derived file self-heals once the secret
+ * is removed from the source note.
+ */
+function isScannableForSecrets(rel: string): boolean {
+  if (isNoteFile(rel)) return true;
+  const name = rel.split("/").pop();
+  return name === "COMMONWEALTH.md" || name === "INDEX.md";
+}
+
+/**
  * Open a simple-git handle bound to a working directory. `core.editor=true` is injected
  * into every invocation (via `-c`) so non-interactive steps that would otherwise open an
  * editor — notably `rebase --continue` recording a resolution commit — never block.
@@ -112,7 +126,7 @@ export async function commitAllExceptSecrets(dir: string, message: string): Prom
 export async function scrubStagedSecrets(dir: string): Promise<string[]> {
   const secretsBlocked: string[] = [];
   for (const rel of await stagedFiles(dir)) {
-    if (!isNoteFile(rel)) continue;
+    if (!isScannableForSecrets(rel)) continue;
     let content: string;
     try {
       content = await fs.readFile(path.join(dir, rel), "utf8");

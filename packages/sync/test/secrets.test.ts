@@ -99,6 +99,33 @@ describe("SyncEngine secret scrub (#16)", () => {
   });
 });
 
+describe("SyncEngine secret scrub — derived files (#79)", () => {
+  it("does not push a secret embedded in a note TITLE via the derived COMMONWEALTH.md", async () => {
+    const engine = new SyncEngine(fx.alice);
+    const SECRET = "AKIAIOSFODNN7EXAMPLE";
+    // A work-state note whose TITLE carries a secret (a hand-edit / not through the capture
+    // gate). Active work-state titles are rendered into the COMMONWEALTH.md router — which used
+    // to escape the scrub because it isn't a note file.
+    await writeNote(fx.alice, {
+      kind: "work-state",
+      title: `deploy key ${SECRET}`,
+      body: "a placeholder body long enough to be a real note",
+      fields: { status: "planned" },
+    });
+
+    const summary = await engine.syncOnce();
+
+    // The generated router is now scanned, so it is withheld too.
+    expect(summary.secretsBlocked).toContain("COMMONWEALTH.md");
+    // The secret appears in NO commit — not the note, not the derived files.
+    expect(git(fx.alice, ["log", "--all", "-p"])).not.toContain(SECRET);
+
+    // And it never reached the remote: bob pulls and origin/main has no trace.
+    await new SyncEngine(fx.bob).syncOnce();
+    expect(git(fx.bob, ["log", "origin/main", "-p"])).not.toContain(SECRET);
+  });
+});
+
 describe("SyncEngine secret scrub — project subtree layout (ADR-0015)", () => {
   it("scrubs a secret in a note under <project>/<kind>/ (scrub is layout-agnostic, #90)", async () => {
     const engine = new SyncEngine(fx.alice);
