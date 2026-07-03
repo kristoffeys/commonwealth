@@ -1,6 +1,7 @@
 import { buildIndex, regenerateDerived } from "@commonwealth/core";
 import { resolveConflictsAsSiblings, type ResolvedConflict } from "./conflict.js";
 import {
+  abortRebase,
   commitAllExceptSecrets,
   conflictedPaths,
   hasRemote,
@@ -9,7 +10,17 @@ import {
   pullRebase,
   push,
 } from "./git.js";
+import { acquireSyncLock } from "./lock.js";
 import { SerialQueue } from "./queue.js";
+
+/** A pass that did nothing (no lock, or nothing to do): every flag false, no conflicts/secrets. */
+const NOOP_SUMMARY: SyncSummary = {
+  committed: false,
+  pulled: false,
+  pushed: false,
+  conflicts: [],
+  secretsBlocked: [],
+};
 
 /** Options for constructing a {@link SyncEngine}. */
 export interface SyncEngineOptions {
@@ -60,6 +71,25 @@ export class SyncEngine {
   private async runSyncOnce(): Promise<SyncSummary> {
     const dir = this.brainDir;
 
+    // 0a. Cross-process lock: another process (a one-shot `sync`, or a second daemon) may be
+    //     mid-sync on this same repo. The in-process SerialQueue can't see it, so acquire a
+    //     file lock; if a live process holds it, skip this pass rather than race its git ops
+    //     (#100). The daemon/poll will sync again shortly; a one-shot defers to the running one.
+    const release = await acquireSyncLock(dir);
+    if (!release) return { ...NOOP_SUMMARY };
+    try {
+      // 0b. Recover a rebase stranded by a previously crashed/killed pass (#100). Committing new
+      //     work while mid-rebase would land it on a detached HEAD and then the pullRebase below
+      //     fails. Abort first so we start from a clean branch tip with local commits intact.
+      if (await isRebasing(dir)) await abortRebase(dir);
+      return await this.syncLocked(dir);
+    } finally {
+      await release();
+    }
+  }
+
+  /** The sync cycle proper, run while holding the cross-process lock (see {@link runSyncOnce}). */
+  private async syncLocked(dir: string): Promise<SyncSummary> {
     // 1. Commit local changes first, so the rebase replays them onto teammates' work.
     //    Scrub secrets pre-commit (#16): note files carrying a credential are unstaged and
     //    left uncommitted, so a leaked secret is never committed or pushed.

@@ -54,35 +54,45 @@ function makeIgnored(brainDir: string): (p: string) => boolean {
  * a periodic poll pulls inbound teammate changes even without local edits. Every sync
  * runs through the engine's serial queue, so watcher and poll can never race.
  */
+/** How long {@link Daemon.stop} waits for an in-flight sync to finish before giving up. */
+const DRAIN_TIMEOUT_MS = 30_000;
+
 export class Daemon {
   private engine?: SyncEngine;
   private watcher?: FSWatcher;
   private timer?: NodeJS.Timeout;
   private debounceTimer?: NodeJS.Timeout;
   private readonly queue = new SerialQueue();
+  private opts: DaemonOptions = {};
+  /** True while a sync is running; a trigger during it coalesces into one re-run. */
+  private syncing = false;
+  /** A trigger arrived while `syncing` — run exactly one more pass when the current one ends. */
+  private rerun = false;
+  private stopping = false;
 
   /**
    * Start watching + polling `brainDir`. Runs an initial sync, then wires the watcher and
    * poll loop. Writes a PID file so a separate CLI `status`/`stop` can find this process.
+   * Refuses to start if another daemon is already running for this brain (#100), so two
+   * daemons never race the same repo.
    */
   async start(brainDir: string, opts: DaemonOptions = {}): Promise<void> {
+    if (await isRunning(brainDir)) {
+      throw new Error(
+        `A Commonwealth sync daemon is already running for ${brainDir} (pid ${await readPid(brainDir)}). ` +
+          `Stop it first, or run \`commonwealth sync stop\`.`,
+      );
+    }
+
     const intervalMs = opts.intervalMs ?? 15_000;
     const debounceMs = opts.debounceMs ?? 500;
+    this.opts = opts;
     this.engine = new SyncEngine(brainDir, { queue: this.queue });
 
     await writePid(brainDir);
 
-    const runSync = async (): Promise<void> => {
-      try {
-        const summary = await this.engine!.syncOnce();
-        opts.onSync?.(summary);
-      } catch (err) {
-        opts.onError?.(err);
-      }
-    };
-
     // Initial reconcile on startup.
-    await runSync();
+    await this.runSync();
 
     // Filesystem watch → debounced sync. v4 `ignored` is a predicate over the full path.
     this.watcher = chokidar.watch(brainDir, {
@@ -92,16 +102,49 @@ export class Daemon {
     });
     const onFsEvent = (): void => {
       if (this.debounceTimer) clearTimeout(this.debounceTimer);
-      this.debounceTimer = setTimeout(() => void runSync(), debounceMs);
+      this.debounceTimer = setTimeout(() => void this.runSync(), debounceMs);
     };
     this.watcher.on("add", onFsEvent).on("change", onFsEvent).on("unlink", onFsEvent);
 
     // Periodic poll for inbound changes.
-    this.timer = setInterval(() => void runSync(), intervalMs);
+    this.timer = setInterval(() => void this.runSync(), intervalMs);
   }
 
-  /** Tear down watcher + timers and remove the PID file. Safe to call more than once. */
+  /**
+   * Run a sync, COALESCING concurrent triggers (#100). The watcher and the poll timer both call
+   * this; if a sync is already running, we just mark `rerun` instead of enqueuing another — so a
+   * sync that outlasts the poll interval can never grow an unbounded backlog. When the running
+   * pass ends, we do exactly one more if any trigger arrived meanwhile.
+   */
+  private async runSync(): Promise<void> {
+    if (this.syncing) {
+      this.rerun = true;
+      return;
+    }
+    this.syncing = true;
+    try {
+      do {
+        this.rerun = false;
+        if (this.stopping) return;
+        try {
+          const summary = await this.engine!.syncOnce();
+          this.opts.onSync?.(summary);
+        } catch (err) {
+          this.opts.onError?.(err);
+        }
+      } while (this.rerun);
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  /**
+   * Tear down watcher + timers, DRAIN any in-flight sync (bounded by {@link DRAIN_TIMEOUT_MS}),
+   * then remove the PID file. Draining means a SIGTERM no longer exits mid `git commit`/`rebase`/
+   * `push`, which would strand the repo (#100). Safe to call more than once.
+   */
   async stop(): Promise<void> {
+    this.stopping = true;
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = undefined;
@@ -114,6 +157,12 @@ export class Daemon {
       await this.watcher.close();
       this.watcher = undefined;
     }
+    // Wait for whatever is already queued to settle (enqueuing an empty task resolves only after
+    // all prior queued work does), but never block shutdown forever on a hung git op.
+    await Promise.race([
+      this.queue.enqueue(() => Promise.resolve()),
+      new Promise<void>((resolve) => setTimeout(resolve, DRAIN_TIMEOUT_MS)),
+    ]);
     if (this.engine) {
       await removePid(this.engine.brainDir);
     }

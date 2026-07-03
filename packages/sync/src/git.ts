@@ -180,6 +180,20 @@ export async function pullRebase(dir: string): Promise<{ conflicts: boolean }> {
   }
 }
 
+/**
+ * Abort an in-progress rebase, restoring the branch to its pre-rebase tip (local commits intact).
+ * Best-effort: if there is somehow no rebase to abort, git errors and we swallow it — the caller
+ * only calls this after {@link isRebasing} returned true, to recover a rebase stranded by a prior
+ * crashed pass (#100).
+ */
+export async function abortRebase(dir: string): Promise<void> {
+  try {
+    await openRepo(dir).raw(["rebase", "--abort"]);
+  } catch {
+    // Nothing to abort / already clean — nothing to recover.
+  }
+}
+
 /** True if a rebase is currently in progress (a `.git/rebase-*` dir exists). */
 export async function isRebasing(dir: string): Promise<boolean> {
   const gitDir = (await openRepo(dir).revparse(["--git-dir"])).trim();
