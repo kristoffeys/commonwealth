@@ -209,12 +209,21 @@ export async function resolveBrainDir(
     if (await isFile(path.join(dir, BRAIN_IDENTITY_REL))) return dir;
   }
 
-  // 3) User registry mappings; first prefix that startDir is under wins.
+  // 3) User registry mappings; the LONGEST (most-specific) matching prefix wins, regardless of
+  //    insertion order — so a narrow `/work/app` mapping is never shadowed by a broader `/work`
+  //    one that merely happens to appear earlier in the file (#103).
   const registry = await loadRegistry(registryPath);
   if (registry) {
+    let bestBrain: string | null = null;
+    let bestLen = -1;
     for (const mapping of registry.mappings) {
-      if (isUnder(start, expand(mapping.prefix))) return expand(mapping.brain);
+      const prefix = expand(mapping.prefix);
+      if (isUnder(start, prefix) && prefix.length > bestLen) {
+        bestLen = prefix.length;
+        bestBrain = expand(mapping.brain);
+      }
     }
+    if (bestBrain !== null) return bestBrain;
   }
 
   // 4) Env fallback.

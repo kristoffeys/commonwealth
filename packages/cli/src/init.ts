@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -78,13 +79,18 @@ export function findRepoRoot(startDir: string): string {
 
 /**
  * Compute the default brain directory for a project. The brain is a SEPARATE repo living
- * under `~/.commonwealth/brains/<project-basename>`, never nested inside the project itself.
+ * under `~/.commonwealth/brains/<basename>-<hash>`, never nested inside the project itself.
+ * The short hash of the FULL resolved path disambiguates same-named projects in different
+ * locations (`~/work/app` vs `~/personal/app`), which would otherwise collapse to one brain
+ * and silently share it (#103). Deterministic, so re-running `init` maps to the same brain.
  *
  * @param repoRoot The project's repo root.
  * @returns An absolute path for the project's default brain.
  */
 export function defaultBrainDir(repoRoot: string): string {
-  return path.join(os.homedir(), ".commonwealth", "brains", path.basename(path.resolve(repoRoot)));
+  const resolved = path.resolve(repoRoot);
+  const hash = createHash("sha256").update(resolved).digest("hex").slice(0, 8);
+  return path.join(os.homedir(), ".commonwealth", "brains", `${path.basename(resolved)}-${hash}`);
 }
 
 /**
@@ -111,13 +117,19 @@ export async function runInit(cwd: string, opts: InitOptions, deps: InitDeps): P
   const repoRoot = findRepoRoot(cwd);
 
   const existing = await deps.resolveBrain(cwd);
-  if (existing !== null && !opts.reseed) {
+  // JOIN the already-resolved brain only when the user isn't overriding it with --brain and
+  // isn't reseeding. An explicit --brain means "use THIS brain" (switch), so it must not be
+  // silently ignored in favor of the auto-resolved one (#103).
+  if (existing !== null && !opts.reseed && !opts.brain) {
     await deps.registerBrain(projectDir, existing);
     deps.log(`Joined existing brain at ${existing}. Run the sync daemon to pull.`);
     return { mode: "join", brainDir: existing, staged: 0, gathered: 0 };
   }
 
-  const brainDir = opts.brain ?? defaultBrainDir(projectDir);
+  // Brain selection: an explicit --brain wins; otherwise a --reseed re-mines into the brain this
+  // project ALREADY resolves to (never silently re-point a custom brain at the default, #103);
+  // only a brand-new project with no brain falls back to the default dir.
+  const brainDir = opts.brain ?? existing ?? defaultBrainDir(projectDir);
   await deps.createBrain(brainDir, path.basename(brainDir));
   await deps.registerBrain(projectDir, brainDir);
 
