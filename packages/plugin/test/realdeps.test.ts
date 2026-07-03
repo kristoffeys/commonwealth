@@ -107,6 +107,63 @@ describe("realDeps() receipt IO (#96) — saveReceipt / takeReceipt round-trip",
   });
 });
 
+describe("realDeps().extractCandidates hardening (#104)", () => {
+  it("hard-kills a wedged extraction child and returns [] (timeout)", async () => {
+    // A `claude` stub that hangs forever: without the timeout, extractCandidates would never
+    // resolve and SessionEnd would block indefinitely.
+    const stub = path.join(tmp, "hang.sh");
+    await fs.writeFile(stub, "#!/bin/sh\nexec sleep 600\n");
+    await fs.chmod(stub, 0o755);
+    const transcript = path.join(tmp, "t.jsonl");
+    await fs.writeFile(transcript, `${JSON.stringify({ role: "user", content: "hi" })}\n`);
+
+    const deps = realDeps({ claudeBin: stub, extractionTimeoutMs: 500 });
+    const start = process.hrtime.bigint();
+    const out = await deps.extractCandidates(transcript);
+    const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+
+    expect(out).toEqual([]);
+    expect(elapsedMs).toBeLessThan(5000); // killed at ~500ms, not left hanging
+  });
+});
+
+describe("plugin hook recursion guard (#104)", () => {
+  const hooksDir = fileURLToPath(new URL("../hooks", import.meta.url));
+
+  /** Run a hook script with the given env + stdin; resolve { code, stdout, stderr }. */
+  async function runHook(
+    script: string,
+    env: Record<string, string>,
+  ): Promise<{ code: number | null; stdout: string; stderr: string }> {
+    const { spawn } = await import("node:child_process");
+    return await new Promise((resolve) => {
+      const child = spawn("node", [path.join(hooksDir, script)], {
+        env: { ...process.env, ...env },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (d) => (stdout += d.toString()));
+      child.stderr.on("data", (d) => (stderr += d.toString()));
+      child.on("close", (code) => resolve({ code, stdout, stderr }));
+      child.stdin.end(JSON.stringify({ cwd: "/tmp", transcript_path: "/nope" }));
+    });
+  }
+
+  it("session-end no-ops (no output) when DISABLE_HOOKS is set", async () => {
+    const res = await runHook("session-end.mjs", { COMMONWEALTH_DISABLE_HOOKS: "1" });
+    expect(res.code).toBe(0);
+    expect(res.stdout).toBe("");
+    expect(res.stderr).not.toContain("[commonwealth] session-end");
+  });
+
+  it("session-start no-ops (no stdout) when DISABLE_HOOKS is set", async () => {
+    const res = await runHook("session-start.mjs", { COMMONWEALTH_DISABLE_HOOKS: "1" });
+    expect(res.code).toBe(0);
+    expect(res.stdout).toBe("");
+  });
+});
+
 describe("realDeps().capture (real curate binary over stdin)", () => {
   // The curate binary + its deps are built once in vitest globalSetup (#111).
   it("captures a candidate through the real binary (proves stdin, not --from -)", async () => {

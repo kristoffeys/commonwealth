@@ -17,6 +17,21 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+/**
+ * Hard cap on the extraction `claude -p` child (#104). Extraction is an LLM call, so allow real
+ * latency — but never let a hung/wedged child block SessionEnd forever; kill it past this.
+ */
+const EXTRACTION_TIMEOUT_MS = 120_000;
+
+/**
+ * Env var the extraction spawn sets so the NESTED `claude -p` it launches doesn't re-fire the
+ * Commonwealth SessionStart/SessionEnd hooks — which would recurse (each extraction spawning
+ * another) and re-capture the extractor's own transcript (#104). The hook entries early-return
+ * when this is set.
+ */
+export const DISABLE_HOOKS_ENV = "COMMONWEALTH_DISABLE_HOOKS";
 
 /**
  * SessionStart: resolve the brain for the session's cwd, honor the per-user scope gate,
@@ -264,10 +279,11 @@ export function compactTranscript(raw) {
 /**
  * Run a command, resolving with `{ code, stdout, stderr }`. Never rejects — a missing
  * binary or non-zero exit is reported via `code` (or `code: null` + `error`). `input`, if
- * given, is written to the child's stdin. Lazy-imports `node:child_process` so importing
- * this module stays side-effect free for tests.
+ * given, is written to the child's stdin. `timeoutMs`, if given, hard-kills the child (SIGKILL)
+ * after that long so a wedged child can't block the hook forever (#104). Lazy-imports
+ * `node:child_process` so importing this module stays side-effect free for tests.
  */
-async function run(cmd, args, { input, cwd, env } = {}) {
+async function run(cmd, args, { input, cwd, env, timeoutMs } = {}) {
   const { spawn } = await import("node:child_process");
   return await new Promise((resolve) => {
     let child;
@@ -276,6 +292,9 @@ async function run(cmd, args, { input, cwd, env } = {}) {
         cwd,
         env: { ...process.env, ...env },
         stdio: ["pipe", "pipe", "pipe"],
+        // Node kills the child with this signal once timeoutMs elapses; `close` then fires with
+        // a null code, which callers already treat as "produced nothing" (graceful).
+        ...(typeof timeoutMs === "number" ? { timeout: timeoutMs, killSignal: "SIGKILL" } : {}),
       });
     } catch (error) {
       resolve({ code: null, stdout: "", stderr: String(error), error });
@@ -324,12 +343,17 @@ async function run(cmd, args, { input, cwd, env } = {}) {
  * @returns {object}            The `deps` object matching the contract at the top.
  */
 export function realDeps(overrides = {}) {
-  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT ?? new URL("..", import.meta.url).pathname;
+  // fileURLToPath, not URL.pathname: `.pathname` percent-encodes (a space → `%20`), so when
+  // CLAUDE_PLUGIN_ROOT is unset and the install path contains spaces the vendored binary paths
+  // don't resolve and every hook silently no-ops (#104). fileURLToPath decodes correctly.
+  const pluginRoot =
+    process.env.CLAUDE_PLUGIN_ROOT ?? fileURLToPath(new URL("..", import.meta.url));
   const curateEntry =
     overrides.curateEntry ??
     `${pluginRoot}${pluginRoot.endsWith("/") ? "" : "/"}vendor/curate/index.js`;
   const nodeBin = overrides.nodeBin ?? process.execPath;
   const claudeBin = overrides.claudeBin ?? "claude";
+  const extractionTimeoutMs = overrides.extractionTimeoutMs ?? EXTRACTION_TIMEOUT_MS;
 
   /** Read + parse the vendored user config indirectly via `scope check`. */
   async function isInScope(cwd) {
@@ -383,12 +407,17 @@ export function realDeps(overrides = {}) {
       payload = nl >= 0 ? tail.slice(nl + 1) : tail; // drop the partial leading line
     }
     // `--append-system-prompt` makes the extraction role authoritative so the model treats the
-    // stdin transcript as data to analyze rather than a conversation to continue (#86).
+    // stdin transcript as data to analyze rather than a conversation to continue (#86). The
+    // child gets a hard timeout so a wedged `claude -p` never blocks SessionEnd forever, and
+    // DISABLE_HOOKS_ENV so this nested `claude -p`'s own SessionStart/SessionEnd hooks no-op
+    // (no recursion, no capturing the extractor's transcript) (#104).
     const res = await run(
       claudeBin,
       ["-p", "--append-system-prompt", EXTRACTION_SYSTEM, EXTRACTION_PROMPT],
       {
         input: payload,
+        timeoutMs: extractionTimeoutMs,
+        env: { [DISABLE_HOOKS_ENV]: "1" },
       },
     );
     if (res.code !== 0) {

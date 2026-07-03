@@ -4,7 +4,7 @@
 // Run via `node session-end.mjs` from hooks.json — no shebang needed.
 //
 // Hard rule: a hook must never break the session. On ANY error we log to stderr and exit 0.
-import { realDeps, sessionEnd } from "./lib.mjs";
+import { DISABLE_HOOKS_ENV, realDeps, sessionEnd } from "./lib.mjs";
 
 /** Read all of stdin as a UTF-8 string. */
 async function readStdin() {
@@ -16,6 +16,10 @@ async function readStdin() {
 }
 
 async function main() {
+  // Recursion guard (#104): this session is the nested `claude -p` the extractor spawned. Do
+  // nothing — otherwise we'd extract the extractor's own transcript and spawn yet another.
+  if (process.env[DISABLE_HOOKS_ENV] === "1") return;
+
   const raw = await readStdin();
   let input;
   try {

@@ -5,7 +5,13 @@
 // Hard rule: a hook must never break the session. On ANY error we log to stderr and exit 0
 // (printing nothing), so a missing brain, unreadable config, or thrown dep degrades to
 // "inject nothing" rather than a failed session start.
-import { attachReceipt, buildSessionStartOutput, realDeps, sessionStart } from "./lib.mjs";
+import {
+  attachReceipt,
+  buildSessionStartOutput,
+  DISABLE_HOOKS_ENV,
+  realDeps,
+  sessionStart,
+} from "./lib.mjs";
 
 /** Read all of stdin as a UTF-8 string. */
 async function readStdin() {
@@ -17,6 +23,10 @@ async function readStdin() {
 }
 
 async function main() {
+  // Recursion guard (#104): a nested `claude -p` spawned by the extractor must not inject
+  // context (which would recurse / pollute the extraction). Do nothing when the flag is set.
+  if (process.env[DISABLE_HOOKS_ENV] === "1") return;
+
   const raw = await readStdin();
   let input;
   try {

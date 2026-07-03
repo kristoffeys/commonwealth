@@ -76,6 +76,10 @@ function makeStage(
         resolve({ captured });
       });
 
+      // Guard the stdin stream: if the child dies before consuming input, the write emits an
+      // EPIPE 'error' that would otherwise be unhandled and crash `init` (#104). The 'error'/
+      // 'close' handlers above still resolve the promise.
+      child.stdin.on("error", () => {});
       child.stdin.end(JSON.stringify(candidates));
     });
 }
