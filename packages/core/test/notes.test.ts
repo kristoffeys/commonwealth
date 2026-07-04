@@ -217,3 +217,37 @@ describe("project provenance (ADR-0015)", () => {
     expect(bySource).toEqual({ A: "one", B: "two", D: "one", C: undefined });
   });
 });
+
+describe("supersedeNote / overwriteNote (#29)", () => {
+  it("marks a memory note superseded in place, keeping the file", async () => {
+    const survivor = await writeNote(dir, { kind: "memory", title: "Keep", body: "the survivor" });
+    const dup = await writeNote(dir, { kind: "memory", title: "Dupe", body: "to supersede" });
+
+    const { supersedeNote } = await import("../src/notes");
+    const updated = await supersedeNote(dir, dup.path, survivor.frontmatter.id);
+
+    expect(updated.frontmatter.status).toBe("superseded");
+    expect((updated.frontmatter as Record<string, unknown>).superseded_by).toBe(
+      survivor.frontmatter.id,
+    );
+    // The file is kept (supersede-not-delete) and round-trips with the new frontmatter.
+    const back = await readNote(dir, dup.path);
+    expect(back.frontmatter.status).toBe("superseded");
+    if (back.frontmatter.kind === "memory") {
+      expect(back.frontmatter.superseded_by).toBe(survivor.frontmatter.id);
+    }
+  });
+
+  it("is a no-op for kinds without supersession fields (work-state)", async () => {
+    const ws = await writeNote(dir, {
+      kind: "work-state",
+      title: "WIP",
+      body: "in progress",
+      fields: { status: "in-progress" },
+    });
+    const { supersedeNote } = await import("../src/notes");
+    const out = await supersedeNote(dir, ws.path, "some-survivor");
+    // Unchanged — work-state has no superseded_by/status:superseded.
+    if (out.frontmatter.kind === "work-state") expect(out.frontmatter.status).toBe("in-progress");
+  });
+});

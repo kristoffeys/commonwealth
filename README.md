@@ -224,6 +224,7 @@ Check whether the brain is decaying with the trust rollup:
 
 ```bash
 commonwealth health         # freshness/trust score + stale / unverified / contradicted / orphaned counts
+commonwealth consolidate    # supersede cross-user near-duplicate canon notes (--dry-run to preview)
 ```
 
 The daemon commits + pushes on change, pulls on a poll interval, rebuilds the search
