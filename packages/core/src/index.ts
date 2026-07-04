@@ -7,3 +7,4 @@ export * from "./secrets.js";
 export * from "./index-db.js";
 export * from "./registry.js";
 export * from "./source.js";
+export * from "./health.js";

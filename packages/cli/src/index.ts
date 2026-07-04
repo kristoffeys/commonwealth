@@ -42,6 +42,7 @@ function printUsage(): void {
       "  commonwealth reseed    [<repo>...] [--all]     mine repo(s) into the mapped brain and capture",
       "  commonwealth config    <list | get <k> | set <k> <v>>   read/set the brain's shared config",
       "  commonwealth status                            review queue + sync-daemon state",
+      "  commonwealth health                            freshness/trust rollup for the brain",
       "  commonwealth sync      <start | stop | once>   control/run the sync daemon",
       "  commonwealth pending                           list notes awaiting review",
       "  commonwealth promote   <id...> | --all         approve staged notes into canon",
@@ -118,6 +119,8 @@ export async function run(argv: string[]): Promise<number> {
       const sub = rest[0] === "once" ? "sync" : (rest[0] ?? "status");
       return delegateSync([sub, ...rest.slice(1)]);
     }
+    case "health":
+      return delegateCurate(["health"]);
     case "pending":
       return delegateCurate(["list"]);
     case "promote":

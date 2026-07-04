@@ -2,6 +2,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { parseArgs } from "node:util";
 import {
+  computeBrainHealth,
   FEATURE_FLAGS,
   loadBrainConfig,
   type NewNoteInput,
@@ -62,6 +63,7 @@ function usage(): void {
       "  commonwealth-curate scope check [--cwd <dir>]",
       "  commonwealth-curate scope allow <path>",
       "  commonwealth-curate scope deny <path>",
+      "  commonwealth-curate health [--dir <brain>]",
       "  commonwealth-curate feature list [--dir <brain>]",
       "  commonwealth-curate feature enable <name> [--dir <brain>]",
       "  commonwealth-curate feature disable <name> [--dir <brain>]",
@@ -356,6 +358,19 @@ async function cmdFeature(dir: string, args: string[]): Promise<void> {
 }
 
 /**
+ * `health` — brain-health / trust rollup (#109): a freshness/trust score plus counts of stale,
+ * unverified, contradicted, and orphaned notes. Read-only; prints a human summary to stdout.
+ */
+async function cmdHealth(dir: string): Promise<void> {
+  const h = await computeBrainHealth(dir);
+  console.log(`Brain health: ${h.score}/100  (${h.total} note${h.total === 1 ? "" : "s"})`);
+  console.log(`  stale:        ${h.stale.count}`);
+  console.log(`  unverified:   ${h.unverified.count}`);
+  console.log(`  contradicted: ${h.contradicted.count}`);
+  console.log(`  orphaned:     ${h.orphaned.count}`);
+}
+
+/**
  * `commonwealth-curate` CLI entry (ADR-0007). Diagnostics go to stderr; approved/staged paths
  * and ids go to stdout so they compose with other tools. NO shebang here — tsup's banner
  * supplies it; a source shebang would break the built binary.
@@ -407,6 +422,9 @@ async function main(): Promise<void> {
       break;
     case "feature":
       await cmdFeature(await requireBrain(), rest);
+      break;
+    case "health":
+      await cmdHealth(await requireBrain());
       break;
     default:
       usage();
