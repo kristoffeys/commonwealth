@@ -21,7 +21,8 @@ Commonwealth is that layer, made multiplayer:
 - **Conflict-free by design.** One fact per file with collision-proof names, so
   concurrent writers union-merge instead of clobbering each other.
 - **Secrets never sync.** Credentials (API keys, tokens, private keys, `.env`-style
-  assignments) are detected and blocked at capture and scrubbed pre-commit.
+  assignments) are detected and blocked at capture and scrubbed pre-commit. Opt into
+  high-entropy detection (with a per-brain allowlist) via `secretScan` in the brain config.
 - **Open source** (Apache-2.0). Distribution and trust wedge in a crowded market.
 
 ## How it fits together

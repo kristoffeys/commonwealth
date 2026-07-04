@@ -8,6 +8,7 @@ import {
   isFeatureEnabled,
   loadBrainConfig,
   saveBrainConfig,
+  scanOptions,
   setFeature,
 } from "../src/config";
 import { SCHEMA_VERSION } from "../src/schema";
@@ -80,6 +81,36 @@ describe("loadBrainConfig resilience", () => {
     const config = await loadBrainConfig(dir);
     expect(config.features.autoAdr).toBe(true);
     expect(config.features.futureFlag).toBe(true);
+  });
+});
+
+describe("secretScan config (#46)", () => {
+  it("defaults to entropy off + empty allowlist", async () => {
+    await initBrain(dir, { name: "x" });
+    const config = await loadBrainConfig(dir);
+    expect(config.secretScan).toEqual({ entropy: false, allowlist: [] });
+    expect(scanOptions(config)).toEqual({ detectEntropy: false, allowlist: [] });
+  });
+
+  it("round-trips entropy + allowlist and normalizes garbage to defaults", async () => {
+    await fs.mkdir(path.join(dir, ".commonwealth"), { recursive: true });
+    await fs.writeFile(
+      brainConfigPath(dir),
+      `${JSON.stringify({ secretScan: { entropy: true, allowlist: ["OK123"] } })}\n`,
+      "utf8",
+    );
+    expect((await loadBrainConfig(dir)).secretScan).toEqual({
+      entropy: true,
+      allowlist: ["OK123"],
+    });
+
+    // A malformed secretScan block falls back to defaults rather than throwing.
+    await fs.writeFile(
+      brainConfigPath(dir),
+      `${JSON.stringify({ secretScan: { entropy: "yes", allowlist: "nope" } })}\n`,
+      "utf8",
+    );
+    expect((await loadBrainConfig(dir)).secretScan).toEqual({ entropy: false, allowlist: [] });
   });
 });
 

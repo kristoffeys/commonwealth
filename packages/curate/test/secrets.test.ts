@@ -81,6 +81,34 @@ describe("curate secret gate (#16)", () => {
     expect(result.rejected[0]?.reason).toBe("contains-secret");
   });
 
+  it("entropy detection is opt-in per brain (#46): off stages, on rejects, allowlist re-permits", async () => {
+    const { loadBrainConfig, saveBrainConfig } = await import("@commonwealth/core");
+    // Three distinct high-entropy tokens (no named pattern) so cross-phase dedup never masks the
+    // secret-gate behavior we're testing — only the per-brain config differs between phases.
+    const A = "Zx9Kq2Lm7Pw3Rt6Yv1Bn4Cd8Fg0Hj5Ka2Ls9Mq3";
+    const B = "Qw8Er7Ty6Ui5Op4As3Df2Gh1Jk0Lz9Xc8Vb7Nm6";
+    const C = "Mn3Bv5Cx7Zl9Ka1Sd2Fg4Hj6Qw8Er0Ty2Ui4Op6";
+    const cand = (token: string) => ({
+      kind: "memory" as const,
+      title: `Opaque token ${token.slice(0, 6)}`,
+      body: `Saw the value ${token} in the gateway logs during the incident.`,
+    });
+
+    // Default (entropy off): a high-entropy blob is not treated as a secret → staged.
+    expect((await curate(brainDir, [cand(A)])).staged).toHaveLength(1);
+
+    // Turn on entropy detection for the brain → a high-entropy candidate is now rejected.
+    const cfg = await loadBrainConfig(brainDir);
+    await saveBrainConfig(brainDir, { ...cfg, secretScan: { entropy: true, allowlist: [] } });
+    const rejected = await curate(brainDir, [cand(B)]);
+    expect(rejected.staged).toHaveLength(0);
+    expect(rejected.rejected[0]?.reason).toBe("contains-secret");
+
+    // Allowlist an accepted value → it passes the gate again even with entropy on.
+    await saveBrainConfig(brainDir, { ...cfg, secretScan: { entropy: true, allowlist: [C] } });
+    expect((await curate(brainDir, [cand(C)])).staged).toHaveLength(1);
+  });
+
   it("stages a clean candidate unchanged", async () => {
     const result = await curate(brainDir, [
       {
