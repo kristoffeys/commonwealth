@@ -117,6 +117,10 @@ describe("built commonwealth binary", () => {
         stdio: "pipe",
       }).toString();
       expect(pending.trim().length).toBeGreaterThan(0); // captured notes are awaiting review
+
+      // health rollup (#109): the unified verb delegates to curate and prints a score.
+      const health = execFileSync("node", [distEntry, "health"], { env, stdio: "pipe" }).toString();
+      expect(health).toMatch(/Brain health: \d+\/100/);
     } finally {
       await fs.rm(scratch, { recursive: true, force: true });
     }

@@ -220,6 +220,12 @@ commonwealth sync once      # one-shot sync instead of resident
 commonwealth sync stop      # stop it; `commonwealth status` shows daemon state
 ```
 
+Check whether the brain is decaying with the trust rollup:
+
+```bash
+commonwealth health         # freshness/trust score + stale / unverified / contradicted / orphaned counts
+```
+
 The daemon commits + pushes on change, pulls on a poll interval, rebuilds the search
 index, and — on a genuine same-file conflict — keeps **both** versions as sibling notes
 (never overwrites) with a conflict record for review.
