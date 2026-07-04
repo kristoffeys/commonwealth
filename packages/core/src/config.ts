@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { SCHEMA_VERSION } from "./schema.js";
+import type { ScanOptions } from "./secrets.js";
 
 /**
  * Brain-level (shared, synced) configuration, stored at `<brain>/.commonwealth/config.json`
@@ -18,6 +19,17 @@ export interface BrainConfig {
   curation: Record<string, unknown>;
   /** Team-wide feature toggles; see {@link FEATURE_FLAGS}. */
   features: Record<string, boolean>;
+  /**
+   * Secret-scanner tuning (#46), committed so it applies team-wide. `entropy` opts into
+   * high-entropy detection beyond the named patterns; `allowlist` holds accepted values /
+   * known false positives to suppress. Off + empty by default (preserves the zero-FP default).
+   */
+  secretScan: { entropy: boolean; allowlist: string[] };
+}
+
+/** Build the {@link ScanOptions} for the secret scanner from a brain's config (#46). */
+export function scanOptions(config: BrainConfig): ScanOptions {
+  return { detectEntropy: config.secretScan.entropy, allowlist: config.secretScan.allowlist };
 }
 
 /**
@@ -65,6 +77,7 @@ export function defaultBrainConfig(name: string): BrainConfig {
     remotes: [],
     curation: {},
     features: defaultFeatures(),
+    secretScan: { entropy: false, allowlist: [] },
   };
 }
 
@@ -134,6 +147,23 @@ export async function loadBrainConfig(brainDir: string): Promise<BrainConfig> {
       ...defaults.features,
       ...(typeof obj.features === "object" && obj.features !== null ? obj.features : {}),
     },
+    secretScan: normalizeSecretScan(obj.secretScan, defaults.secretScan),
+  };
+}
+
+/** Coerce a config file's `secretScan` into the typed shape, falling back to defaults per field. */
+function normalizeSecretScan(
+  raw: unknown,
+  fallback: BrainConfig["secretScan"],
+): BrainConfig["secretScan"] {
+  if (typeof raw !== "object" || raw === null) return fallback;
+  const obj = raw as Partial<BrainConfig["secretScan"]>;
+  return {
+    entropy: typeof obj.entropy === "boolean" ? obj.entropy : fallback.entropy,
+    allowlist:
+      Array.isArray(obj.allowlist) && obj.allowlist.every((v) => typeof v === "string")
+        ? obj.allowlist
+        : fallback.allowlist,
   };
 }
 

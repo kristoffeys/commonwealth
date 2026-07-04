@@ -134,3 +134,39 @@ describe("true positives for assignments", () => {
     expect(hasSecrets("sk-ant-api03-_AbCdEfGhIjKlMnOpQrStUv")).toBe(true);
   });
 });
+
+describe("entropy detection + allowlist (#46, opt-in)", () => {
+  // A 40-char random-looking base64url token that matches no named pattern.
+  const HIGH = "Zx9Kq2Lm7Pw3Rt6Yv1Bn4Cd8Fg0Hj5Ka2Ls9Mq3";
+  const PROSE = "the quick brown fox jumps over the lazy dog again and again";
+
+  it("does NOT flag a high-entropy blob by default (zero-FP default preserved)", () => {
+    expect(hasSecrets(HIGH)).toBe(false);
+    expect(findSecrets(HIGH)).toHaveLength(0);
+  });
+
+  it("flags a high-entropy token only when detectEntropy is on", () => {
+    const hits = findSecrets(HIGH, { detectEntropy: true });
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.kind).toBe("high-entropy-string");
+    expect(hasSecrets(HIGH, { detectEntropy: true })).toBe(true);
+  });
+
+  it("does not flag ordinary prose even with entropy on", () => {
+    expect(hasSecrets(PROSE, { detectEntropy: true })).toBe(false);
+  });
+
+  it("allowlist suppresses an accepted value (named pattern and entropy alike)", () => {
+    // A named-pattern secret, suppressed by allowlisting its exact value.
+    expect(hasSecrets("AKIAIOSFODNN7EXAMPLE", { allowlist: ["AKIAIOSFODNN7EXAMPLE"] })).toBe(false);
+    // A high-entropy token, suppressed by allowlist even with entropy on.
+    expect(hasSecrets(HIGH, { detectEntropy: true, allowlist: [HIGH] })).toBe(false);
+  });
+
+  it("shannonEntropy: prose is low, random base64 is high, empty is 0", async () => {
+    const { shannonEntropy } = await import("../src/secrets.js");
+    expect(shannonEntropy("")).toBe(0);
+    expect(shannonEntropy(PROSE)).toBeLessThan(4.5);
+    expect(shannonEntropy(HIGH)).toBeGreaterThan(4.5);
+  });
+});

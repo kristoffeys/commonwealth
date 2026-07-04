@@ -85,13 +85,57 @@ function maskPreview(match: string): string {
 }
 
 /**
+ * Shannon entropy of `s` in BITS PER CHARACTER (0 for empty). A uniform random base64 string
+ * approaches ~6, hex ~4, English prose ~1–1.5. Used by the opt-in entropy detector to flag
+ * high-randomness tokens that match no named pattern (novel/custom secrets, #46).
+ */
+export function shannonEntropy(s: string): number {
+  if (s.length === 0) return 0;
+  const counts = new Map<string, number>();
+  for (const ch of s) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  let bits = 0;
+  for (const n of counts.values()) {
+    const p = n / s.length;
+    bits -= p * Math.log2(p);
+  }
+  return bits;
+}
+
+/** Options for the scanners: opt-in entropy detection and a false-positive allowlist (#46). */
+export interface ScanOptions {
+  /**
+   * Also flag high-entropy base64/hex tokens that match no named pattern. Default OFF: it needs
+   * the {@link ScanOptions.allowlist} to stay usable (git SHAs, UUIDs, base64 data can trip it),
+   * so a brain opts in via config rather than it changing the zero-FP default everywhere.
+   */
+  detectEntropy?: boolean;
+  /** Exact token values to never flag (accepted values / known false positives). Per-brain. */
+  allowlist?: readonly string[];
+}
+
+/** High-entropy candidate tokens: long base64/base64url runs and long hex runs. */
+const ENTROPY_TOKEN_RES: ReadonlyArray<RegExp> = [
+  /[A-Za-z0-9+/_-]{20,}={0,2}/g, // base64 / base64url
+  /\b[0-9a-fA-F]{32,}\b/g, // long hex
+];
+/** Bits/char above which a base64-ish token is treated as secret-like (detect-secrets ~4.5). */
+const BASE64_ENTROPY_MIN = 4.5;
+/** Bits/char threshold for hex tokens (lower alphabet → lower max entropy; detect-secrets ~3.0). */
+const HEX_ENTROPY_MIN = 3.0;
+
+function isHex(s: string): boolean {
+  return /^[0-9a-fA-F]+$/.test(s);
+}
+
+/**
  * Scan `text` with every pattern in {@link ALL_PATTERNS} (our hand-tuned
  * {@link SECRET_PATTERNS} first, then {@link GITLEAKS_PATTERNS}) and return the matches,
  * deduplicated by start index and sorted by position. When two patterns hit the same
  * index, the earlier (more specific) pattern wins. Previews are masked — the raw secret
  * is never returned.
  */
-export function findSecrets(text: string): SecretMatch[] {
+export function findSecrets(text: string, opts: ScanOptions = {}): SecretMatch[] {
+  const allow = opts.allowlist && opts.allowlist.length > 0 ? new Set(opts.allowlist) : null;
   const byIndex = new Map<number, SecretMatch>();
 
   for (const { kind, re } of ALL_PATTERNS) {
@@ -105,6 +149,7 @@ export function findSecrets(text: string): SecretMatch[] {
         re.lastIndex += 1;
         continue;
       }
+      if (allow?.has(value)) continue; // accepted value / known false positive (#46)
       if (!byIndex.has(m.index)) {
         byIndex.set(m.index, {
           kind,
@@ -116,11 +161,50 @@ export function findSecrets(text: string): SecretMatch[] {
     }
   }
 
+  if (opts.detectEntropy) addEntropyMatches(text, byIndex, allow);
+
   return [...byIndex.values()].sort((a, b) => a.index - b.index);
 }
 
+/**
+ * Add high-entropy tokens (base64/hex over threshold) to `byIndex`, unless they overlap a token
+ * a named pattern already flagged at the same start, are allowlisted, or fall below the entropy
+ * bar. Opt-in via {@link ScanOptions.detectEntropy} (#46).
+ */
+function addEntropyMatches(
+  text: string,
+  byIndex: Map<number, SecretMatch>,
+  allow: Set<string> | null,
+): void {
+  for (const re of ENTROPY_TOKEN_RES) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const value = m[0];
+      if (value.length === 0) {
+        re.lastIndex += 1;
+        continue;
+      }
+      if (byIndex.has(m.index) || allow?.has(value)) continue;
+      const min = isHex(value) ? HEX_ENTROPY_MIN : BASE64_ENTROPY_MIN;
+      if (shannonEntropy(value) < min) continue;
+      byIndex.set(m.index, {
+        kind: "high-entropy-string",
+        index: m.index,
+        length: value.length,
+        preview: maskPreview(value),
+      });
+    }
+  }
+}
+
 /** True if `text` contains at least one detected secret. */
-export function hasSecrets(text: string): boolean {
+export function hasSecrets(text: string, opts: ScanOptions = {}): boolean {
+  // Entropy/allowlist need the full findSecrets path; the fast regex-only path handles the
+  // common (default) case without allocating match objects.
+  if (opts.detectEntropy || (opts.allowlist && opts.allowlist.length > 0)) {
+    return findSecrets(text, opts).length > 0;
+  }
   for (const { re } of ALL_PATTERNS) {
     re.lastIndex = 0;
     if (re.test(text)) return true;
@@ -133,8 +217,8 @@ export function hasSecrets(text: string): boolean {
  * preserving all surrounding content. Overlapping/duplicate matches are handled by
  * {@link findSecrets}; replacement runs right-to-left so earlier indices stay valid.
  */
-export function redactSecrets(text: string): string {
-  const matches = findSecrets(text);
+export function redactSecrets(text: string, opts: ScanOptions = {}): string {
+  const matches = findSecrets(text, opts);
   let out = text;
   for (let i = matches.length - 1; i >= 0; i--) {
     const { kind, index, length } = matches[i]!;

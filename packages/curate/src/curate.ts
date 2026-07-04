@@ -2,6 +2,8 @@ import {
   hasSecrets,
   isFeatureEnabled,
   listNotes,
+  loadBrainConfig,
+  scanOptions,
   type NewNoteInput,
   type Note,
 } from "@commonwealth/core";
@@ -140,6 +142,9 @@ export async function curate(
 
   // auto-ADR gate (ADR-0009 #33): decisions only flow through when the team has opted in.
   const autoAdr = await isFeatureEnabled(brainDir, "autoAdr");
+  // Secret-scanner tuning from the brain config (#46): entropy detection + allowlist, off by
+  // default. Loaded once here and applied to every candidate's secret gate.
+  const secretOpts = scanOptions(await loadBrainConfig(brainDir));
 
   for (const candidate of candidates) {
     // Secret gate (#16): never stage a candidate carrying a credential. Reject before
@@ -148,7 +153,7 @@ export async function curate(
     // title+body: the pre-commit scrub scans the entire serialized note, so a secret in a tag
     // or field would otherwise pass this gate, promote to canon, then be silently withheld by
     // the scrub on every sync forever (#99).
-    if (hasSecrets(candidateSecretScanText(candidate))) {
+    if (hasSecrets(candidateSecretScanText(candidate), secretOpts)) {
       result.rejected.push({ candidate, reason: "contains-secret" });
       continue;
     }
