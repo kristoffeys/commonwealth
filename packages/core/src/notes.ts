@@ -139,6 +139,44 @@ export async function writeNote(brainDir: string, input: NewNoteInput): Promise<
   return note;
 }
 
+/**
+ * Overwrite an existing note's file with `note` (its `path`), atomically (tmp + rename). Unlike
+ * {@link writeNote} this INTENDS to replace an existing file — used to supersede a note in place
+ * (#29), never to create. Throws if the resolved path escapes the brain (#76).
+ */
+export async function overwriteNote(brainDir: string, note: Note): Promise<void> {
+  const absPath = resolveWithinBrain(brainDir, note.path);
+  const content = serializeNote(note);
+  await fs.mkdir(path.dirname(absPath), { recursive: true });
+  const tmp = `${absPath}.${shortId()}.tmp`;
+  await fs.writeFile(tmp, content, "utf8");
+  await fs.rename(tmp, absPath); // replace in place — supersede-not-delete keeps the file
+}
+
+/**
+ * Mark a memory/decision note superseded IN PLACE (supersede-not-delete, ADR-0008/#29): set
+ * `status: "superseded"` and `superseded_by: <survivorId>`, additive so it union-merges. Only
+ * memory and decision carry these fields; other kinds are returned unchanged (no-op). Returns
+ * the updated note, or the original when it isn't a supersede-able kind / is already superseded
+ * by the same survivor.
+ */
+export async function supersedeNote(
+  brainDir: string,
+  relPath: string,
+  survivorId: string,
+): Promise<Note> {
+  const note = await readNote(brainDir, relPath);
+  const fm = note.frontmatter;
+  if (fm.kind !== "memory" && fm.kind !== "decision") return note;
+  if (fm.status === "superseded" && fm.superseded_by === survivorId) return note;
+  const updated: Note = {
+    ...note,
+    frontmatter: { ...fm, status: "superseded", superseded_by: survivorId },
+  };
+  await overwriteNote(brainDir, updated);
+  return updated;
+}
+
 /** Read and parse a single note by its repo-relative path. */
 export async function readNote(brainDir: string, relPath: string): Promise<Note> {
   const raw = await fs.readFile(resolveWithinBrain(brainDir, relPath), "utf8");

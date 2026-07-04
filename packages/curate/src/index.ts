@@ -13,6 +13,7 @@ import {
   setFeature,
 } from "@commonwealth/core";
 import { captureCandidates } from "./capture.js";
+import { consolidateCanon } from "./consolidate.js";
 import { formatContext } from "./context.js";
 import { curate } from "./curate.js";
 import { selectRelevant } from "./relevance.js";
@@ -64,6 +65,7 @@ function usage(): void {
       "  commonwealth-curate scope allow <path>",
       "  commonwealth-curate scope deny <path>",
       "  commonwealth-curate health [--dir <brain>]",
+      "  commonwealth-curate consolidate [--dry-run] [--dir <brain>]",
       "  commonwealth-curate feature list [--dir <brain>]",
       "  commonwealth-curate feature enable <name> [--dir <brain>]",
       "  commonwealth-curate feature disable <name> [--dir <brain>]",
@@ -371,6 +373,28 @@ async function cmdHealth(dir: string): Promise<void> {
 }
 
 /**
+ * `consolidate [--dry-run]` — cross-user canon consolidation (#29): supersede near-duplicate
+ * memory/decision notes onto a single survivor (supersede-not-delete), single-writer.
+ */
+async function cmdConsolidate(dir: string, args: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args,
+    options: { "dry-run": { type: "boolean" }, dir: { type: "string" } },
+    allowPositionals: false,
+  });
+  const result = await consolidateCanon(dir, { dryRun: values["dry-run"] === true });
+  if (result.skipped) {
+    console.error(`[commonwealth-curate] consolidate skipped: ${result.skipped}`);
+    return;
+  }
+  const verb = values["dry-run"] ? "would supersede" : "superseded";
+  console.error(
+    `[commonwealth-curate] ${result.clusters} duplicate cluster(s); ${verb} ${result.superseded.length} note(s)`,
+  );
+  for (const s of result.superseded) console.log(`${s.id} -> ${s.survivor}`);
+}
+
+/**
  * `commonwealth-curate` CLI entry (ADR-0007). Diagnostics go to stderr; approved/staged paths
  * and ids go to stdout so they compose with other tools. NO shebang here — tsup's banner
  * supplies it; a source shebang would break the built binary.
@@ -425,6 +449,9 @@ async function main(): Promise<void> {
       break;
     case "health":
       await cmdHealth(await requireBrain());
+      break;
+    case "consolidate":
+      await cmdConsolidate(await requireBrain(), rest);
       break;
     default:
       usage();

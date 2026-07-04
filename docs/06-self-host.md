@@ -82,6 +82,11 @@ even across a rebase conflict. Tune detection per brain via `secretScan`.
 Run `commonwealth health` for a freshness/trust score plus counts of stale, unverified,
 contradicted, and orphaned notes — so a lead can see the brain rotting before it does.
 
+Because two teammates can independently capture the same fact, run `commonwealth consolidate`
+periodically to reconcile cross-user near-duplicates: it supersedes duplicates onto a single
+survivor (supersede-not-delete — the files are kept), single-writer and safe to re-run. Preview
+with `--dry-run` (ADR-0017).
+
 ## Current distribution caveat
 
 Today the plugin runs from this local checkout (its runtime is bundled locally by

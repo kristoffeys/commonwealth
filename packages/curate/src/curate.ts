@@ -54,6 +54,11 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   return union === 0 ? 0 : intersection / union;
 }
 
+/** Token-set Jaccard similarity of two texts (0–1). Shared with the consolidation pass (#29). */
+export function textSimilarity(a: string, b: string): number {
+  return jaccard(tokenSet(a), tokenSet(b));
+}
+
 /** Combined title + body text used for similarity comparison. */
 function candidateText(input: NewNoteInput): string {
   return `${input.title} ${input.body}`;

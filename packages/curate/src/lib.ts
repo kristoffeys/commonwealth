@@ -6,6 +6,13 @@
  */
 export { captureCandidates, type CaptureResult } from "./capture.js";
 export {
+  consolidateCanon,
+  DEFAULT_CONSOLIDATE_THRESHOLD,
+  type ConsolidateOptions,
+  type ConsolidationResult,
+  type Supersession,
+} from "./consolidate.js";
+export {
   curate,
   defaultCurator,
   type Assessment,
