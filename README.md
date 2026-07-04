@@ -345,6 +345,8 @@ Conventions and non-negotiable design principles live in
 
 | Doc                                                  | What it covers                                                            |
 | ---------------------------------------------------- | ------------------------------------------------------------------------- |
+| [`docs/05-quickstart.md`](docs/05-quickstart.md)     | Get a brain running for one project in minutes (from source)              |
+| [`docs/06-self-host.md`](docs/06-self-host.md)       | Share a brain across a team over your own git remote; per-brain config    |
 | [`docs/01-architecture.md`](docs/01-architecture.md) | Git-as-substrate, the concurrency model (the crux), sync daemon, curation |
 | [`docs/02-data-model.md`](docs/02-data-model.md)     | The markdown schema: memory / decisions / work-state / people-threads     |
 | [`docs/03-distribution.md`](docs/03-distribution.md) | Auto-provisioning into Claude, OSS + monetization                         |
