@@ -67,6 +67,7 @@ export interface OnboardDeps {
   registerBrain(
     folder: string,
     brainDir: string,
+    remote?: string,
   ): Promise<{ mapped: boolean; linked: boolean; skipped?: string }>;
   /** Mine `repoDir` and stage the candidates into `brainDir`'s review queue. */
   seedFrom(brainDir: string, repoDir: string): Promise<{ staged: number; skipped?: string }>;
@@ -234,7 +235,12 @@ export async function runOnboard(
         deps.log(`Scope: ${folder} already allowed`);
       }
 
-      const regRes = await deps.registerBrain(folder, brainDir);
+      // Record the brain's remote in the mapping (ADR-0019) so a missing brain can clone-on-demand.
+      const regRes = await deps.registerBrain(
+        folder,
+        brainDir,
+        doRemote ? (opts.remote as string) : undefined,
+      );
       if (regRes.mapped) mappedFolders += 1;
       deps.log(`registered ${folder} -> ${brainDir} (symlink brains/${path.basename(brainDir)})`);
       if (regRes.skipped) {

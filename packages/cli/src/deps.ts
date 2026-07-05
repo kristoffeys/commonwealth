@@ -128,9 +128,10 @@ export function defaultInitDeps(opts: DefaultInitDepsOptions = {}): InitDeps {
     gather: (repoDir) => gatherCandidates(repoDir),
     resolveBrain: (cwd) => core.resolveBrainDir(cwd),
     createBrain: (dir, name) => core.initBrain(dir, { name }),
-    registerBrain: async (repoDir, brainDir) => {
+    registerBrain: async (repoDir, brainDir, remote) => {
       // ADR-0011: the global registry is the source of truth; no per-project marker.
-      await core.addRegistryMapping(repoDir, brainDir);
+      // ADR-0019: record the remote so a missing brain can clone-on-demand.
+      await core.addRegistryMapping(repoDir, brainDir, { remote });
       await core.linkBrain(path.basename(brainDir), brainDir);
     },
     stage,
@@ -416,9 +417,10 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
   const registerBrain = async (
     folder: string,
     brainDir: string,
+    remote?: string,
   ): Promise<{ mapped: boolean; linked: boolean; skipped?: string }> => {
     try {
-      const map = await core.addRegistryMapping(folder, brainDir);
+      const map = await core.addRegistryMapping(folder, brainDir, { remote });
       const link = await core.linkBrain(path.basename(brainDir), brainDir);
       return { mapped: map.added || map.updated, linked: link.linked, skipped: link.skipped };
     } catch (err) {

@@ -31,6 +31,20 @@ export interface RegistryMapping {
   prefix: string;
   /** The brain directory (tilde-allowed) to use for cwds under {@link prefix}. */
   brain: string;
+  /**
+   * Optional git remote the brain can be cloned from when {@link brain} is missing locally
+   * (ADR-0019 clone-on-demand). Absent for mappings written before ADR-0019 — those never
+   * clone-on-demand (the pre-existing "brain must already exist" behavior).
+   */
+  remote?: string;
+}
+
+/** A resolved brain: its local directory plus the remote it clones from, when one is known. */
+export interface ResolvedBrain {
+  /** The brain directory (absolute), whether or not it exists on disk yet. */
+  brain: string;
+  /** The git remote to clone from if {@link brain} is missing (only ever set from a registry mapping). */
+  remote?: string;
 }
 
 /** Shape of the user registry JSON file (`~/.commonwealth/registry.json`). */
@@ -144,7 +158,13 @@ async function readRegistryFile(registryPath: string): Promise<RegistryLoad> {
       typeof (m as RegistryMapping).prefix === "string" &&
       typeof (m as RegistryMapping).brain === "string"
     ) {
-      clean.push({ prefix: (m as RegistryMapping).prefix, brain: (m as RegistryMapping).brain });
+      const entry: RegistryMapping = {
+        prefix: (m as RegistryMapping).prefix,
+        brain: (m as RegistryMapping).brain,
+      };
+      const remote = (m as RegistryMapping).remote;
+      if (typeof remote === "string" && remote.length > 0) entry.remote = remote;
+      clean.push(entry);
     }
   }
   return { status: "ok", registry: { mappings: clean } };
@@ -182,6 +202,20 @@ export async function resolveBrainDir(
   startDir: string,
   opts: ResolveBrainOptions = {},
 ): Promise<string | null> {
+  return (await resolveBrainMapping(startDir, opts))?.brain ?? null;
+}
+
+/**
+ * Like {@link resolveBrainDir}, but returns the full {@link ResolvedBrain} — the brain path AND
+ * the git `remote` to clone from when it came from a registry mapping (ADR-0019). Marker/self/env
+ * layers carry no remote. Callers that may need to materialize a not-yet-cloned brain (the sync
+ * daemon, `doctor`) use this; read-only callers can keep using {@link resolveBrainDir}. Still pure
+ * and side-effect-free: it never touches the network or clones — that is the caller's explicit act.
+ */
+export async function resolveBrainMapping(
+  startDir: string,
+  opts: ResolveBrainOptions = {},
+): Promise<ResolvedBrain | null> {
   const start = path.resolve(startDir);
   const registryPath = resolveRegistryPath(opts.registryPath);
 
@@ -197,7 +231,7 @@ export async function resolveBrainDir(
       const target = raw.trim();
       if (target.length > 0) {
         const resolved = expand(target, dir);
-        if (await isDir(resolved)) return resolved;
+        if (await isDir(resolved)) return { brain: resolved };
         // Dangling marker: ignore it and continue (next ancestor marker, then layers 2–4).
       }
     }
@@ -206,29 +240,33 @@ export async function resolveBrainDir(
   // 2) A directory that is itself a brain, nearest ancestor wins. Keyed off the brain-only
   //    `schema-version` file so the global scope-config dir is never mistaken for a brain.
   for (const dir of walkUp(start)) {
-    if (await isFile(path.join(dir, BRAIN_IDENTITY_REL))) return dir;
+    if (await isFile(path.join(dir, BRAIN_IDENTITY_REL))) return { brain: dir };
   }
 
   // 3) User registry mappings; the LONGEST (most-specific) matching prefix wins, regardless of
   //    insertion order — so a narrow `/work/app` mapping is never shadowed by a broader `/work`
-  //    one that merely happens to appear earlier in the file (#103).
+  //    one that merely happens to appear earlier in the file (#103). Carries the mapping's remote
+  //    (ADR-0019) so a missing brain can clone-on-demand.
   const registry = await loadRegistry(registryPath);
   if (registry) {
-    let bestBrain: string | null = null;
+    let best: ResolvedBrain | null = null;
     let bestLen = -1;
     for (const mapping of registry.mappings) {
       const prefix = expand(mapping.prefix);
       if (isUnder(start, prefix) && prefix.length > bestLen) {
         bestLen = prefix.length;
-        bestBrain = expand(mapping.brain);
+        best = {
+          brain: expand(mapping.brain),
+          ...(mapping.remote ? { remote: mapping.remote } : {}),
+        };
       }
     }
-    if (bestBrain !== null) return bestBrain;
+    if (best !== null) return best;
   }
 
   // 4) Env fallback.
   const env = opts.env ?? process.env.COMMONWEALTH_BRAIN_DIR;
-  if (env && env.length > 0) return path.resolve(env);
+  if (env && env.length > 0) return { brain: path.resolve(env) };
 
   // 5) Nothing matched.
   return null;
@@ -280,8 +318,12 @@ export function defaultBrainsDir(): string {
 export async function addRegistryMapping(
   prefix: string,
   brain: string,
-  registryPath = defaultRegistryPath(),
+  opts: string | { remote?: string; registryPath?: string } = {},
 ): Promise<{ added: boolean; updated: boolean }> {
+  // Back-compat: a string third arg is the registry path (its long-standing signature).
+  const registryPath =
+    typeof opts === "string" ? opts : (opts.registryPath ?? defaultRegistryPath());
+  const remote = typeof opts === "string" ? undefined : opts.remote;
   const absPrefix = expand(prefix);
   const absBrain = expand(brain);
 
@@ -302,14 +344,17 @@ export async function addRegistryMapping(
   let added = false;
   let updated = false;
   if (!existing) {
-    registry.mappings.push({ prefix: absPrefix, brain: absBrain });
+    registry.mappings.push({ prefix: absPrefix, brain: absBrain, ...(remote ? { remote } : {}) });
     added = true;
-  } else if (expand(existing.brain) !== absBrain) {
+  } else {
+    const brainChanged = expand(existing.brain) !== absBrain;
+    // Only overwrite an existing remote when a new one is given; never clear it implicitly.
+    const remoteChanged = remote !== undefined && existing.remote !== remote;
+    if (!brainChanged && !remoteChanged) return { added, updated };
     existing.prefix = absPrefix;
     existing.brain = absBrain;
+    if (remote !== undefined) existing.remote = remote;
     updated = true;
-  } else {
-    return { added, updated };
   }
 
   await fs.mkdir(path.dirname(registryPath), { recursive: true });
