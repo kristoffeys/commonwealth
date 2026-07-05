@@ -3,7 +3,10 @@
   "compilerOptions": {
     "paths": {
       "@cmnwlth/core": ["../core/src/index.ts"],
-      "@cmnwlth/seed": ["../seed/src/index.ts"]
+      "@cmnwlth/seed": ["../seed/src/index.ts"],
+      // curate's LIBRARY entry (src/lib.ts), NOT src/index.ts (the CLI, #82) — so `doctor`'s
+      // scope-gate import typechecks with no prior build of curate (CI typechecks before build).
+      "@cmnwlth/curate": ["../curate/src/lib.ts"]
     }
   },
   "include": ["src"]

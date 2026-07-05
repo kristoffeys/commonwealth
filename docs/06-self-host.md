@@ -87,6 +87,22 @@ periodically to reconcile cross-user near-duplicates: it supersedes duplicates o
 survivor (supersede-not-delete — the files are kept), single-writer and safe to re-run. Preview
 with `--dry-run` (ADR-0017).
 
+## When something's off — `commonwealth doctor`
+
+The setup spans five parts that fail silently: the plugin install, brain resolution for your cwd,
+a dangling `.commonwealth/brain` marker, a dead sync daemon (→ a stale brain), and remote lag /
+review-queue depth / index freshness / scope. `commonwealth doctor` walks the whole chain and
+prints pass/fail with the exact one-line fix per failed link:
+
+```bash
+commonwealth doctor          # human-readable pass/fail + fixes
+commonwealth doctor --json   # structured report for agents/CI (exit 1 if any link failed)
+commonwealth doctor --fix    # self-heal — restarts a dead daemon (the only auto-fix)
+```
+
+Paste the output into any support thread — it's the first triage step. Exit code is non-zero when a
+critical link failed, so CI can gate on it.
+
 ## Distribution
 
 The `@cmnwlth/*` packages are published to npm (#49), so no build or committed runtime is needed:
