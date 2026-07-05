@@ -4,13 +4,13 @@
     "name": "Kristof Feys",
     "github": "kristoffeys"
   },
-  "description": "Commonwealth — a multiplayer, git-backed, agent-readable second brain for teams.",
+  "description": "Commonwealth \u2014 a multiplayer, git-backed, agent-readable second brain for teams.",
   "plugins": [
     {
       "name": "commonwealth",
       "source": "./packages/plugin",
       "description": "Commonwealth Claude Code plugin: the commonwealth MCP server (global, USER scope) plus SessionStart/SessionEnd hooks that resolve the right brain per repo via the registry.",
-      "version": "0.0.0"
+      "version": "0.1.0"
     }
   ]
 }

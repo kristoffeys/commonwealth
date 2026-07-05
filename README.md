@@ -4,6 +4,8 @@
 > team member's AI reads _before_ it acts. Instant onboarding. Anti-bus-factor.
 > Plain markdown. Git-backed. Open source.
 
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) &nbsp;`pre-1.0` — install from source today; `@cmnwlth/*` on npm is pending (#49).
+
 Most teams have a personal-productivity story (`~/vault`, Obsidian, CLAUDE.md) and an
 enterprise-search story (Glean, Notion AI). Nothing in between owns the **reasoning
 layer** of a small team — the _why_ behind decisions, the current work-state, the
