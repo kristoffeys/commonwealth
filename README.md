@@ -72,6 +72,16 @@ The steps below wire the same pieces manually (à la carte).
 
 **Requirements:** Node ≥ 22, git (plus [pnpm](https://pnpm.io) 10+ for the from-source path).
 
+### See it in 60 seconds (no setup)
+
+```bash
+npx @cmnwlth/cli demo
+```
+
+Scaffolds a throwaway brain for a fictional payments team and replays a few questions whose answers
+live only in that team's notes — recall over git-backed markdown, no account, no config. It cleans
+up after itself (`--keep` to poke around the files).
+
 Once published to npm (#49), install the CLI directly:
 
 ```bash

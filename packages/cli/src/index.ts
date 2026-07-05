@@ -3,6 +3,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { cmdConfig, cmdReseed, delegateCurate, delegateSync } from "./commands.js";
 import { defaultOnboardDeps } from "./deps.js";
+import { defaultDemoEnv, runDemo } from "./demo.js";
 import { defaultDoctorEnv, diagnose, formatDoctorText } from "./doctor.js";
 import { defaultEmitEnv, formatEmitResult, runEmit } from "./emit.js";
 import { defaultVerifyRestoreEnv, formatVerifyRestore, runVerifyRestore } from "./verify.js";
@@ -39,6 +40,8 @@ export { runVerifyRestore, defaultVerifyRestoreEnv, formatVerifyRestore } from "
 export type { VerifyRestoreReport, VerifyRestoreEnv } from "./verify.js";
 export { runEmit, defaultEmitEnv, formatEmitResult, upsertSentinelBlock } from "./emit.js";
 export type { EmitResult, EmitEnv } from "./emit.js";
+export { runDemo, defaultDemoEnv } from "./demo.js";
+export type { DemoResult, DemoEnv } from "./demo.js";
 
 /** Print `commonwealth` usage to stderr. */
 function printUsage(): void {
@@ -47,6 +50,7 @@ function printUsage(): void {
       "commonwealth — git-backed markdown team-brain",
       "",
       "Usage:",
+      "  commonwealth demo                              60-second throwaway sandbox brain (no setup)",
       "  commonwealth init      [flags]                 onboard: build, create/join brain, plugin, daemon",
       "  commonwealth reseed    [<repo>...] [--all]     mine repo(s) into the mapped brain and capture",
       "  commonwealth config    <list | get <k> | set <k> <v>>   read/set the brain's shared config",
@@ -117,6 +121,8 @@ export async function run(argv: string[]): Promise<number> {
   // Unified subcommand surface (#93). `reseed`/`config` compose core+seed; the rest delegate to
   // the registry-aware curate/sync binaries (inheriting cwd, so they hit the mapped brain).
   switch (command) {
+    case "demo":
+      return cmdDemo(rest);
     case "init":
       return cmdInit(rest);
     case "reseed":
@@ -194,6 +200,18 @@ async function cmdVerifyRestore(rest: string[]): Promise<number> {
   if (json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   else process.stderr.write(formatVerifyRestore(report));
   return report.ok ? 0 : 1;
+}
+
+/**
+ * `commonwealth demo [--keep]` — scaffold a throwaway fictional-team brain and replay a few
+ * scripted `recall` questions, so a first-time user sees retrieval work in under a minute with no
+ * setup. `--keep` leaves the sandbox brain on disk and prints its path. Output goes to stderr;
+ * there is no stdout data contract.
+ */
+async function cmdDemo(rest: string[]): Promise<number> {
+  const keep = rest.includes("--keep");
+  await runDemo(defaultDemoEnv(keep, (line) => process.stderr.write(`${line}\n`)));
+  return 0;
 }
 
 /**
