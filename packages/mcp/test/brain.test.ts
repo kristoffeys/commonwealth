@@ -1,13 +1,13 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { initBrain } from "@commonwealth/core";
+import { initBrain } from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveBrainDir } from "../src/brain.js";
 
 /**
  * The MCP server must resolve its brain the same way the rest of Commonwealth does: an
- * explicit `COMMONWEALTH_BRAIN_DIR` wins, otherwise `@commonwealth/core`'s registry maps the
+ * explicit `COMMONWEALTH_BRAIN_DIR` wins, otherwise `@cmnwlth/core`'s registry maps the
  * cwd to a brain, and when nothing maps we return `null` — the server surfaces an explicit
  * "no brain configured" error rather than silently adopting the cwd (#64).
  */

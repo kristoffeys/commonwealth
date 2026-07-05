@@ -1,4 +1,4 @@
-import { type Note } from "@commonwealth/core";
+import { type Note } from "@cmnwlth/core";
 
 /** Max length of a body snippet before it is truncated. */
 const SNIPPET_MAX = 120;

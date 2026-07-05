@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { findSecrets, loadBrainConfig, scanOptions } from "@commonwealth/core";
+import { findSecrets, loadBrainConfig, scanOptions } from "@cmnwlth/core";
 import { simpleGit, type SimpleGit } from "simple-git";
 
 /** Note-kind folders whose markdown is scanned for secrets before commit. */

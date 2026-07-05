@@ -14,7 +14,7 @@ per-machine daemon that watches and continuously syncs.
 
 ## Decision
 
-**A resident, per-machine daemon** (`@commonwealth/sync`, bin `commonwealth-sync`).
+**A resident, per-machine daemon** (`@cmnwlth/sync`, bin `commonwealth-sync`).
 
 - Watches each registered brain working copy for filesystem changes and, on change,
   commits and pushes.

@@ -1,5 +1,5 @@
 /**
- * Library surface for `@commonwealth/curate` — the curation engine, importable by other
+ * Library surface for `@cmnwlth/curate` — the curation engine, importable by other
  * packages (e.g. the MCP server's `remember`, #82) WITHOUT running the CLI. `index.ts` is the
  * `commonwealth-curate` binary (it calls `main()` on import + carries a shebang), so it must
  * never be imported as a module; this entry re-exports the pure pieces instead.

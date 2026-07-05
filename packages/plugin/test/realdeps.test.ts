@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { initBrain, listNotes } from "@commonwealth/core";
+import { initBrain, listNotes } from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // The REAL production wiring — not the injected fakes the other tests use. These guard the
 // two silent-failure bugs the M4b verifier caught: an unresolvable core import and a broken
@@ -30,7 +30,7 @@ afterEach(async () => {
   await fs.rm(tmp, { recursive: true, force: true });
 });
 
-describe("realResolveBrainDir (inlined registry — no bare @commonwealth/core import)", () => {
+describe("realResolveBrainDir (inlined registry — no bare @cmnwlth/core import)", () => {
   it("resolves a directory that is itself a brain, from a subdir", async () => {
     const brain = path.join(tmp, "acme-brain");
     await initBrain(brain);

@@ -1,5 +1,5 @@
 {
-  "name": "@commonwealth/core",
+  "name": "@cmnwlth/core",
   "version": "0.1.0",
   "description": "Core substrate for Commonwealth: schema, note IO, scaffold, and the derived index",
   "license": "Apache-2.0",

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { NewNoteInput } from "@commonwealth/core";
+import type { NewNoteInput } from "@cmnwlth/core";
 import { describe, expect, it, vi } from "vitest";
 import {
   defaultBrainDir,

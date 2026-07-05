@@ -6,7 +6,7 @@ import {
   scanOptions,
   type NewNoteInput,
   type Note,
-} from "@commonwealth/core";
+} from "@cmnwlth/core";
 import { listStaged, stageNote } from "./staging.js";
 
 /** Minimum trimmed body length for a candidate to clear the relevance gate. */

@@ -1,5 +1,5 @@
 {
-  "name": "@commonwealth/cli",
+  "name": "@cmnwlth/cli",
   "version": "0.1.0",
   "description": "The unified `commonwealth` CLI \u2014 starting with the zero-config `init` onboarding wizard",
   "license": "Apache-2.0",
@@ -17,10 +17,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@commonwealth/core": "workspace:*",
-    "@commonwealth/curate": "workspace:*",
-    "@commonwealth/seed": "workspace:*",
-    "@commonwealth/sync": "workspace:*"
+    "@cmnwlth/core": "workspace:*",
+    "@cmnwlth/curate": "workspace:*",
+    "@cmnwlth/seed": "workspace:*",
+    "@cmnwlth/sync": "workspace:*"
   },
   "publishConfig": {
     "access": "public",

@@ -24,7 +24,7 @@ Add `consolidateCanon(brainDir)` (curate) plus a `commonwealth consolidate` verb
   <survivor id>` in place — the file is kept, git history and the reconciliation stay visible, and
   the frontmatter change union-merges (additive). Never delete.
 - **Single-writer.** The pass acquires the same cross-process sync lock the daemon uses (#100,
-  now in `@commonwealth/core`), so a consolidation can't run concurrently with a sync or another
+  now in `@cmnwlth/core`), so a consolidation can't run concurrently with a sync or another
   consolidation. If the lock is held it no-ops (`skipped`) rather than racing. This satisfies the
   ADR-0008 single-writer requirement without a new lease mechanism.
 - **Explicit, not automatic (for now).** It runs on demand (`commonwealth consolidate`, with

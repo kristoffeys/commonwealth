@@ -1,18 +1,18 @@
-# @commonwealth/plugin — the Commonwealth Claude Code plugin
+# @cmnwlth/plugin — the Commonwealth Claude Code plugin
 
 The glue that makes Commonwealth "just happen" inside Claude Code. It bundles everything a
 teammate needs and wires the auto-bridge (docs/03-distribution.md):
 
-- **MCP server** `commonwealth` — the `@commonwealth/mcp` server (`search / read / remember /
+- **MCP server** `commonwealth` — the `@cmnwlth/mcp` server (`search / read / remember /
 work-state / people`), auto-started by declaring it in the manifest (no manual
   `claude mcp add`).
 - **Lifecycle hooks** — `SessionStart` pulls relevant team-brain context and injects it;
   `SessionEnd` extracts learnings from the transcript and stages them into the review queue.
 - **Brain registry** — resolves the current project directory → its brain repo
-  (`@commonwealth/core`'s `resolveBrainDir`, issue #14).
+  (`@cmnwlth/core`'s `resolveBrainDir`, issue #14).
 - **`/commonwealth` commands** — manual `remember`, `recall`, `promote`, `status`.
 
-Everything real is done by the `@commonwealth/*` packages; the plugin is glue. Markdown in the
+Everything real is done by the `@cmnwlth/*` packages; the plugin is glue. Markdown in the
 brain repo stays the source of truth.
 
 ## Layout
@@ -34,7 +34,7 @@ The plugin runs standalone with `node` — no pnpm workspace on the user's machi
 runtime is vendored:
 
 ```bash
-pnpm --filter @commonwealth/plugin bundle
+pnpm --filter @cmnwlth/plugin bundle
 ```
 
 This runs `pnpm -r build` then copies `packages/{mcp,curate,sync}/dist` plus their required
@@ -49,14 +49,14 @@ plugin marketplace. Add it and install (user scope / global — ADR-0012):
 
 ```bash
 claude plugin marketplace add kristoffeys/commonwealth
-claude plugin install commonwealth@commonwealth
+claude plugin install commonwealth@cmnwlth
 ```
 
 (Or point the marketplace at a local path / your fork / an internal mirror of this repo.)
 
 The plugin installs globally, so the `commonwealth` MCP server + hooks work in **every**
 session. Per-repo routing is dynamic: the SessionStart hook resolves the real session cwd → its
-brain via the registry, and the MCP server resolves its brain via `@commonwealth/core`'s
+brain via the registry, and the MCP server resolves its brain via `@cmnwlth/core`'s
 `resolveBrainDir` — no brain is pinned into the registration. This replaced the old raw
 local-scope `claude mcp add`, which was invisible outside its install dir and pinned one brain.
 
@@ -77,7 +77,7 @@ marketplace and force-install the plugin:
     }
   },
   "enabledPlugins": {
-    "commonwealth@commonwealth": true
+    "commonwealth@cmnwlth": true
   }
 }
 ```
@@ -90,7 +90,7 @@ hold org-wide write creds.
 ## Pointing the plugin at a brain
 
 The hooks and MCP server resolve the brain for the current directory in this order (see
-`@commonwealth/core`'s `resolveBrainDir`, issue #14):
+`@cmnwlth/core`'s `resolveBrainDir`, issue #14):
 
 1. **`.commonwealth/brain` marker file** in the project (a path to the brain), walking up.
 2. **Self-is-brain** — a directory that has `.commonwealth/config.json` is its own brain.
@@ -117,7 +117,7 @@ allow|deny|show|check`.
 Real Claude Code hook firing can't be exercised by the unit tests, so verify end-to-end by
 hand:
 
-1. **Build the vendor bundle:** `pnpm --filter @commonwealth/plugin bundle`.
+1. **Build the vendor bundle:** `pnpm --filter @cmnwlth/plugin bundle`.
 2. **Create a brain** and put a note in it:
    ```bash
    node packages/curate/dist/index.js --help   # sanity: CLI runs
@@ -127,7 +127,7 @@ hand:
 3. **Register the brain** so it resolves: either drop a `.commonwealth/brain` marker in your
    project, add a `~/.commonwealth/registry.json` mapping, or `export COMMONWEALTH_BRAIN_DIR=/tmp/acme-brain`.
 4. **Install the plugin** (`claude plugin marketplace add <this repo>` → `claude plugin install
-commonwealth@commonwealth`) and open Claude Code in an **in-scope** project directory.
+commonwealth@cmnwlth`) and open Claude Code in an **in-scope** project directory.
 5. **SessionStart:** confirm the "Relevant from the team brain" block appears in context.
    In an **out-of-scope** dir (add it via `commonwealth-curate scope deny <dir>`), confirm
    nothing is injected.

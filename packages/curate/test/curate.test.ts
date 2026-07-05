@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { setFeature, writeNote } from "@commonwealth/core";
+import { setFeature, writeNote } from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { curate } from "../src/curate.js";
 import { listStaged } from "../src/staging.js";

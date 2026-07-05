@@ -1,4 +1,4 @@
-import { isFeatureEnabled, type NewNoteInput } from "@commonwealth/core";
+import { isFeatureEnabled, type NewNoteInput } from "@cmnwlth/core";
 import { curate, type CurateResult, type Curator } from "./curate.js";
 import { approve } from "./review.js";
 

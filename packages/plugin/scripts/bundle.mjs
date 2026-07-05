@@ -66,10 +66,10 @@ function findPackageRoot(startDir, dep) {
 }
 
 function resolvePkgDir(fromDir, dep) {
-  // Workspace packages (@commonwealth/*) live at packages/<name>; pnpm symlinks them and
+  // Workspace packages (@cmnwlth/*) live at packages/<name>; pnpm symlinks them and
   // their "exports" can block createRequire, so resolve them directly.
-  if (dep.startsWith("@commonwealth/")) {
-    const wsDir = path.join(repoRoot, "packages", dep.slice("@commonwealth/".length));
+  if (dep.startsWith("@cmnwlth/")) {
+    const wsDir = path.join(repoRoot, "packages", dep.slice("@cmnwlth/".length));
     return existsSync(path.join(wsDir, "package.json")) ? wsDir : null;
   }
   const req = createRequire(path.join(fromDir, "package.json"));

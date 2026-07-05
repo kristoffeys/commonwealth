@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { initBrain, listNotes, setFeature, type NewNoteInput } from "@commonwealth/core";
+import { initBrain, listNotes, setFeature, type NewNoteInput } from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureCandidates } from "../src/capture.js";
 import { listPending } from "../src/review.js";

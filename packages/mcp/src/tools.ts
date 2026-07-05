@@ -9,8 +9,8 @@ import {
   type Note,
   type NoteKind,
   type SearchResult,
-} from "@commonwealth/core";
-import { captureCandidates } from "@commonwealth/curate";
+} from "@cmnwlth/core";
+import { captureCandidates } from "@cmnwlth/curate";
 
 /**
  * Pure handler layer for the Commonwealth MCP server.
@@ -19,7 +19,7 @@ import { captureCandidates } from "@commonwealth/curate";
  * result object — no MCP framing. `server.ts` adapts these into MCP tools, and the
  * tests exercise them directly. All logic lives here; the server is a thin shell.
  *
- * Markdown files are the source of truth: every read/write goes through `@commonwealth/core`,
+ * Markdown files are the source of truth: every read/write goes through `@cmnwlth/core`,
  * never a parallel store (ADR-0003, ADR-0005).
  */
 

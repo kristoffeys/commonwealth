@@ -328,7 +328,7 @@ async function run(cmd, args, { input, cwd, env, timeoutMs } = {}) {
 /**
  * Build the production `deps` for the hooks.
  *
- * - `resolveBrainDir` comes from `@commonwealth/core`'s brain registry (issue #14).
+ * - `resolveBrainDir` comes from `@cmnwlth/core`'s brain registry (issue #14).
  * - `isInScope` shells out to the vendored `commonwealth-curate scope check` so the plugin is
  *   self-contained (no direct import of curate internals) and honors ADR-0008 exactly as
  *   the CLI does.
@@ -489,8 +489,8 @@ export function realDeps(overrides = {}) {
   };
 }
 
-// --- Inlined brain registry (mirrors @commonwealth/core/src/registry.ts) --------------------
-// Inlined as pure fs/path JS rather than `import("@commonwealth/core")`: the hooks run as
+// --- Inlined brain registry (mirrors @cmnwlth/core/src/registry.ts) --------------------
+// Inlined as pure fs/path JS rather than `import("@cmnwlth/core")`: the hooks run as
 // standalone .mjs where a bare specifier isn't resolvable at runtime, which would make
 // every session silently do nothing. Keep in sync with packages/core/src/registry.ts.
 

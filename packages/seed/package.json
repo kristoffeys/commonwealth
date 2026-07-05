@@ -1,5 +1,5 @@
 {
-  "name": "@commonwealth/seed",
+  "name": "@cmnwlth/seed",
   "version": "0.1.0",
   "description": "Cold-start seeding: mine git history + import agent-config into candidate notes",
   "license": "Apache-2.0",
@@ -17,7 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@commonwealth/core": "workspace:*"
+    "@cmnwlth/core": "workspace:*"
   },
   "publishConfig": {
     "access": "public",

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { resolveBrainDir } from "@commonwealth/core";
+import { resolveBrainDir } from "@cmnwlth/core";
 import { Daemon, isRunning, readPid } from "./daemon.js";
 import { SyncEngine } from "./engine.js";
 import { formatSyncSummary } from "./format.js";
@@ -12,7 +12,7 @@ import { formatSyncSummary } from "./format.js";
  *   status [--dir DIR]                 report whether a daemon is running
  *   stop   [--dir DIR]                 signal a running daemon to exit
  *
- * DIR resolves as: `--dir` → `$COMMONWEALTH_BRAIN_DIR` → `@commonwealth/core`'s registry
+ * DIR resolves as: `--dir` → `$COMMONWEALTH_BRAIN_DIR` → `@cmnwlth/core`'s registry
  * resolver against the cwd (marker → ancestor-brain → user registry, #69) → `null`. This
  * file carries NO shebang — tsup's banner adds exactly one at build time.
  */

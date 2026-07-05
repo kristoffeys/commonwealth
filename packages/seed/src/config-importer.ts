@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { NewNoteInput } from "@commonwealth/core";
+import type { NewNoteInput } from "@cmnwlth/core";
 
 /** Max characters retained from any imported config file. */
 const BODY_CAP = 4000;

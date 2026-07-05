@@ -1,4 +1,4 @@
-import { buildIndex, regenerateDerived } from "@commonwealth/core";
+import { buildIndex, regenerateDerived } from "@cmnwlth/core";
 import { resolveConflictsAsSiblings, type ResolvedConflict } from "./conflict.js";
 import {
   abortRebase,

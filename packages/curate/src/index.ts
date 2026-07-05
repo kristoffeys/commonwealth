@@ -11,7 +11,7 @@ import {
   resolveBrainDir,
   resolveProjectSource,
   setFeature,
-} from "@commonwealth/core";
+} from "@cmnwlth/core";
 import { captureCandidates } from "./capture.js";
 import { consolidateCanon } from "./consolidate.js";
 import { formatContext } from "./context.js";
@@ -22,7 +22,7 @@ import { addAllow, addDeny, isInScope, loadUserConfig } from "./scope.js";
 
 /**
  * Resolve the brain directory for a `cwd`, or `null` when none is configured (#69). Order:
- * an explicit `--dir` → `$COMMONWEALTH_BRAIN_DIR` → `@commonwealth/core`'s registry resolver
+ * an explicit `--dir` → `$COMMONWEALTH_BRAIN_DIR` → `@cmnwlth/core`'s registry resolver
  * against `cwd` (marker → ancestor-brain → user registry). Unlike the old resolver this
  * consults the registry, so the CLI hits the SAME brain the MCP server and hooks do rather
  * than silently operating on the current directory.

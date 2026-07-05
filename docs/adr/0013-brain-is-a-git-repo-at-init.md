@@ -30,7 +30,7 @@ the first sync would have failed with `not a git repository`.
 ## Decision
 
 1. **`initBrain` makes the brain a git repo with an initial commit**, as the final scaffold step.
-   `@commonwealth/core` gains a `git` shell-out (via `node:child_process`, no new dependency —
+   `@cmnwlth/core` gains a `git` shell-out (via `node:child_process`, no new dependency —
    git is already a hard runtime requirement of the sync layer). We chose core over the CLI
    onboard layer so that **every** caller of `initBrain` — CLI, tests, future callers — gets a
    valid, self-contained repo and the "a brain is a git repo" invariant lives with the scaffold.
@@ -50,7 +50,7 @@ the first sync would have failed with `not a git repository`.
 
 - A freshly initialized brain is immediately operable: `setRemote`, the daemon's first commit,
   and multiplayer sync all have a repo rooted at the brain, so git can never escape upward.
-- `@commonwealth/core` now shells out to `git` (previously pure fs). This is acceptable given git
+- `@cmnwlth/core` now shells out to `git` (previously pure fs). This is acceptable given git
   is already required transitively; the call is isolated to `initGitRepo` and fully guarded.
 - Existing brains created before this change are not a repo. The remedy is a one-time
   `git init -b main && git add -A && git commit -m "Initialize Commonwealth brain scaffold"` in

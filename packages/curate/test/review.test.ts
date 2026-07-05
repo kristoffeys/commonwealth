@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { listNotes } from "@commonwealth/core";
+import { listNotes } from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { approve, approveAll, reject } from "../src/review.js";
 import { listStaged, stageNote } from "../src/staging.js";
