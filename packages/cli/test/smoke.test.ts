@@ -121,6 +121,21 @@ describe("built commonwealth binary", () => {
       // health rollup (#109): the unified verb delegates to curate and prints a score.
       const health = execFileSync("node", [distEntry, "health"], { env, stdio: "pipe" }).toString();
       expect(health).toMatch(/Brain health: \d+\/100/);
+
+      // doctor --json (#134): the built binary emits a structured report resolving the mapped
+      // brain and walking the chain. No daemon runs here, so it exits non-zero — that's the point.
+      const doc = spawnSync("node", [distEntry, "doctor", "--json"], { env, stdio: "pipe" });
+      const report = JSON.parse(doc.stdout.toString()) as {
+        ok: boolean;
+        brain: string;
+        checks: Array<{ id: string; status: string }>;
+      };
+      expect(report.brain).toBe(brain);
+      expect(report.checks.map((c) => c.id)).toEqual(
+        expect.arrayContaining(["brain", "daemon", "remote", "index", "scope"]),
+      );
+      expect(report.checks.find((c) => c.id === "daemon")?.status).toBe("fail");
+      expect(doc.status).toBe(1); // a failed link → non-zero exit, so CI can gate on it
     } finally {
       await fs.rm(scratch, { recursive: true, force: true });
     }
