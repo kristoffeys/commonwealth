@@ -197,6 +197,17 @@ async function cmdInit(rest: string[]): Promise<number> {
   const cwd = process.cwd();
   // The scope/registry/brain-name base is the invocation dir, not the git root (#61).
   const projectDir = path.resolve(cwd);
+
+  // Non-interactive without --yes: do NOTHING but point the user at a terminal. This runs BEFORE
+  // any executable probe (`hasExecutable`) or dep resolution (`defaultOnboardDeps`), so the path
+  // is fully side-effect-free and can't fail — a subprocess spawned here under CI fork-pressure
+  // could throw and exit 1, which would (and did) flake the release gate. "does not touch anything."
+  const interactive = isInteractive();
+  if (!interactive && !values.yes) {
+    process.stderr.write("Non-interactive: re-run in a terminal or pass --yes.\n");
+    return 0;
+  }
+
   const claudePresent = hasExecutable("claude");
   const deps = defaultOnboardDeps({ curateEntry: process.env.COMMONWEALTH_CURATE_BIN });
 
@@ -214,7 +225,7 @@ async function cmdInit(rest: string[]): Promise<number> {
   let prompter: Prompter | null = null;
 
   try {
-    if (isInteractive() && !values.yes) {
+    if (interactive && !values.yes) {
       // Interactive terminal, no --yes: run the wizard.
       const defaults: WizardDefaults = {
         brain: defaultBrainDir(projectDir),
@@ -233,12 +244,9 @@ async function cmdInit(rest: string[]): Promise<number> {
       }
       // The wizard already confirmed; runOnboard must not prompt again (opts.yes is true).
       opts = outcome.opts;
-    } else if (!values.yes) {
-      // Non-interactive and no --yes: never hang on stdin, do nothing.
-      process.stderr.write("Non-interactive: re-run in a terminal or pass --yes.\n");
-      return 0;
     } else {
-      // --yes: defaults + explicit flags, non-interactive.
+      // --yes (interactive or not): defaults + explicit flags, non-interactive. The
+      // non-interactive-without-yes case already returned above.
       const syncFolders = splitDirs(values.sync) ?? [projectDir];
       const seedRepos = splitDirs(values["seed-repo"]) ?? (seed ? syncFolders : []);
       opts = {
