@@ -104,7 +104,7 @@ paid tier competes on convenience, not captivity. This is the explicit counter t
 - **Claude Code plugin marketplace** (`/plugin marketplace add ...`) — primary, rides
   the Claude Code wave like Kage/Mem0/Cognee do.
 - **GitHub repo + Projects** — OSS home, issues, roadmap, community.
-- **Antenna dogfood** — the proof case and first reference customer.
+- **Design-partner dogfood** — the proof case and first reference deployment.
 - Cross-agent MCP (Codex/Cursor/Gemini CLI) later — the portability story.
 
 ## Open questions

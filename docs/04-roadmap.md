@@ -8,7 +8,7 @@ tags: [roadmap, milestones, planning]
 
 # Roadmap & Build Plan
 
-Phased so each milestone is independently useful and dogfoodable at Antenna. The order
+Phased so each milestone is independently useful and dogfoodable on a real team. The order
 front-loads the two things that are both hard _and_ differentiating (concurrency-safe
 substrate, then the auto bridge), because those are the moat.
 
@@ -63,14 +63,14 @@ the concurrency model proven.
 - Brain registry: marker file + remote/org convention + `org-brain` fallback.
 - Per-project brain resolution; clone-on-demand; git-permission access model.
 - Secret scanner in the daemon (pre-commit scrub).
-- **Exit:** a new Antenna teammate runs `claude` in a project and the brain is just
+- **Exit:** a new teammate runs `claude` in a project and the brain is just
   there.
 
 ## M5 — Hardening & OSS launch
 
 - Docs, quickstart, self-host guide.
 - License decision finalized; public repo polish; plugin marketplace listing.
-- Antenna case study as the reference dogfood.
+- A real-team case study as the reference dogfood.
 - (Parallel track) SOW-diff wedge on the same substrate — the monetizable on-ramp.
 
 ## Cross-cutting / later
