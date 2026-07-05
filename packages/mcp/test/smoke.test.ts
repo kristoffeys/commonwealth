@@ -29,7 +29,7 @@ afterAll(async () => {
 });
 
 describe("built binary over stdio", () => {
-  it("starts and lists the five tools", async () => {
+  it("starts and lists the six tools", async () => {
     const transport = new StdioClientTransport({
       command: "node",
       args: [distEntry],
@@ -40,7 +40,7 @@ describe("built binary over stdio", () => {
     try {
       const { tools } = await client.listTools();
       const names = tools.map((t) => t.name).sort();
-      expect(names).toEqual(["list-work-state", "read", "remember", "search", "who-is"]);
+      expect(names).toEqual(["ask", "list-work-state", "read", "remember", "search", "who-is"]);
     } finally {
       await client.close();
     }

@@ -1,7 +1,14 @@
 import { NOTE_KINDS, type Note } from "@cmnwlth/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { listWorkState, readNoteTool, remember, searchNotes, whoIs } from "./tools.js";
+import {
+  askBrainTool,
+  listWorkState,
+  readNoteTool,
+  remember,
+  searchNotes,
+  whoIs,
+} from "./tools.js";
 
 /** Zod enum of the four note kinds, reused across tool input schemas. */
 const kindEnum = z.enum(NOTE_KINDS);
@@ -38,7 +45,7 @@ function noBrainConfigured(): ToolError {
 }
 
 /**
- * Build the Commonwealth MCP server with the five M1 tools wired to the pure handlers in
+ * Build the Commonwealth MCP server with its tools wired to the pure handlers in
  * `tools.ts`. Every tool reads/writes the brain only through `@cmnwlth/core`, keeping
  * markdown the source of truth (ADR-0003).
  *
@@ -72,6 +79,42 @@ export function createServer(brainDir: string | null = process.cwd()): McpServer
           ? `No notes matched "${query}".`
           : results.map((r) => `- ${r.title} [${r.kind}] (${r.path})\n    ${r.snippet}`).join("\n");
       return { content: [{ type: "text", text }], structuredContent: { results } };
+    },
+  );
+
+  server.registerTool(
+    "ask",
+    {
+      title: "Ask the brain",
+      description:
+        "Answer a natural-language question from the team brain with FAITHFUL CITATIONS. This " +
+        "tool retrieves the most relevant notes and returns them as citation-anchored context — it " +
+        "does NOT write the answer; YOU do, from these notes only. Rules: (1) answer ONLY from the " +
+        "returned notes; (2) cite every claim with its note id and path; (3) if `coverage.matched` " +
+        "is false or the notes don't actually address the question, say you don't have enough in " +
+        "the brain to answer — never invent facts or citations. Use `read` to pull a full note when " +
+        "an excerpt is not enough.",
+      inputSchema: {
+        question: z.string().min(1).describe("The natural-language question to answer"),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(50)
+          .optional()
+          .describe("Max notes to retrieve (default 8)"),
+      },
+    },
+    async ({ question, limit }) => {
+      if (brainDir === null) return noBrainConfigured();
+      const result = await askBrainTool(brainDir, { question, limit });
+      const text = !result.coverage.matched
+        ? `No notes in the brain matched "${question}". Tell the user you don't have enough to answer.`
+        : `Answer "${question}" using ONLY these notes, citing each by id/path; if they don't cover it, say so:\n\n` +
+          result.hits
+            .map((h) => `- [${h.kind}] ${h.title} (id: ${h.id}, path: ${h.path})\n    ${h.excerpt}`)
+            .join("\n");
+      return { content: [{ type: "text", text }], structuredContent: { ...result } };
     },
   );
 

@@ -3,14 +3,15 @@
 The glue that makes Commonwealth "just happen" inside Claude Code. It bundles everything a
 teammate needs and wires the auto-bridge (docs/03-distribution.md):
 
-- **MCP server** `commonwealth` — the `@cmnwlth/mcp` server (`search / read / remember /
+- **MCP server** `commonwealth` — the `@cmnwlth/mcp` server (`search / ask / read / remember /
 work-state / people`), auto-started by declaring it in the manifest (no manual
-  `claude mcp add`).
+  `claude mcp add`). `ask` returns citation-anchored context; the agent writes the cited answer
+  (ADR-0020) — Commonwealth never embeds an LLM.
 - **Lifecycle hooks** — `SessionStart` pulls relevant team-brain context and injects it;
   `SessionEnd` extracts learnings from the transcript and stages them into the review queue.
 - **Brain registry** — resolves the current project directory → its brain repo
   (`@cmnwlth/core`'s `resolveBrainDir`, issue #14).
-- **`/commonwealth` commands** — manual `remember`, `recall`, `promote`, `status`.
+- **`/commonwealth` commands** — manual `remember`, `recall`, `ask`, `promote`, `status`.
 
 Everything real is done by the `@cmnwlth/*` packages; the plugin is glue. Markdown in the
 brain repo stays the source of truth.

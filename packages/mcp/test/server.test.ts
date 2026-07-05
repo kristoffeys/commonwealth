@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 
 describe("createServer", () => {
-  it("registers the five expected tools", async () => {
+  it("registers the six expected tools", async () => {
     const server = createServer(brainDir);
     const client = new Client({ name: "test-client", version: "0.0.0" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -28,7 +28,7 @@ describe("createServer", () => {
 
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual(["list-work-state", "read", "remember", "search", "who-is"]);
+    expect(names).toEqual(["ask", "list-work-state", "read", "remember", "search", "who-is"]);
 
     await client.close();
     await server.close();

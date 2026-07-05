@@ -1,10 +1,12 @@
 import {
+  askBrain,
   buildIndex,
   listNotes,
   readNote,
   regenerateDerived,
   resolveProjectSource,
   search,
+  type AskResult,
   type Frontmatter,
   type Note,
   type NoteKind,
@@ -39,6 +41,24 @@ export async function searchNotes(
   { query, kind, limit }: SearchNotesArgs,
 ): Promise<SearchResult[]> {
   return search(brainDir, query, { kind, limit });
+}
+
+/** Arguments for {@link askBrainTool}. */
+export interface AskArgs {
+  question: string;
+  limit?: number;
+}
+
+/**
+ * "Ask the brain" retrieval (ADR-0020): returns citation-anchored context for a question. Does
+ * NOT synthesize — the calling agent answers from these notes and cites them. Thin wrapper over
+ * `core.askBrain`.
+ */
+export async function askBrainTool(
+  brainDir: string,
+  { question, limit }: AskArgs,
+): Promise<AskResult> {
+  return askBrain(brainDir, question, { limit });
 }
 
 /** Arguments for {@link readNoteTool}. */
