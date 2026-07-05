@@ -265,10 +265,21 @@ describe("runOnboard", () => {
     expect(deps.registerBrain).toHaveBeenCalledTimes(3);
     for (const f of folders) {
       expect(deps.configureScope).toHaveBeenCalledWith(f);
-      expect(deps.registerBrain).toHaveBeenCalledWith(f, "/b");
+      // Third arg is the brain remote (undefined here — no --remote in this run; ADR-0019).
+      expect(deps.registerBrain).toHaveBeenCalledWith(f, "/b", undefined);
     }
     expect(result.scopedFolders).toBe(3);
     expect(result.mappedFolders).toBe(3);
+  });
+
+  it("passes the brain remote to registerBrain so it lands in the mapping (ADR-0019)", async () => {
+    const deps = makeDeps();
+    await runOnboard(
+      "/repo",
+      { yes: true, brain: "/b", syncFolders: ["/a"], remote: "git@example.com:org/brain.git" },
+      deps,
+    );
+    expect(deps.registerBrain).toHaveBeenCalledWith("/a", "/b", "git@example.com:org/brain.git");
   });
 
   it("registerBrain runs once per syncFolder", async () => {

@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { promises as fs, type Stats } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { resolveBrainDir } from "@cmnwlth/core";
+import { resolveBrainDir, resolveBrainMapping } from "@cmnwlth/core";
 import { isInScope, loadUserConfig } from "@cmnwlth/curate";
 
 /**
@@ -61,6 +61,11 @@ export interface DoctorEnv {
   scopeConfigPath?: string;
   /** Resolve the brain for a cwd. */
   resolveBrain: (cwd: string) => Promise<string | null>;
+  /**
+   * The git remote a missing brain could clone from (ADR-0019), or null. Optional — when absent,
+   * a missing brain reads as a hard config error rather than a "not cloned yet" state.
+   */
+  resolveRemote?: (cwd: string) => Promise<string | null>;
   /** True if the `commonwealth` plugin is installed; null when it can't be determined. */
   pluginInstalled: () => boolean | null;
   /** Whether `pid` is a live process (`kill -0`). */
@@ -166,6 +171,10 @@ export function defaultDoctorEnv(cwd: string): DoctorEnv {
       brainEnv && brainEnv.length > 0
         ? Promise.resolve(path.resolve(brainEnv))
         : resolveBrainDir(dir),
+    resolveRemote: async (dir) => {
+      if (brainEnv && brainEnv.length > 0) return null; // env-pinned brains carry no mapping remote
+      return (await resolveBrainMapping(dir))?.remote ?? null;
+    },
     pluginInstalled: () => {
       // Inferred from `claude plugin list` (the same surface `init` installs into). Null when
       // there is no `claude` on PATH — we present plugin state as inferred, never assert it.
@@ -268,15 +277,24 @@ export async function diagnose(
     return finalize(cwd, null, checks, false);
   }
   const brainExists = await isDir(brain);
-  checks.push({
-    id: "brain",
-    label: "Brain",
-    status: brainExists ? "ok" : "fail",
-    detail: brainExists
-      ? `Resolves to ${brain}.`
-      : `Resolves to ${brain}, but that directory is missing.`,
-    ...(brainExists ? {} : { fix: "commonwealth init   (recreate/join the brain)" }),
-  });
+  if (brainExists) {
+    checks.push({ id: "brain", label: "Brain", status: "ok", detail: `Resolves to ${brain}.` });
+  } else {
+    // Missing dir: distinguish "mapped but not cloned yet" (recoverable via clone-on-demand,
+    // ADR-0019) from a truly dangling path. Both fail — the brain is unusable until materialized.
+    const remote = env.resolveRemote ? await env.resolveRemote(cwd) : null;
+    checks.push({
+      id: "brain",
+      label: "Brain",
+      status: "fail",
+      detail: remote
+        ? `Mapped to ${brain} but not cloned yet (remote: ${remote}).`
+        : `Resolves to ${brain}, but that directory is missing.`,
+      fix: remote
+        ? "commonwealth sync once   (clones the brain on demand)"
+        : "commonwealth init   (recreate/join the brain)",
+    });
+  }
 
   // 3) Marker sanity (#68): a `.commonwealth/brain` marker pointing at a missing dir is silently
   //    ignored by resolution and shadows nothing — but it's a latent trap, so surface it.

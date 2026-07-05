@@ -67,6 +67,20 @@ describe("commonwealth doctor — diagnose()", () => {
     expect(report.checks.some((c) => c.status === "fail")).toBe(false);
   });
 
+  it("reports 'not cloned yet' when the brain is mapped with a remote but missing (ADR-0019)", async () => {
+    const missing = path.join(tmp, "not-cloned");
+    const report = await diagnose(
+      healthyEnv({
+        resolveBrain: () => Promise.resolve(missing),
+        resolveRemote: () => Promise.resolve("git@example.com:org/brain.git"),
+      }),
+    );
+    const brainCheck = check(report, "brain");
+    expect(brainCheck.status).toBe("fail");
+    expect(brainCheck.detail).toContain("not cloned yet");
+    expect(brainCheck.fix).toContain("commonwealth sync once");
+  });
+
   it("fails and short-circuits when no brain resolves", async () => {
     const report = await diagnose(healthyEnv({ resolveBrain: () => Promise.resolve(null) }));
     expect(report.ok).toBe(false);

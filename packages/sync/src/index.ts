@@ -1,6 +1,6 @@
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { resolveBrainDir } from "@cmnwlth/core";
+import { ensureBrainCloned, resolveBrainMapping, type ResolvedBrain } from "@cmnwlth/core";
 import { Daemon, isRunning, readPid } from "./daemon.js";
 import { SyncEngine } from "./engine.js";
 import { formatSyncSummary } from "./format.js";
@@ -22,11 +22,11 @@ import { formatSyncSummary } from "./format.js";
  * registry (not just cwd) means `commonwealth-sync status` reports on the brain the working
  * directory actually maps to — the same one the MCP server and hooks use.
  */
-async function resolveDir(dirFlag: string | undefined): Promise<string | null> {
-  if (dirFlag && dirFlag.length > 0) return path.resolve(dirFlag);
+async function resolveMapping(dirFlag: string | undefined): Promise<ResolvedBrain | null> {
+  if (dirFlag && dirFlag.length > 0) return { brain: path.resolve(dirFlag) };
   const env = process.env.COMMONWEALTH_BRAIN_DIR;
-  if (env && env.length > 0) return path.resolve(env);
-  return resolveBrainDir(process.cwd());
+  if (env && env.length > 0) return { brain: path.resolve(env) };
+  return resolveBrainMapping(process.cwd());
 }
 
 async function cmdSync(dir: string): Promise<void> {
@@ -85,15 +85,38 @@ async function main(): Promise<void> {
   });
 
   const sub = positionals[0];
-  const dir = await resolveDir(values.dir);
-  if (dir === null) {
+  const mapping = await resolveMapping(values.dir);
+  if (mapping === null) {
     console.error(
       `[commonwealth-sync] no Commonwealth brain configured for ${process.cwd()} — run ` +
         `\`commonwealth init\` here, add a registry mapping, or pass --dir <brain>.`,
     );
     process.exit(1);
   }
+  const dir = mapping.brain;
   const interval = values.interval ? Number.parseInt(values.interval, 10) : undefined;
+
+  // Clone-on-demand (ADR-0019): syncing actions need the brain materialized. `status`/`stop` don't
+  // clone — they only report on / signal a running daemon. The clone runs under the user's git
+  // identity, so a no-access remote fails here with git's own error (that IS the access check).
+  if (sub === "sync" || sub === "start") {
+    const outcome = await ensureBrainCloned(dir, mapping.remote);
+    if (outcome.status === "cloned") console.error(`[commonwealth-sync] cloned brain into ${dir}`);
+    else if (outcome.status === "no-remote") {
+      // "no-remote" implies the brain is missing (ensureBrainCloned returns "exists" otherwise).
+      console.error(
+        `[commonwealth-sync] brain ${dir} is not cloned and has no remote to clone from — ` +
+          `re-run \`commonwealth init\`, or add a "remote" to its registry mapping.`,
+      );
+      process.exit(1);
+    } else if (outcome.status === "failed") {
+      console.error(
+        `[commonwealth-sync] could not clone brain from ${mapping.remote}: ${outcome.error}\n` +
+          `Check your git access to that remote (SSH agent / credential helper).`,
+      );
+      process.exit(1);
+    }
+  }
 
   switch (sub) {
     case "sync":

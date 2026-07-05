@@ -2,7 +2,13 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { addRegistryMapping, linkBrain, resolveBrainDir, setBrainMarker } from "../src/registry";
+import {
+  addRegistryMapping,
+  linkBrain,
+  resolveBrainDir,
+  resolveBrainMapping,
+  setBrainMarker,
+} from "../src/registry";
 
 let root: string;
 
@@ -361,5 +367,48 @@ describe("resolution precedence", () => {
     await setBrainMarker(cwd, markerBrain);
 
     expect(await resolveBrainDir(cwd, { registryPath })).toBe(markerBrain);
+  });
+});
+
+describe("registry remote — clone-on-demand wiring (ADR-0019)", () => {
+  it("round-trips a remote through addRegistryMapping + resolveBrainMapping", async () => {
+    const registryPath = path.join(root, "reg.json");
+    const project = await mkdir("proj");
+    const brain = await mkdir("brain");
+    await addRegistryMapping(project, brain, {
+      remote: "git@example.com:org/brain.git",
+      registryPath,
+    });
+    process.env.COMMONWEALTH_REGISTRY = registryPath;
+
+    const m = await resolveBrainMapping(project);
+    expect(m?.brain).toBe(brain);
+    expect(m?.remote).toBe("git@example.com:org/brain.git");
+    // resolveBrainDir still returns just the path (unchanged contract).
+    expect(await resolveBrainDir(project)).toBe(brain);
+  });
+
+  it("updates the remote on an existing mapping without touching the brain", async () => {
+    const registryPath = path.join(root, "reg.json");
+    const project = await mkdir("proj");
+    const brain = await mkdir("brain");
+    await addRegistryMapping(project, brain, { registryPath });
+    const res = await addRegistryMapping(project, brain, {
+      remote: "https://example.com/y.git",
+      registryPath,
+    });
+    expect(res.updated).toBe(true);
+    process.env.COMMONWEALTH_REGISTRY = registryPath;
+    expect((await resolveBrainMapping(project))?.remote).toBe("https://example.com/y.git");
+  });
+
+  it("keeps the legacy string third arg (registryPath) working", async () => {
+    const registryPath = path.join(root, "reg.json");
+    const project = await mkdir("proj");
+    const brain = await mkdir("brain");
+    await addRegistryMapping(project, brain, registryPath); // legacy positional form
+    process.env.COMMONWEALTH_REGISTRY = registryPath;
+    expect(await resolveBrainDir(project)).toBe(brain);
+    expect((await resolveBrainMapping(project))?.remote).toBeUndefined();
   });
 });

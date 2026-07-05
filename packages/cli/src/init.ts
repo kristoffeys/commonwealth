@@ -39,7 +39,7 @@ export interface InitDeps {
    * registry is the default source of truth; the per-project `.commonwealth/brain` marker
    * remains an optional manual override (`core.setBrainMarker`), not written here.
    */
-  registerBrain(repoDir: string, brainDir: string): Promise<void>;
+  registerBrain(repoDir: string, brainDir: string, remote?: string): Promise<void>;
   /** Stage candidates into the brain's review queue; returns how many were captured. */
   stage(brainDir: string, candidates: NewNoteInput[]): Promise<{ captured: number }>;
   /** Ask the user a yes/no question; resolves to their answer. */

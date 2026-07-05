@@ -27,14 +27,25 @@ your own box). There is no Commonwealth server, no database to run, and no accou
    commonwealth init --remote git@github.com:my-org/my-project-brain.git
    ```
 
-   `--remote` sets the brain repo's `origin`; the daemon pushes the seeded canon up. (No remote
+   `--remote` sets the brain repo's `origin`; the daemon pushes the seeded canon up, and the
+   registry mapping records the remote so teammates can clone-on-demand (ADR-0019). (No remote
    yet? Run `init` without it, create the empty remote, then
    `git -C <brain> remote add origin <url> && commonwealth sync once`.)
 
 2. **A teammate joins.** They build the CLI (see the [Quickstart](./05-quickstart.md)), then from
    the same project run `commonwealth init`. When a brain already exists for the project they
-   **join** it (clone-and-go, time-to-first-value ≈ 0) rather than re-seeding. The daemon keeps
-   both clones converged.
+   **join** it (clone-and-go, time-to-first-value ≈ 0) rather than re-seeding. If their registry
+   maps the project to a brain that isn't checked out locally yet — and the mapping carries a
+   `remote` — the daemon (or `commonwealth sync once`) **clones it on demand** on first use, under
+   their own git identity, before the first sync. The daemon keeps both clones converged.
+
+   > **Access control = git permissions (ADR-0019).** There is no separate ACL. Whether a teammate
+   > can read/write a brain is exactly whether their git identity can `clone`/`push` its repo —
+   > enforced by the git host (GitHub/GitLab teams, SSO, deploy keys). So a **private brain over
+   > HTTPS needs a working git credential helper, and an SSH remote needs an agent key**; a clone
+   > that fails for lack of access surfaces git's own error (run `commonwealth doctor` — it reports
+   > "mapped but not cloned yet / clone failed"). No access → the session degrades to no-brain,
+   > never a crash.
 
 3. **Keep it converged.** `init` starts the daemon detached; control it with:
 
