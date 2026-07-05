@@ -1,14 +1,11 @@
 # 19. Access model: git permissions are the ACL; brains clone on demand
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-05
-- Deciders: kristof (owner) — _pending acceptance_; Claude (orchestrator, proposer)
+- Deciders: kristof (owner), Claude (orchestrator)
 - Relates: [ADR-0003](0003-concurrency-model.md), [ADR-0006](0006-sync-resident-daemon.md),
   [ADR-0011](0011-brain-wiring-global-registry.md), [ADR-0013](0013-brain-is-a-git-repo-at-init.md),
   [distribution §3 + "Access control = git permissions"](../03-distribution.md), issue #15
-
-> This ADR is a **proposal for the owner to accept or amend**. It changes no behavior on its own;
-> it records the intended access model and the clone-on-demand design so implementation can follow.
 
 ## Context
 
