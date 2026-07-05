@@ -21,6 +21,12 @@ export default defineConfig({
     // them generous headroom instead of the 5s default. Fast unit tests are unaffected.
     testTimeout: 30_000,
     hookTimeout: 60_000,
+    // Retry transient failures. Much of the suite spawns REAL subprocesses (git across clones,
+    // the built CLI, the vendored MCP server, a sync daemon); under CI fork-pressure a spawn can
+    // intermittently fail with EAGAIN and exit non-zero — a flake that twice aborted the release
+    // gate. A real regression is deterministic and still fails all attempts; retry only rescues
+    // the genuinely non-deterministic ones, and retries run ONLY on failure (green runs pay nothing).
+    retry: 2,
     coverage: {
       provider: "v8",
       include: ["packages/*/src/**/*.ts"],
