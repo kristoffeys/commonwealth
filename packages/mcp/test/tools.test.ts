@@ -3,7 +3,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { initBrain, readNote, writeNote } from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { listWorkState, readNoteTool, remember, searchNotes, whoIs } from "../src/tools.js";
+import {
+  askBrainTool,
+  listWorkState,
+  readNoteTool,
+  remember,
+  searchNotes,
+  whoIs,
+} from "../src/tools.js";
 
 let brainDir: string;
 
@@ -45,6 +52,26 @@ describe("searchNotes", () => {
   it("returns an empty array when nothing matches", async () => {
     const hits = await searchNotes(brainDir, { query: "nonexistentxyz" });
     expect(hits).toEqual([]);
+  });
+});
+
+describe("askBrainTool", () => {
+  it("returns citation-anchored hits + coverage for a matching question", async () => {
+    await writeNote(brainDir, {
+      kind: "decision",
+      title: "Chose pineapple over mango",
+      body: "We picked pineapple because the mango supply chain was unreliable.",
+    });
+    const result = await askBrainTool(brainDir, { question: "pineapple mango supply" });
+    expect(result.coverage.matched).toBe(true);
+    expect(result.hits[0]!.title).toContain("pineapple");
+    expect(result.hits[0]!.path.length).toBeGreaterThan(0); // a real citation handle
+  });
+
+  it("signals thin coverage rather than fabricating", async () => {
+    const result = await askBrainTool(brainDir, { question: "nonexistentxyz topic" });
+    expect(result.coverage.matched).toBe(false);
+    expect(result.hits).toEqual([]);
   });
 });
 

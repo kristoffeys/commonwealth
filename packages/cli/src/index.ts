@@ -3,6 +3,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { cmdConfig, cmdReseed, delegateCurate, delegateSync } from "./commands.js";
 import { defaultOnboardDeps } from "./deps.js";
+import { defaultAskEnv, formatAsk, runAsk } from "./ask.js";
 import { defaultDemoEnv, runDemo } from "./demo.js";
 import { defaultDoctorEnv, diagnose, formatDoctorText } from "./doctor.js";
 import { defaultEmitEnv, formatEmitResult, runEmit } from "./emit.js";
@@ -42,6 +43,8 @@ export { runEmit, defaultEmitEnv, formatEmitResult, upsertSentinelBlock } from "
 export type { EmitResult, EmitEnv } from "./emit.js";
 export { runDemo, defaultDemoEnv } from "./demo.js";
 export type { DemoResult, DemoEnv } from "./demo.js";
+export { runAsk, defaultAskEnv, formatAsk } from "./ask.js";
+export type { AskEnv } from "./ask.js";
 
 /** Print `commonwealth` usage to stderr. */
 function printUsage(): void {
@@ -66,6 +69,7 @@ function printUsage(): void {
       "  commonwealth reject    <id...>                 discard staged notes",
       "  commonwealth scope     <show | allow <p> | deny <p> | check>   per-user capture scope",
       "  commonwealth recall    <query>                 search the brain",
+      "  commonwealth ask       <question>              cited retrieval for a question (agent synthesizes)",
       "",
       "All commands resolve the brain from the registry for the current directory — no --dir needed.",
       "",
@@ -158,6 +162,8 @@ export async function run(argv: string[]): Promise<number> {
       return delegateCurate(["scope", ...rest]);
     case "recall":
       return delegateCurate(["context", "--cwd", process.cwd(), "--query", rest.join(" ")]);
+    case "ask":
+      return cmdAsk(rest);
     default:
       process.stderr.write(`Unknown command: ${command}\n`);
       printUsage();
@@ -200,6 +206,27 @@ async function cmdVerifyRestore(rest: string[]): Promise<number> {
   if (json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   else process.stderr.write(formatVerifyRestore(report));
   return report.ok ? 0 : 1;
+}
+
+/**
+ * `commonwealth ask "<question>"` — cited retrieval for a question (ADR-0020). Outside an agent
+ * there's no synthesizer, so the CLI prints the notes that answer it (each with id/path) and says
+ * synthesis happens in an agent; it never fabricates prose. Exit 1 when no brain resolves.
+ */
+async function cmdAsk(rest: string[]): Promise<number> {
+  const question = rest.join(" ").trim();
+  if (question.length === 0) {
+    process.stderr.write('usage: commonwealth ask "<question>"\n');
+    return 2;
+  }
+  try {
+    const result = await runAsk(question, defaultAskEnv(process.cwd()));
+    process.stderr.write(formatAsk(result));
+    return 0;
+  } catch (err) {
+    process.stderr.write(`${(err as Error).message}\n`);
+    return 1;
+  }
 }
 
 /**

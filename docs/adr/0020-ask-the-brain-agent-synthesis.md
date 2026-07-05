@@ -1,13 +1,10 @@
 # 20. Ask the brain: the host agent synthesizes; Commonwealth supplies cited retrieval
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-05
-- Deciders: kristof (owner) — _pending acceptance_; Claude (orchestrator, proposer)
+- Deciders: kristof (owner), Claude (orchestrator)
 - Relates: [ADR-0005](0005-search-and-embeddings.md), [ADR-0012](0012-mcp-distribution-via-plugin.md),
   [ADR-0003](0003-concurrency-model.md), issue #108
-
-> Proposal for the owner to accept or amend. It records the design for "ask the brain" so
-> implementation can follow; it changes no behavior on its own.
 
 ## Context
 
@@ -84,7 +81,7 @@ citation-anchored retrieval plus a prompt that makes the agent answer faithfully
 - **A heuristic extractive summarizer (no LLM) inside the tool.** Rejected: low answer quality for
   real "why" questions, and it still can't beat the agent that's already present.
 
-## Implementation sketch (non-binding, if accepted)
+## Implementation
 
 1. `@cmnwlth/core` (or a small `ask` helper reusing `search`): a function returning
    `{ question, hits: Array<{ id, kind, title, path, excerpt }>, coverage: { matched, topScore } }`,

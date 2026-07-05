@@ -21,7 +21,7 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 | [0011](0011-brain-wiring-global-registry.md)  | Brain wiring: global user registry is the default source     | Accepted |
 | [0012](0012-mcp-distribution-via-plugin.md)   | MCP distribution via the plugin at user scope                | Accepted |
 | [0019](0019-access-model-clone-on-demand.md)  | Access model: git permissions are the ACL; clone on demand   | Accepted |
-| [0020](0020-ask-the-brain-agent-synthesis.md) | Ask the brain: the host agent synthesizes; cited retrieval    | Proposed |
+| [0020](0020-ask-the-brain-agent-synthesis.md) | Ask the brain: the host agent synthesizes; cited retrieval    | Accepted |
 
 ## Process
 

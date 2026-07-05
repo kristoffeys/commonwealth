@@ -192,6 +192,7 @@ commonwealth promote <id...> | --all      # approve staged notes into canon
 commonwealth reject <id...>               # discard staged notes
 commonwealth scope show|allow|deny|check  # per-user capture scope
 commonwealth recall <query>               # search the brain
+commonwealth ask <question>               # cited retrieval for a question (agent writes the answer)
 ```
 
 Tip: to review a bulk reseed instead of auto-landing it, `commonwealth config set autoPromote
