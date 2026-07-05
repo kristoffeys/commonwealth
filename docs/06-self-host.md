@@ -103,6 +103,60 @@ commonwealth doctor --fix    # self-heal — restarts a dead daemon (the only au
 Paste the output into any support thread — it's the first triage step. Exit code is non-zero when a
 critical link failed, so CI can gate on it.
 
+## Prove you can restore it — `commonwealth verify-restore`
+
+"Your knowledge is portable git you own" is only worth as much as your last successful restore.
+`commonwealth verify-restore` clones the brain into a throwaway temp dir and *proves* full recovery
+— every note schema-valid, ids unique, supersede chains resolving, no secrets in canon, and the
+derived `COMMONWEALTH.md`/`INDEX.md` regenerating byte-for-byte — then prints an **RPO** line (the
+age of the last commit = your worst-case data-loss window). Exit code is 0 only when recovery is
+verified, so it's a green/red CI gate.
+
+```bash
+commonwealth verify-restore                # prove the committed local state restores
+commonwealth verify-restore --from-remote  # the real off-site proof: clone origin and verify
+commonwealth verify-restore --json         # structured report for CI / dashboards
+```
+
+### Weekly CI gate (GitHub Actions)
+
+Drop this in the **brain repo** at `.github/workflows/verify-restore.yml`. It re-clones the brain
+from its own remote every Monday and fails the run if recovery can't be proven:
+
+```yaml
+name: verify-restore
+on:
+  schedule:
+    - cron: "0 6 * * 1" # 06:00 UTC every Monday
+  workflow_dispatch: {}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npx -y @cmnwlth/cli verify-restore --from-remote
+        env:
+          COMMONWEALTH_BRAIN_DIR: ${{ github.workspace }}
+```
+
+A green check every week is the proof an eng lead wants *before* a team migrates tribal knowledge
+in — and doubles as the backup/compliance answer.
+
+### Offline escrow (`git bundle`)
+
+For an air-gapped/off-platform copy, a brain is just a git repo, so snapshot it into a single file
+you can store anywhere (S3, a USB drive, a safe):
+
+```bash
+git -C <brain> bundle create brain-$(date +%F).bundle --all
+# restore later, anywhere: git clone brain-2026-07-05.bundle recovered-brain
+```
+
+That's the whole export story — no proprietary format, no `export` command to trust.
+
 ## Distribution
 
 The `@cmnwlth/*` packages are published to npm (#49), so no build or committed runtime is needed:
