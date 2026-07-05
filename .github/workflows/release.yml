@@ -1,0 +1,46 @@
+name: Release
+
+# Publish the @commonwealth/* packages to npm (#49). Two ways in:
+#  - push a `v*` tag (e.g. `v0.1.0`) → publishes the current versions, or
+#  - run this workflow manually (workflow_dispatch).
+# Versions are managed with Changesets: `pnpm changeset` to record a change, `pnpm
+# changeset version` to bump, commit, then tag. `changeset publish` only publishes packages
+# whose version isn't already on the registry, so re-runs are safe.
+#
+# Prerequisites (one-time, owner):
+#  - Own the `@commonwealth` npm scope (public org — free) and add an `NPM_TOKEN` repo secret
+#    with publish rights (an automation/granular token).
+#  - Provenance (`publishConfig.provenance`) requires a PUBLIC repo + the `id-token: write`
+#    permission below; it activates once the repo is public (#18). On a private repo, publish
+#    still works — npm just skips the attestation.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance / OIDC
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+      - run: pnpm install --frozen-lockfile
+      # Gate the release on a green build + tests before anything reaches the registry.
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      # `changeset publish` builds are done above; it publishes each @commonwealth/* package
+      # (workspace:* deps are rewritten to real versions) and skips already-published versions.
+      - run: pnpm changeset publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"

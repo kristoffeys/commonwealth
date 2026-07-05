@@ -1,6 +1,6 @@
 {
   "name": "@commonwealth/curate",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Capture, curation engine (dedupe/relevance), in-repo review queue, and relevance selection",
   "license": "Apache-2.0",
   "type": "module",
@@ -25,5 +25,16 @@
   },
   "dependencies": {
     "@commonwealth/core": "workspace:*"
-  }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kristoffeys/commonwealth.git",
+    "directory": "packages/curate"
+  },
+  "homepage": "https://github.com/kristoffeys/commonwealth#readme",
+  "bugs": "https://github.com/kristoffeys/commonwealth/issues"
 }

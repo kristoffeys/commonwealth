@@ -6,7 +6,7 @@
   "engines": {
     "node": ">=22"
   },
-  "description": "Commonwealth — a multiplayer, git-backed, agent-readable second brain for teams",
+  "description": "Commonwealth \u2014 a multiplayer, git-backed, agent-readable second brain for teams",
   "license": "Apache-2.0",
   "scripts": {
     "build": "pnpm -r build",
@@ -16,7 +16,10 @@
     "test:watch": "vitest",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "pnpm -r build && changeset publish"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -25,6 +28,7 @@
     ]
   },
   "devDependencies": {
+    "@changesets/cli": "^2.27.0",
     "@eslint/js": "^9.0.0",
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^3.0.0",

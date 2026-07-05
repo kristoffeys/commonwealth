@@ -1,6 +1,6 @@
 {
   "name": "@commonwealth/core",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Core substrate for Commonwealth: schema, note IO, scaffold, and the derived index",
   "license": "Apache-2.0",
   "type": "module",
@@ -28,5 +28,16 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0"
-  }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kristoffeys/commonwealth.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/kristoffeys/commonwealth#readme",
+  "bugs": "https://github.com/kristoffeys/commonwealth/issues"
 }

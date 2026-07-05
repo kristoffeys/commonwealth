@@ -1,6 +1,6 @@
 {
   "name": "@commonwealth/sync",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings",
   "license": "Apache-2.0",
   "type": "module",
@@ -20,5 +20,16 @@
     "@commonwealth/core": "workspace:*",
     "chokidar": "^4.0.0",
     "simple-git": "^3.27.0"
-  }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kristoffeys/commonwealth.git",
+    "directory": "packages/sync"
+  },
+  "homepage": "https://github.com/kristoffeys/commonwealth#readme",
+  "bugs": "https://github.com/kristoffeys/commonwealth/issues"
 }
