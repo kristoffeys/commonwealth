@@ -24,23 +24,24 @@ hooks/lib.mjs                testable, dependency-injected hook core
 hooks/session-start.mjs      thin stdin→lib→stdout entry (prints context)
 hooks/session-end.mjs        thin stdin→lib entry (stages candidates)
 commands/*.md                /commonwealth remember|recall|promote|status
-scripts/bundle.mjs           vendor built mcp/curate/sync + deps → vendor/
-vendor/<pkg>/…               (generated) standalone runtime the hooks/MCP call
 ```
 
-## Build the vendored runtime
+## Runtime (published packages via npx)
 
-The plugin runs standalone with `node` — no pnpm workspace on the user's machine — so its
-runtime is vendored:
+The plugin ships **no bundled runtime**. Claude Code copies plugin files but never runs
+`npm install`, so the MCP server and hooks invoke the **published** packages on demand with
+`npx` (#62): `.mcp.json` runs `npx -y @cmnwlth/mcp@<version>`, and the hooks run
+`npx -y @cmnwlth/curate@<version>`. `npx` fetches from npm on first use (pulling
+`better-sqlite3`'s per-platform prebuilt binary transitively) and caches thereafter — so a bare
+git-clone install works on any platform, with nothing platform-locked committed.
 
-```bash
-pnpm --filter @cmnwlth/plugin bundle
-```
+The pinned version tracks the plugin's own version; bump both together on release.
 
-This runs `pnpm -r build` then copies `packages/{mcp,curate,sync}/dist` plus their required
-`node_modules` into `packages/plugin/vendor/<pkg>/`. **The bundle is platform-local**:
-`better-sqlite3` ships a prebuilt native binary for the OS/arch it was built on. A
-cross-platform build / npm publish with per-platform prebuilds is a later task.
+> Local development: pass `overrides.curateEntry` (or run against a locally-built curate) to
+> exercise the hooks without hitting the registry — that's how the tests run.
+
+(A legacy `scripts/bundle.mjs` still builds + vendors the runtime for parts of the local test
+suite; removing it is tracked with the packaging spike, #131.)
 
 ## Install (git plugin marketplace)
 
@@ -117,7 +118,9 @@ allow|deny|show|check`.
 Real Claude Code hook firing can't be exercised by the unit tests, so verify end-to-end by
 hand:
 
-1. **Build the vendor bundle:** `pnpm --filter @cmnwlth/plugin bundle`.
+1. **Ensure the runtime is reachable:** the plugin uses the published `@cmnwlth/mcp` /
+   `@cmnwlth/curate` via `npx` (a first run fetches them). For local changes, publish a dev
+   version or point the hooks at a locally-built curate via `overrides.curateEntry`.
 2. **Create a brain** and put a note in it:
    ```bash
    node packages/curate/dist/index.js --help   # sanity: CLI runs

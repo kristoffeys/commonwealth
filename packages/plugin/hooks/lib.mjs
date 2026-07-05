@@ -17,7 +17,6 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 /**
  * Hard cap on the extraction `claude -p` child (#104). Extraction is an LLM call, so allow real
@@ -329,35 +328,37 @@ async function run(cmd, args, { input, cwd, env, timeoutMs } = {}) {
  * Build the production `deps` for the hooks.
  *
  * - `resolveBrainDir` comes from `@cmnwlth/core`'s brain registry (issue #14).
- * - `isInScope` shells out to the vendored `commonwealth-curate scope check` so the plugin is
- *   self-contained (no direct import of curate internals) and honors ADR-0008 exactly as
- *   the CLI does.
- * - `getContext` / `capture` spawn the vendored `commonwealth-curate` binary (`context` /
- *   `capture --from -`) with `COMMONWEALTH_BRAIN_DIR` set to the resolved brain — reusing all of
- *   curate's real work (relevance selection, dedupe, scope, autoAdr gate).
+ * - `isInScope` shells out to the published `commonwealth-curate` (`scope check`) via npx, so
+ *   the plugin honors ADR-0008 exactly as the CLI does without importing curate internals.
+ * - `getContext` / `capture` run the published `commonwealth-curate` (`context` / `capture`) via
+ *   npx with `COMMONWEALTH_BRAIN_DIR` set — reusing curate.s relevance selection, dedupe, and gates.
  * - `extractCandidates` shells out to `claude -p` with {@link EXTRACTION_PROMPT} and parses
  *   the JSON array it prints; if `claude` is unavailable or the output is not a JSON array,
  *   it returns `[]` gracefully (capture then reports `captured: 0`).
  *
- * @param {object} [overrides]  Optional path overrides for the vendored binaries / node.
+ * @param {object} [overrides]  Optional overrides (curateEntry/curatePackage/nodeBin/claudeBin) for tests.
  * @returns {object}            The `deps` object matching the contract at the top.
  */
 export function realDeps(overrides = {}) {
-  // fileURLToPath, not URL.pathname: `.pathname` percent-encodes (a space → `%20`), so when
-  // CLAUDE_PLUGIN_ROOT is unset and the install path contains spaces the vendored binary paths
-  // don't resolve and every hook silently no-ops (#104). fileURLToPath decodes correctly.
-  const pluginRoot =
-    process.env.CLAUDE_PLUGIN_ROOT ?? fileURLToPath(new URL("..", import.meta.url));
-  const curateEntry =
-    overrides.curateEntry ??
-    `${pluginRoot}${pluginRoot.endsWith("/") ? "" : "/"}vendor/curate/index.js`;
   const nodeBin = overrides.nodeBin ?? process.execPath;
   const claudeBin = overrides.claudeBin ?? "claude";
   const extractionTimeoutMs = overrides.extractionTimeoutMs ?? EXTRACTION_TIMEOUT_MS;
 
-  /** Read + parse the vendored user config indirectly via `scope check`. */
+  // The curate runtime is the PUBLISHED `@cmnwlth/curate`, fetched on demand via `npx` (#62).
+  // Claude Code copies plugin files but does NOT `npm install`, so there's no committed `vendor/`
+  // to break a teammate's GitHub install, and `npx` pulls `better-sqlite3`'s per-platform
+  // prebuild transitively. Pinned to the plugin's version for lockstep. Tests/local dev pass
+  // `overrides.curateEntry` to run a locally-built copy with node instead of hitting the registry.
+  const curateEntry = overrides.curateEntry ?? null;
+  const curatePackage = overrides.curatePackage ?? "@cmnwlth/curate@0.1.0";
+  const runCurate = (args, runOpts) =>
+    curateEntry
+      ? run(nodeBin, [curateEntry, ...args], runOpts)
+      : run("npx", ["-y", curatePackage, ...args], runOpts);
+
+  /** Read + parse the user config indirectly via `scope check`. */
   async function isInScope(cwd) {
-    const res = await run(nodeBin, [curateEntry, "scope", "check", "--cwd", cwd]);
+    const res = await runCurate(["scope", "check", "--cwd", cwd]);
     // `scope check` prints "in-scope" / "out-of-scope" to stdout. Be conservative: if the
     // binary is missing or errors, treat the session as out of scope (do nothing) rather
     // than risk capturing/injecting where the user didn't opt in.
@@ -366,7 +367,7 @@ export function realDeps(overrides = {}) {
   }
 
   async function getContext(brain, cwd) {
-    const res = await run(nodeBin, [curateEntry, "context", "--cwd", cwd], {
+    const res = await runCurate(["context", "--cwd", cwd], {
       env: { COMMONWEALTH_BRAIN_DIR: brain },
     });
     if (res.code !== 0) return "";
@@ -376,7 +377,7 @@ export function realDeps(overrides = {}) {
   async function capture(brain, cwd, candidates) {
     // Pipe candidates on plain stdin: curate's `capture` reads stdin when `--from` is
     // absent. (`--from -` would be treated as a literal file path and fail.)
-    const res = await run(nodeBin, [curateEntry, "capture", "--cwd", cwd], {
+    const res = await runCurate(["capture", "--cwd", cwd], {
       input: JSON.stringify(candidates),
       env: { COMMONWEALTH_BRAIN_DIR: brain },
     });
