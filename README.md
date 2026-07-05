@@ -68,7 +68,16 @@ The steps below wire the same pieces manually (à la carte).
 
 ## Getting started
 
-**Requirements:** Node ≥ 22, [pnpm](https://pnpm.io) 10+, git.
+**Requirements:** Node ≥ 22, git (plus [pnpm](https://pnpm.io) 10+ for the from-source path).
+
+Once published to npm (#49), install the CLI directly:
+
+```bash
+npm i -g @commonwealth/cli      # then: commonwealth init
+# or run without installing:    npx @commonwealth/cli init
+```
+
+Until the first release, build from source:
 
 ```bash
 git clone https://github.com/kristoffeys/commonwealth.git
@@ -80,8 +89,8 @@ pnpm link-cli         # put `commonwealth` on your PATH (pre-npm wrapper → ~/.
 
 > `pnpm link-cli` writes a tiny wrapper to `~/.local/bin/commonwealth` that runs the built CLI
 > from this repo, so every `commonwealth <verb>` below just works. Make sure `~/.local/bin` is
-> on your `PATH`. (npm-published binaries are a later milestone — see the roadmap.) Prefer not
-> to link? Every command also runs as `node /path/to/Commonwealth/packages/cli/dist/index.js <verb>`.
+> on your `PATH`. Prefer not to link? Every command also runs as
+> `node /path/to/Commonwealth/packages/cli/dist/index.js <verb>`.
 
 ### One command: `commonwealth init`
 

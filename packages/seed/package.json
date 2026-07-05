@@ -1,6 +1,6 @@
 {
   "name": "@commonwealth/seed",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Cold-start seeding: mine git history + import agent-config into candidate notes",
   "license": "Apache-2.0",
   "type": "module",
@@ -18,5 +18,16 @@
   },
   "dependencies": {
     "@commonwealth/core": "workspace:*"
-  }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kristoffeys/commonwealth.git",
+    "directory": "packages/seed"
+  },
+  "homepage": "https://github.com/kristoffeys/commonwealth#readme",
+  "bugs": "https://github.com/kristoffeys/commonwealth/issues"
 }
