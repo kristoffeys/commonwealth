@@ -4,6 +4,7 @@ import { parseArgs } from "node:util";
 import { cmdConfig, cmdReseed, delegateCurate, delegateSync } from "./commands.js";
 import { defaultOnboardDeps } from "./deps.js";
 import { defaultDoctorEnv, diagnose, formatDoctorText } from "./doctor.js";
+import { defaultVerifyRestoreEnv, formatVerifyRestore, runVerifyRestore } from "./verify.js";
 import { defaultBrainDir } from "./init.js";
 import { runOnboard, runWizard, type OnboardOptions, type WizardDefaults } from "./onboard.js";
 import { createReadlinePrompter, isInteractive, type Prompter } from "./prompt.js";
@@ -33,6 +34,8 @@ export { findGitRepos } from "./discover.js";
 export type { FindGitReposOptions } from "./discover.js";
 export { diagnose, defaultDoctorEnv, formatDoctorText } from "./doctor.js";
 export type { DoctorReport, DoctorCheck, DoctorEnv, CheckStatus } from "./doctor.js";
+export { runVerifyRestore, defaultVerifyRestoreEnv, formatVerifyRestore } from "./verify.js";
+export type { VerifyRestoreReport, VerifyRestoreEnv } from "./verify.js";
 
 /** Print `commonwealth` usage to stderr. */
 function printUsage(): void {
@@ -46,6 +49,7 @@ function printUsage(): void {
       "  commonwealth config    <list | get <k> | set <k> <v>>   read/set the brain's shared config",
       "  commonwealth status                            review queue + sync-daemon state",
       "  commonwealth doctor    [--fix] [--json]        diagnose the install/sync chain; --fix restarts a dead daemon",
+      "  commonwealth verify-restore [--from-remote] [--json]   clone + prove full disaster recovery (CI gate)",
       "  commonwealth health                            freshness/trust rollup for the brain",
       "  commonwealth consolidate  [--dry-run]          supersede near-duplicate canon notes",
       "  commonwealth sync      <start | stop | once>   control/run the sync daemon",
@@ -122,6 +126,8 @@ export async function run(argv: string[]): Promise<number> {
     }
     case "doctor":
       return cmdDoctor(rest);
+    case "verify-restore":
+      return cmdVerifyRestore(rest);
     case "sync": {
       const sub = rest[0] === "once" ? "sync" : (rest[0] ?? "status");
       return delegateSync([sub, ...rest.slice(1)]);
@@ -159,6 +165,28 @@ async function cmdDoctor(rest: string[]): Promise<number> {
   const report = await diagnose(defaultDoctorEnv(process.cwd()), { fix });
   if (json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   else process.stderr.write(formatDoctorText(report));
+  return report.ok ? 0 : 1;
+}
+
+/**
+ * `commonwealth verify-restore [--from-remote] [--json]` — clone the brain into a throwaway temp
+ * dir and prove full disaster recovery (schema, unique ids, supersede chains, no secrets,
+ * byte-identical derived files), printing an RPO line. `--from-remote` clones the origin remote
+ * (the real off-site proof) rather than the local repo. Exit 0 when recovery is verified, 1
+ * otherwise — a green/red CI gate.
+ */
+async function cmdVerifyRestore(rest: string[]): Promise<number> {
+  const json = rest.includes("--json");
+  const fromRemote = rest.includes("--from-remote");
+  let report;
+  try {
+    report = await runVerifyRestore({ fromRemote }, defaultVerifyRestoreEnv(process.cwd()));
+  } catch (err) {
+    process.stderr.write(`${(err as Error).message}\n`);
+    return 1;
+  }
+  if (json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  else process.stderr.write(formatVerifyRestore(report));
   return report.ok ? 0 : 1;
 }
 

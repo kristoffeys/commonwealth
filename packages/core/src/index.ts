@@ -8,4 +8,5 @@ export * from "./index-db.js";
 export * from "./registry.js";
 export * from "./source.js";
 export * from "./health.js";
+export * from "./verify.js";
 export * from "./lock.js";
