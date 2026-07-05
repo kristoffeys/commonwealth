@@ -26,16 +26,16 @@ describe(".claude-plugin/plugin.json", () => {
     expect(manifest.hooks as string).toContain("hooks/hooks.json");
   });
 
-  it("the referenced .mcp.json declares the commonwealth stdio server", () => {
+  it("the referenced .mcp.json runs the published MCP server via npx (#62)", () => {
     const manifest = readJson(".claude-plugin/plugin.json") as { mcpServers: string };
     const mcp = readJson(manifest.mcpServers) as {
       mcpServers: Record<string, { command: string; args: string[] }>;
     };
     const server = mcp.mcpServers["commonwealth"];
     expect(server).toBeDefined();
-    expect(server.command).toBe("node");
-    expect(server.args.join(" ")).toContain("vendor/mcp/index.js");
-    expect(server.args.join(" ")).toContain("${CLAUDE_PLUGIN_ROOT}");
+    // npx fetches the published package on demand — no committed vendor/ to break GitHub installs.
+    expect(server.command).toBe("npx");
+    expect(server.args.join(" ")).toContain("@cmnwlth/mcp");
   });
 });
 

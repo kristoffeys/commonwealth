@@ -87,11 +87,13 @@ periodically to reconcile cross-user near-duplicates: it supersedes duplicates o
 survivor (supersede-not-delete — the files are kept), single-writer and safe to re-run. Preview
 with `--dry-run` (ADR-0017).
 
-## Current distribution caveat
+## Distribution
 
-Today the plugin runs from this local checkout (its runtime is bundled locally by
-`packages/plugin/scripts/bundle.mjs`, invoked by `pnpm build`/onboarding). Installing the plugin
-on a teammate's machine straight from GitHub without a local build is **not yet supported** — the
-vendored runtime isn't committed (it carries a platform-specific native binary). npm publishing
-and a zero-build install are on the roadmap (see issues #49 and #62). Until then, each teammate
-builds the CLI once as in the Quickstart.
+The `@cmnwlth/*` packages are published to npm (#49), so no build or committed runtime is needed:
+
+- **CLI:** `npm i -g @cmnwlth/cli` (or `npx @cmnwlth/cli init`).
+- **Plugin:** installing it from the marketplace works from a bare clone — its MCP server and hooks
+  run the published packages on demand via `npx` (`@cmnwlth/mcp`, `@cmnwlth/curate`), which pulls
+  `better-sqlite3`'s per-platform prebuilt binary transitively (#62). No platform-locked vendor.
+
+Building from source (the [Quickstart](./05-quickstart.md)) remains supported for development.
