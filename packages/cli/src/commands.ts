@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { FEATURE_FLAGS, loadBrainConfig, resolveBrainDir, setFeature } from "@commonwealth/core";
-import { gatherCandidates } from "@commonwealth/seed";
+import { FEATURE_FLAGS, loadBrainConfig, resolveBrainDir, setFeature } from "@cmnwlth/core";
+import { gatherCandidates } from "@cmnwlth/seed";
 import { findGitRepos } from "./discover.js";
 
 /**
@@ -15,7 +15,7 @@ import { findGitRepos } from "./discover.js";
 
 const require = createRequire(import.meta.url);
 
-/** Resolve a workspace package's built bin entry (e.g. `@commonwealth/curate`). */
+/** Resolve a workspace package's built bin entry (e.g. `@cmnwlth/curate`). */
 function resolvePkgBin(pkg: string): string {
   const pkgJsonPath = require.resolve(`${pkg}/package.json`);
   const pkgJson = require(`${pkg}/package.json`) as { bin?: string | Record<string, string> };
@@ -127,7 +127,7 @@ export async function cmdReseed(rest: string[]): Promise<number> {
     return 0;
   }
 
-  const curateBin = resolvePkgBin("@commonwealth/curate");
+  const curateBin = resolvePkgBin("@cmnwlth/curate");
   let total = 0;
   for (const repo of repos) {
     const { candidates } = await gatherCandidates(repo);
@@ -153,10 +153,10 @@ export async function cmdReseed(rest: string[]): Promise<number> {
 
 /** Delegate a verb to the registry-aware curate binary, inheriting the cwd + stdio. */
 export function delegateCurate(args: string[]): Promise<number> {
-  return runBin(resolvePkgBin("@commonwealth/curate"), args);
+  return runBin(resolvePkgBin("@cmnwlth/curate"), args);
 }
 
 /** Delegate a verb to the registry-aware sync binary, inheriting the cwd + stdio. */
 export function delegateSync(args: string[]): Promise<number> {
-  return runBin(resolvePkgBin("@commonwealth/sync"), args);
+  return runBin(resolvePkgBin("@cmnwlth/sync"), args);
 }

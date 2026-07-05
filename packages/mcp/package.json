@@ -1,5 +1,5 @@
 {
-  "name": "@commonwealth/mcp",
+  "name": "@cmnwlth/mcp",
   "version": "0.1.0",
   "description": "MCP server exposing a Commonwealth brain to Claude Code and other MCP clients",
   "license": "Apache-2.0",
@@ -17,8 +17,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@commonwealth/core": "workspace:*",
-    "@commonwealth/curate": "workspace:*",
+    "@cmnwlth/core": "workspace:*",
+    "@cmnwlth/curate": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^3.23.0"
   },

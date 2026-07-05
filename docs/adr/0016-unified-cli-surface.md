@@ -25,9 +25,9 @@ Surface:
 
 - `init` — onboarding (unchanged).
 - `reseed [<repo>...] [--all]` — mine repo(s) into the mapped brain and capture (source per repo,
-  ADR-0015). Composes `@commonwealth/seed` + a `curate capture` delegation.
+  ADR-0015). Composes `@cmnwlth/seed` + a `curate capture` delegation.
 - `config <list | get <k> | set <k> <v>>` — read/set the brain's shared config (feature flags:
-  `autoPromote`, `autoAdr`). Composes `@commonwealth/core` config directly.
+  `autoPromote`, `autoAdr`). Composes `@cmnwlth/core` config directly.
 - `status` — review queue + sync-daemon state.
 - `sync <start | stop | once>` — control/run the daemon.
 - `pending` / `promote <id…|--all>` / `reject <id…>` — the curation review queue.

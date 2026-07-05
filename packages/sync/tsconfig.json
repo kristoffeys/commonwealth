@@ -2,7 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "paths": {
-      "@commonwealth/core": ["../core/src/index.ts"]
+      "@cmnwlth/core": ["../core/src/index.ts"]
     }
   },
   "include": ["src"]

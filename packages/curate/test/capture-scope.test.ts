@@ -1,12 +1,12 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setFeature } from "@commonwealth/core";
+import { setFeature } from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureCandidates } from "../src/capture.js";
 import { isInScope, loadUserConfig, saveUserConfig } from "../src/scope.js";
 import { listStaged } from "../src/staging.js";
-import type { NewNoteInput } from "@commonwealth/core";
+import type { NewNoteInput } from "@cmnwlth/core";
 
 let brainDir: string;
 let configDir: string;

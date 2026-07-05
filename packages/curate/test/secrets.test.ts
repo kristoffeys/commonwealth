@@ -82,7 +82,7 @@ describe("curate secret gate (#16)", () => {
   });
 
   it("entropy detection is opt-in per brain (#46): off stages, on rejects, allowlist re-permits", async () => {
-    const { loadBrainConfig, saveBrainConfig } = await import("@commonwealth/core");
+    const { loadBrainConfig, saveBrainConfig } = await import("@cmnwlth/core");
     // Three distinct high-entropy tokens (no named pattern) so cross-phase dedup never masks the
     // secret-gate behavior we're testing — only the per-brain config differs between phases.
     const A = "Zx9Kq2Lm7Pw3Rt6Yv1Bn4Cd8Fg0Hj5Ka2Ls9Mq3";

@@ -5,9 +5,9 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as core from "@commonwealth/core";
-import type { NewNoteInput } from "@commonwealth/core";
-import { gatherCandidates } from "@commonwealth/seed";
+import * as core from "@cmnwlth/core";
+import type { NewNoteInput } from "@cmnwlth/core";
+import { gatherCandidates } from "@cmnwlth/seed";
 import { findRepoRoot, runInit, type InitDeps } from "./init.js";
 import type { OnboardDeps } from "./onboard.js";
 
@@ -21,7 +21,7 @@ export interface DefaultInitDepsOptions {
 
 /**
  * Resolve the `commonwealth-curate` CLI entry point: explicit override → `COMMONWEALTH_CURATE_BIN`
- * env → the `@commonwealth/curate` package's declared `bin`. Throws only if none resolve, and
+ * env → the `@cmnwlth/curate` package's declared `bin`. Throws only if none resolve, and
  * that throw is caught by {@link makeStage} (staging degrades to a no-op with a log line).
  */
 function resolveCurateEntry(override?: string): string {
@@ -30,12 +30,12 @@ function resolveCurateEntry(override?: string): string {
   if (fromEnv) return fromEnv;
 
   const require = createRequire(import.meta.url);
-  const pkgJsonPath = require.resolve("@commonwealth/curate/package.json");
-  const pkg = require("@commonwealth/curate/package.json") as {
+  const pkgJsonPath = require.resolve("@cmnwlth/curate/package.json");
+  const pkg = require("@cmnwlth/curate/package.json") as {
     bin?: string | Record<string, string>;
   };
   const rel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.["commonwealth-curate"];
-  if (!rel) throw new Error("@commonwealth/curate exposes no `commonwealth-curate` bin");
+  if (!rel) throw new Error("@cmnwlth/curate exposes no `commonwealth-curate` bin");
   return path.resolve(path.dirname(pkgJsonPath), rel);
 }
 
@@ -332,7 +332,7 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
    *   a) refresh the vendored plugin bundle (so the plugin's vendor/ is up to date);
    *   b) `claude plugin marketplace add <repoRoot>` — skipped if a `commonwealth` marketplace
    *      is already configured (checked via `marketplace list`);
-   *   c) `claude plugin install commonwealth@commonwealth` — skipped if already installed
+   *   c) `claude plugin install commonwealth@cmnwlth` — skipped if already installed
    *      (checked via `plugin list`);
    *   d) remove a STALE raw `commonwealth` MCP registration (`claude mcp remove -s local`) so
    *      it doesn't shadow the plugin's `commonwealth` server.
@@ -367,7 +367,7 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
 
     // (c) Install the plugin unless it is already installed.
     if (!hasClaudeEntry(["plugin", "list"], "commonwealth")) {
-      const install = spawnSync("claude", ["plugin", "install", "commonwealth@commonwealth"], {
+      const install = spawnSync("claude", ["plugin", "install", "commonwealth@cmnwlth"], {
         stdio: "inherit",
       });
       if (install.error || install.status !== 0) {

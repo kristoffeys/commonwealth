@@ -17,7 +17,7 @@ const distEntry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 let brainDir: string;
 
 beforeAll(async () => {
-  // Build core + curate so the dist entry (and its @commonwealth/core import) exist.
+  // Build core + curate so the dist entry (and its @cmnwlth/core import) exist.
   execFileSync("pnpm", ["-r", "build"], { cwd: repoRoot, stdio: "pipe" });
   brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-smoke-"));
 }, 120_000);

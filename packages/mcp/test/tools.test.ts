@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { initBrain, readNote, writeNote } from "@commonwealth/core";
+import { initBrain, readNote, writeNote } from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { listWorkState, readNoteTool, remember, searchNotes, whoIs } from "../src/tools.js";
 
@@ -104,7 +104,7 @@ describe("remember", () => {
   });
 
   it("stages for review instead of canon when autoPromote is off (#82)", async () => {
-    const { setFeature } = await import("@commonwealth/core");
+    const { setFeature } = await import("@cmnwlth/core");
     await setFeature(brainDir, "autoPromote", false);
     const result = await remember(brainDir, {
       kind: "memory",

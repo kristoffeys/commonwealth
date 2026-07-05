@@ -21,7 +21,7 @@ lives in the brain.
    - **Brain-level, shared, synced** — `<brain>/.commonwealth/config.json`: `name`, `remotes`,
      `curation`, and a typed `features: Record<string, boolean>` map. Because it's in the
      repo, feature settings apply to the whole team.
-2. **`@commonwealth/core` owns brain config**: `loadBrainConfig` (never throws; fills defaults),
+2. **`@cmnwlth/core` owns brain config**: `loadBrainConfig` (never throws; fills defaults),
    `saveBrainConfig`, `setFeature`, `isFeatureEnabled` (unknown/unset ⇒ `false`), and a
    `FEATURE_FLAGS` registry (name + description + default). Scaffold writes the `features`
    block with all flags defaulted **off**.

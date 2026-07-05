@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatContext } from "../src/context.js";
-import type { Note } from "@commonwealth/core";
+import type { Note } from "@cmnwlth/core";
 
 function memoryNote(id: string, title: string, body: string): Note {
   return {

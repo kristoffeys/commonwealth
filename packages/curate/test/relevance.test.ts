@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { writeNote } from "@commonwealth/core";
+import { writeNote } from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { selectRelevant } from "../src/relevance.js";
 

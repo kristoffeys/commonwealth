@@ -1,4 +1,4 @@
-import { acquireSyncLock, listNotes, supersedeNote, type Note } from "@commonwealth/core";
+import { acquireSyncLock, listNotes, supersedeNote, type Note } from "@cmnwlth/core";
 import { textSimilarity } from "./curate.js";
 
 /**

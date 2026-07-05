@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { makeNoteId, parseNote, serializeNote, writeNote, type Note } from "@commonwealth/core";
+import { makeNoteId, parseNote, serializeNote, writeNote, type Note } from "@cmnwlth/core";
 import { openRepo, scrubStagedSecrets } from "./git.js";
 
 /** One conflicting note, split into its two surviving sibling files. */

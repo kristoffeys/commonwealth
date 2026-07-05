@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { listNotes, search, writeNote } from "@commonwealth/core";
+import { listNotes, search, writeNote } from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SyncEngine } from "../src/engine";
 import { git, makeFixture, type Fixture } from "./helpers";

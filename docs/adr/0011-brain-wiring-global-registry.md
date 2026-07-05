@@ -32,7 +32,7 @@ added to the project tree.
    (where `<name>` is the basename of the brain directory) so a human can `ls`/`cd` their brains.
    Symlink creation degrades gracefully — a real file/dir at the path is left intact, and
    unsupported/permission cases (Windows/EPERM/EACCES/ENOSYS) are reported, never thrown.
-4. **`@commonwealth/core` owns the writes:** `addRegistryMapping` (idempotent add/update, dedupe
+4. **`@cmnwlth/core` owns the writes:** `addRegistryMapping` (idempotent add/update, dedupe
    by expanded prefix), `linkBrain` (idempotent, non-clobbering symlink), plus `defaultRegistryPath`
    and `defaultBrainsDir` helpers. The CLI's `registerBrain` onboarding step composes them.
 5. **No multi-brain-per-project yet.** One prefix maps to exactly one brain.

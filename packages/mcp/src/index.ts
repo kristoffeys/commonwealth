@@ -4,7 +4,7 @@ import { createServer } from "./server.js";
 
 /**
  * Commonwealth MCP server entry point. Resolves the brain (explicit `COMMONWEALTH_BRAIN_DIR`
- * → `@commonwealth/core`'s registry against cwd → `null`) once at startup, builds the server
+ * → `@cmnwlth/core`'s registry against cwd → `null`) once at startup, builds the server
  * against it, and wires a stdio transport. When no brain resolves the server still starts,
  * but its tools report "no brain configured" rather than silently using the cwd (#64). The
  * transport owns stdout for the JSON-RPC stream, so all diagnostics go to stderr.

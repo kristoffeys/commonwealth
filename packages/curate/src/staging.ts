@@ -1,5 +1,5 @@
 import path from "node:path";
-import { listNotes, writeNote, type NewNoteInput, type Note } from "@commonwealth/core";
+import { listNotes, writeNote, type NewNoteInput, type Note } from "@cmnwlth/core";
 
 /** Subtree of a brain that holds proposed (not-yet-approved) notes. */
 const STAGING_DIR = "staging";

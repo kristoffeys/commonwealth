@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { initBrain } from "@commonwealth/core";
+import { initBrain } from "@cmnwlth/core";
 
 /** Run a git command in `cwd`, returning trimmed stdout. */
 export function git(cwd: string, args: string[]): string {

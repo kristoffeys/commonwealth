@@ -1,4 +1,4 @@
-import { NOTE_KINDS, type Note } from "@commonwealth/core";
+import { NOTE_KINDS, type Note } from "@cmnwlth/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { listWorkState, readNoteTool, remember, searchNotes, whoIs } from "./tools.js";
@@ -39,7 +39,7 @@ function noBrainConfigured(): ToolError {
 
 /**
  * Build the Commonwealth MCP server with the five M1 tools wired to the pure handlers in
- * `tools.ts`. Every tool reads/writes the brain only through `@commonwealth/core`, keeping
+ * `tools.ts`. Every tool reads/writes the brain only through `@cmnwlth/core`, keeping
  * markdown the source of truth (ADR-0003).
  *
  * @param brainDir Absolute path to the brain repo, or `null` when {@link resolveBrainDir}

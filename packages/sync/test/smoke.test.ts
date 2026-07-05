@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { initBrain } from "@commonwealth/core";
+import { initBrain } from "@cmnwlth/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**

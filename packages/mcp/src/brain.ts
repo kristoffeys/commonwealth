@@ -1,4 +1,4 @@
-import { resolveBrainDir as resolveBrainDirFromRegistry } from "@commonwealth/core";
+import { resolveBrainDir as resolveBrainDirFromRegistry } from "@cmnwlth/core";
 
 /**
  * Resolve which brain directory the MCP server operates on, or `null` when none is
@@ -8,7 +8,7 @@ import { resolveBrainDir as resolveBrainDirFromRegistry } from "@commonwealth/co
  *  1. `COMMONWEALTH_BRAIN_DIR` — an explicit override still wins (the plugin/daemon may set
  *     it to pin a session's brain; see docs/03-distribution.md §3). We honor it here, up
  *     front, so it takes precedence over the registry mappings.
- *  2. `@commonwealth/core`'s registry resolver against the process cwd — so the MCP tools
+ *  2. `@cmnwlth/core`'s registry resolver against the process cwd — so the MCP tools
  *     (search/read/remember) hit the correct per-repo brain via the registry (marker →
  *     ancestor brain → user registry; see ADR-0011). This already resolves a directory that
  *     is *itself* a brain to itself, so the "cd'd into a brain" case is covered here.

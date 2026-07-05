@@ -41,16 +41,16 @@ importers:
 
   packages/cli:
     dependencies:
-      '@commonwealth/core':
+      '@cmnwlth/core':
         specifier: workspace:*
         version: link:../core
-      '@commonwealth/curate':
+      '@cmnwlth/curate':
         specifier: workspace:*
         version: link:../curate
-      '@commonwealth/seed':
+      '@cmnwlth/seed':
         specifier: workspace:*
         version: link:../seed
-      '@commonwealth/sync':
+      '@cmnwlth/sync':
         specifier: workspace:*
         version: link:../sync
 
@@ -78,16 +78,16 @@ importers:
 
   packages/curate:
     dependencies:
-      '@commonwealth/core':
+      '@cmnwlth/core':
         specifier: workspace:*
         version: link:../core
 
   packages/mcp:
     dependencies:
-      '@commonwealth/core':
+      '@cmnwlth/core':
         specifier: workspace:*
         version: link:../core
-      '@commonwealth/curate':
+      '@cmnwlth/curate':
         specifier: workspace:*
         version: link:../curate
       '@modelcontextprotocol/sdk':
@@ -101,13 +101,13 @@ importers:
 
   packages/seed:
     dependencies:
-      '@commonwealth/core':
+      '@cmnwlth/core':
         specifier: workspace:*
         version: link:../core
 
   packages/sync:
     dependencies:
-      '@commonwealth/core':
+      '@cmnwlth/core':
         specifier: workspace:*
         version: link:../core
       chokidar:

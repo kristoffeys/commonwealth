@@ -24,7 +24,7 @@ Code ecosystem, and lets a small team move fast.
   (schema validation), `better-sqlite3` (derived index + FTS5), `nanoid` (short ids),
   `github-slugger` (slugs), `simple-git` (git ops in the daemon).
 
-Initial packages: `@commonwealth/core` (schema, note IO, scaffold, index). MCP server, CLI,
+Initial packages: `@cmnwlth/core` (schema, note IO, scaffold, index). MCP server, CLI,
 daemon, and plugin are added as separate packages in later milestones.
 
 ## Consequences

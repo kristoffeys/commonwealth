@@ -39,7 +39,7 @@ AI reads before acting and writes back to. Open source (Apache-2.0). Read `READM
 - Vitest (test), ESLint + Prettier, tsup (build).
 - `packages/core` — schema, note IO, scaffold, derived index. (More packages — MCP
   server, CLI, daemon, plugin — arrive in later milestones.)
-- `@commonwealth/core` public surface is `packages/core/src/index.ts`. `schema.ts` and
+- `@cmnwlth/core` public surface is `packages/core/src/index.ts`. `schema.ts` and
   `ids.ts` are the stable contract other modules build on.
 
 ## Commands

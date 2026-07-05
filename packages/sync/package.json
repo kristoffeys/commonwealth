@@ -1,5 +1,5 @@
 {
-  "name": "@commonwealth/sync",
+  "name": "@cmnwlth/sync",
   "version": "0.1.0",
   "description": "Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings",
   "license": "Apache-2.0",
@@ -17,7 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@commonwealth/core": "workspace:*",
+    "@cmnwlth/core": "workspace:*",
     "chokidar": "^4.0.0",
     "simple-git": "^3.27.0"
   },

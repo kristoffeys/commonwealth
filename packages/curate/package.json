@@ -1,5 +1,5 @@
 {
-  "name": "@commonwealth/curate",
+  "name": "@cmnwlth/curate",
   "version": "0.1.0",
   "description": "Capture, curation engine (dedupe/relevance), in-repo review queue, and relevance selection",
   "license": "Apache-2.0",
@@ -24,7 +24,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@commonwealth/core": "workspace:*"
+    "@cmnwlth/core": "workspace:*"
   },
   "publishConfig": {
     "access": "public",

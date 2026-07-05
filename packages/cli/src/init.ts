@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { NewNoteInput } from "@commonwealth/core";
+import type { NewNoteInput } from "@cmnwlth/core";
 
 /** Per-source counts of what seeding mined from the repo. */
 export interface InitBySource {
@@ -28,7 +28,7 @@ export interface InitOptions {
  * touching the filesystem, spawning `commonwealth-curate`, or prompting a human.
  */
 export interface InitDeps {
-  /** Mine cold-start candidates from the repo (usually `@commonwealth/seed`'s `gatherCandidates`). */
+  /** Mine cold-start candidates from the repo (usually `@cmnwlth/seed`'s `gatherCandidates`). */
   gather(repoDir: string): Promise<{ candidates: NewNoteInput[]; bySource: InitBySource }>;
   /** Resolve the brain this project already belongs to, or `null` if none. */
   resolveBrain(cwd: string): Promise<string | null>;

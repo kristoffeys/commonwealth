@@ -28,15 +28,15 @@ Commonwealth is that layer, made multiplayer:
 ## How it fits together
 
 ```
-Claude Code ──MCP──▶ @commonwealth/mcp ──▶ @commonwealth/core ──▶  brain/  (markdown, git repo)
+Claude Code ──MCP──▶ @cmnwlth/mcp ──▶ @cmnwlth/core ──▶  brain/  (markdown, git repo)
                                           ▲                  │
- @commonwealth/sync (resident daemon) ─────────┘   pull/commit/push ↕  remote (any git host)
+ @cmnwlth/sync (resident daemon) ─────────┘   pull/commit/push ↕  remote (any git host)
    watches the brain, syncs continuously, serializes writes, resolves conflicts as siblings
 ```
 
 ## Install as a Claude Code plugin
 
-The **supported install is the plugin** (ADR-0012). The `@commonwealth/plugin` bundles the MCP
+The **supported install is the plugin** (ADR-0012). The `@cmnwlth/plugin` bundles the MCP
 server + lifecycle hooks and installs at **user scope (global)**, so the `commonwealth`
 tools (`search`/`read`/`remember`/…) and the auto-bridge are available in **every** session —
 not just the directory you installed from. A session auto-loads relevant brain context at start
@@ -47,7 +47,7 @@ Add this repo as a marketplace, then install the plugin:
 
 ```bash
 claude plugin marketplace add kristoffeys/commonwealth   # or a path/fork/mirror of this repo
-claude plugin install commonwealth@commonwealth
+claude plugin install commonwealth@cmnwlth
 ```
 
 > **Then restart Claude Code and run `/mcp`.** Plugins only (re)load at session start, so a
@@ -57,7 +57,7 @@ claude plugin install commonwealth@commonwealth
 
 **Per-repo routing is dynamic.** There is no baked-in brain: the SessionStart hook resolves the
 real session cwd → its brain via the registry (ADR-0011), and the MCP server independently
-resolves its brain via `@commonwealth/core.resolveBrainDir` — so one global install serves every
+resolves its brain via `@cmnwlth/core.resolveBrainDir` — so one global install serves every
 repo and each session talks to the right brain. `commonwealth init` performs this install for you
 (and wires the registry mapping); it replaced the old raw local-scope `claude mcp add`, which was
 invisible outside its install dir and pinned one brain.
@@ -73,8 +73,8 @@ The steps below wire the same pieces manually (à la carte).
 Once published to npm (#49), install the CLI directly:
 
 ```bash
-npm i -g @commonwealth/cli      # then: commonwealth init
-# or run without installing:    npx @commonwealth/cli init
+npm i -g @cmnwlth/cli      # then: commonwealth init
+# or run without installing:    npx @cmnwlth/cli init
 ```
 
 Until the first release, build from source:
@@ -202,7 +202,7 @@ git remote add origin git@github.com:you/my-brain.git
 
 ```bash
 claude plugin marketplace add kristoffeys/commonwealth
-claude plugin install commonwealth@commonwealth
+claude plugin install commonwealth@cmnwlth
 ```
 
 The server resolves its brain per repo via the registry (ADR-0011); to pin one brain for a
@@ -330,13 +330,13 @@ scope filter). When off, decision candidates are dropped.
 
 | Package           | Status | What it is                                                                                                  |
 | ----------------- | ------ | ----------------------------------------------------------------------------------------------------------- |
-| `@commonwealth/core`   | ✅     | Schema (4 note kinds), atomic note IO, brain scaffold, FTS5 index + derived `COMMONWEALTH.md`/`INDEX.md`         |
-| `@commonwealth/mcp`    | ✅     | MCP server exposing a brain to Claude Code (`commonwealth-mcp`)                                                  |
-| `@commonwealth/sync`   | ✅     | Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings (`commonwealth-sync`)     |
-| `@commonwealth/curate` | ✅     | Curation (dedupe/relevance) + in-repo review queue + per-user scope filter; drives the plugin's capture/inject hooks |
-| `@commonwealth/plugin` | ✅     | Claude Code plugin: MCP + scope-gated SessionStart/SessionEnd hooks + /commonwealth commands + auto-provisioning |
-| `@commonwealth/seed`   | ✅     | Cold-start seeding: git-history miner + agent-config importer → candidate notes (`commonwealth-seed`)            |
-| `@commonwealth/cli`    | ✅     | The unified `commonwealth` CLI — `init` onboarding wizard (detect → preview → confirm → seed, + join mode)       |
+| `@cmnwlth/core`   | ✅     | Schema (4 note kinds), atomic note IO, brain scaffold, FTS5 index + derived `COMMONWEALTH.md`/`INDEX.md`         |
+| `@cmnwlth/mcp`    | ✅     | MCP server exposing a brain to Claude Code (`commonwealth-mcp`)                                                  |
+| `@cmnwlth/sync`   | ✅     | Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings (`commonwealth-sync`)     |
+| `@cmnwlth/curate` | ✅     | Curation (dedupe/relevance) + in-repo review queue + per-user scope filter; drives the plugin's capture/inject hooks |
+| `@cmnwlth/plugin` | ✅     | Claude Code plugin: MCP + scope-gated SessionStart/SessionEnd hooks + /commonwealth commands + auto-provisioning |
+| `@cmnwlth/seed`   | ✅     | Cold-start seeding: git-history miner + agent-config importer → candidate notes (`commonwealth-seed`)            |
+| `@cmnwlth/cli`    | ✅     | The unified `commonwealth` CLI — `init` onboarding wizard (detect → preview → confirm → seed, + join mode)       |
 
 ## Development
 

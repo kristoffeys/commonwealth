@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { pathForNote, resolveWithinBrain, type Note } from "@commonwealth/core";
+import { pathForNote, resolveWithinBrain, type Note } from "@cmnwlth/core";
 import { listStaged, stagedAbsPath } from "./staging.js";
 
 /** All notes currently awaiting review in the staging queue. */
