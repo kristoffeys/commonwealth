@@ -175,6 +175,7 @@ commonwealth config set autoPromote false # e.g. require manual review before ca
 commonwealth status                       # review queue + sync-daemon state
 commonwealth doctor [--fix] [--json]      # diagnose the install/sync chain; --fix restarts a dead daemon
 commonwealth verify-restore [--from-remote]  # clone + prove full disaster recovery (CI gate)
+commonwealth emit [--commit]              # write brain context for Cursor/Copilot/Codex into this repo
 commonwealth sync start|stop|once         # control/run the sync daemon
 commonwealth pending                      # notes awaiting review
 commonwealth promote <id...> | --all      # approve staged notes into canon

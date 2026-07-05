@@ -4,6 +4,7 @@ import { parseArgs } from "node:util";
 import { cmdConfig, cmdReseed, delegateCurate, delegateSync } from "./commands.js";
 import { defaultOnboardDeps } from "./deps.js";
 import { defaultDoctorEnv, diagnose, formatDoctorText } from "./doctor.js";
+import { defaultEmitEnv, formatEmitResult, runEmit } from "./emit.js";
 import { defaultVerifyRestoreEnv, formatVerifyRestore, runVerifyRestore } from "./verify.js";
 import { defaultBrainDir } from "./init.js";
 import { runOnboard, runWizard, type OnboardOptions, type WizardDefaults } from "./onboard.js";
@@ -36,6 +37,8 @@ export { diagnose, defaultDoctorEnv, formatDoctorText } from "./doctor.js";
 export type { DoctorReport, DoctorCheck, DoctorEnv, CheckStatus } from "./doctor.js";
 export { runVerifyRestore, defaultVerifyRestoreEnv, formatVerifyRestore } from "./verify.js";
 export type { VerifyRestoreReport, VerifyRestoreEnv } from "./verify.js";
+export { runEmit, defaultEmitEnv, formatEmitResult, upsertSentinelBlock } from "./emit.js";
+export type { EmitResult, EmitEnv } from "./emit.js";
 
 /** Print `commonwealth` usage to stderr. */
 function printUsage(): void {
@@ -50,6 +53,7 @@ function printUsage(): void {
       "  commonwealth status                            review queue + sync-daemon state",
       "  commonwealth doctor    [--fix] [--json]        diagnose the install/sync chain; --fix restarts a dead daemon",
       "  commonwealth verify-restore [--from-remote] [--json]   clone + prove full disaster recovery (CI gate)",
+      "  commonwealth emit      [--commit]              write brain context for Cursor/Copilot/Codex into this repo",
       "  commonwealth health                            freshness/trust rollup for the brain",
       "  commonwealth consolidate  [--dry-run]          supersede near-duplicate canon notes",
       "  commonwealth sync      <start | stop | once>   control/run the sync daemon",
@@ -128,6 +132,8 @@ export async function run(argv: string[]): Promise<number> {
       return cmdDoctor(rest);
     case "verify-restore":
       return cmdVerifyRestore(rest);
+    case "emit":
+      return cmdEmit(rest);
     case "sync": {
       const sub = rest[0] === "once" ? "sync" : (rest[0] ?? "status");
       return delegateSync([sub, ...rest.slice(1)]);
@@ -188,6 +194,25 @@ async function cmdVerifyRestore(rest: string[]): Promise<number> {
   if (json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   else process.stderr.write(formatVerifyRestore(report));
   return report.ok ? 0 : 1;
+}
+
+/**
+ * `commonwealth emit [--commit]` — write the current project's team-brain slice into the derived
+ * context files Cursor/Copilot/Codex read (`.cursor/rules/commonwealth.mdc`, `.github/instructions/
+ * commonwealth.instructions.md`, and an `AGENTS.md` sentinel block). Wholly-owned files are
+ * gitignored by default; `--commit` tracks them.
+ */
+async function cmdEmit(rest: string[]): Promise<number> {
+  const commit = rest.includes("--commit");
+  let result;
+  try {
+    result = await runEmit({ commit }, defaultEmitEnv(process.cwd()));
+  } catch (err) {
+    process.stderr.write(`${(err as Error).message}\n`);
+    return 1;
+  }
+  process.stderr.write(formatEmitResult(result));
+  return 0;
 }
 
 /** `commonwealth init` — the onboarding orchestrator (build → create/seed/join → plugin → daemon). */
