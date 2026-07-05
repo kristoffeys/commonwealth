@@ -196,3 +196,68 @@ describe("project provenance (ADR-0015)", () => {
     expect(idx).toContain("WS one");
   });
 });
+
+describe("canon-aware ranking (#133)", () => {
+  it("excludes superseded notes from search by default, includes them on request", async () => {
+    await writeNote(dir, {
+      kind: "decision",
+      title: "Auth v1 zorptoken",
+      body: "old auth scheme uses zorptoken bearer tokens",
+      fields: { status: "superseded", superseded_by: "auth-v2", deciders: [] },
+    });
+    await writeNote(dir, {
+      kind: "decision",
+      title: "Auth v2 zorptoken",
+      body: "new auth scheme uses zorptoken with pkce",
+      fields: { status: "accepted", deciders: [] },
+    });
+    await buildIndex(dir);
+
+    // Default: only canon (the superseded v1 is archaeology, dropped).
+    expect((await search(dir, "zorptoken")).map((r) => r.title)).toEqual(["Auth v2 zorptoken"]);
+    // Opt-in: history view returns both.
+    expect(
+      (await search(dir, "zorptoken", { includeSuperseded: true })).map((r) => r.title).sort(),
+    ).toEqual(["Auth v1 zorptoken", "Auth v2 zorptoken"]);
+  });
+
+  it("demotes stale notes below fresh ones", async () => {
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Cache stale quuxword",
+      body: "quuxword cache detail, no longer checked",
+      fields: { status: "stale" },
+    });
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Cache fresh quuxword",
+      body: "quuxword cache detail, current",
+      fields: { status: "active" },
+    });
+    await buildIndex(dir);
+
+    const hits = await search(dir, "quuxword");
+    expect(hits[0]!.title).toBe("Cache fresh quuxword");
+    expect(hits[hits.length - 1]!.title).toBe("Cache stale quuxword");
+  });
+
+  it("omits superseded decisions from the COMMONWEALTH.md router", async () => {
+    await writeNote(dir, {
+      kind: "decision",
+      title: "Old rollout plan",
+      body: "a decision that was superseded",
+      fields: { status: "superseded", superseded_by: "new-rollout", deciders: [] },
+    });
+    await writeNote(dir, {
+      kind: "decision",
+      title: "Current rollout plan",
+      body: "the accepted decision",
+      fields: { status: "accepted", deciders: [] },
+    });
+    await regenerateDerived(dir);
+
+    const md = await fs.readFile(path.join(dir, "COMMONWEALTH.md"), "utf8");
+    expect(md).toContain("Current rollout plan");
+    expect(md).not.toContain("Old rollout plan");
+  });
+});

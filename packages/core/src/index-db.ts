@@ -10,6 +10,11 @@ export interface SearchOptions {
   source?: string;
   /** Max results (default 20). */
   limit?: number;
+  /**
+   * Include superseded notes (archaeology). Default false: retrieval returns CANON, not the old
+   * versions the consolidation/supersede path replaced (#133). Set true for history/audit views.
+   */
+  includeSuperseded?: boolean;
 }
 
 export interface SearchResult {
@@ -43,17 +48,36 @@ interface IndexRow {
   body: string;
   path: string;
   source: string;
+  /** Lifecycle status (`active`/`superseded`/`stale`/…), or "" for kinds without one. */
+  status: string;
+  /** 1 when this note has been superseded (its own `status`/`superseded_by`), else 0 (#133). */
+  superseded: number;
+}
+
+/** True when a note is itself superseded — the read side of the create/supersede contract (#133). */
+function isSuperseded(note: Note): boolean {
+  const fm = note.frontmatter;
+  if (fm.kind === "memory" || fm.kind === "decision") {
+    if (typeof fm.superseded_by === "string" && fm.superseded_by.length > 0) return true;
+  }
+  return "status" in fm && fm.status === "superseded";
 }
 
 function toRow(note: Note): IndexRow {
+  const fm = note.frontmatter;
+  // `.passthrough()` (#81) widens known fields to `unknown` via its index signature, so guard the
+  // status read with a typeof check (person notes have no status → "").
+  const statusVal = (fm as { status?: unknown }).status;
   return {
-    id: note.frontmatter.id,
-    kind: note.frontmatter.kind,
-    title: note.frontmatter.title,
-    tags: note.frontmatter.tags.join(" "),
+    id: fm.id,
+    kind: fm.kind,
+    title: fm.title,
+    tags: fm.tags.join(" "),
     body: note.body,
     path: note.path,
-    source: note.frontmatter.source ?? "",
+    source: fm.source ?? "",
+    status: typeof statusVal === "string" ? statusVal : "",
+    superseded: isSuperseded(note) ? 1 : 0,
   };
 }
 
@@ -83,12 +107,13 @@ export async function buildIndex(brainDir: string): Promise<{ indexed: number }>
       // `path` is UNINDEXED: stored/returned but not part of the full-text match.
       db.exec(
         "CREATE VIRTUAL TABLE notes_fts USING fts5(" +
-          "id, kind, title, tags, body, path UNINDEXED, source UNINDEXED" +
+          "id, kind, title, tags, body, path UNINDEXED, source UNINDEXED, " +
+          "status UNINDEXED, superseded UNINDEXED" +
           ");",
       );
       const insert = db.prepare(
-        "INSERT INTO notes_fts (id, kind, title, tags, body, path, source) " +
-          "VALUES (@id, @kind, @title, @tags, @body, @path, @source);",
+        "INSERT INTO notes_fts (id, kind, title, tags, body, path, source, status, superseded) " +
+          "VALUES (@id, @kind, @title, @tags, @body, @path, @source, @status, @superseded);",
       );
       for (const row of rows) insert.run(row);
     });
@@ -177,7 +202,13 @@ export async function search(
       sql += " AND source = ?";
       params.push(opts.source);
     }
-    sql += " ORDER BY bm25(notes_fts) LIMIT ?";
+    // Canon, not archaeology (#133): drop superseded notes unless explicitly asked for. Because a
+    // note is superseded iff its OWN status/superseded_by says so, filtering per-note collapses a
+    // whole supersede chain to its head (every non-head link is itself superseded) — cycle-safe,
+    // no graph walk needed.
+    if (!opts?.includeSuperseded) sql += " AND superseded = 0";
+    // Demote stale notes below fresh ones; relevance (bm25) orders within each tier.
+    sql += " ORDER BY (status = 'stale'), bm25(notes_fts) LIMIT ?";
     params.push(limit);
 
     const rows = db.prepare(sql).all(...params) as Array<{
@@ -281,7 +312,10 @@ function commonwealthMarkdown(notes: Note[]): string {
   for (const source of sources) {
     const group = bySource.get(source)!;
     const active = group.filter(isActiveWorkState).sort(byId);
-    const decisions = group.filter((n) => n.frontmatter.kind === "decision").sort(byCreatedDesc);
+    // Superseded decisions are archaeology — never inject them into every session's router (#133).
+    const decisions = group
+      .filter((n) => n.frontmatter.kind === "decision" && !isSuperseded(n))
+      .sort(byCreatedDesc);
     lines.push(`## ${inlineText(source)}`);
     lines.push("");
     lines.push("**Active work-state**");
