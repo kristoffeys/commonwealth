@@ -56,6 +56,27 @@ The brain's `.commonwealth/config.json` is committed, so these apply to everyone
 Toggle feature flags with `commonwealth config` / `commonwealth-curate feature enable <name>`;
 edit `secretScan` directly in the committed config file.
 
+## Mixed-tool teams — `commonwealth emit`
+
+Not everyone is on Claude Code. `commonwealth emit` writes the current project's team-brain slice
+into the generated context files Cursor, Copilot, and Codex already honor — so those teammates read
+the brain with **zero runtime integration** (no MCP server, no plugin):
+
+```bash
+commonwealth emit            # regenerate the context files for this repo
+commonwealth emit --commit   # track them in git instead of gitignoring
+```
+
+It writes two wholly-owned files — `.cursor/rules/commonwealth.mdc` and
+`.github/instructions/commonwealth.instructions.md` — plus a sentinel-fenced block in `AGENTS.md`
+(your own content around the block is preserved). Every file is marked "generated — do not edit";
+regenerate with `emit`, never hand-edit (ADR-0003, pointed outward).
+
+By default the wholly-owned files are **gitignored** — they're per-machine derived output and would
+otherwise churn in teammates' diffs. Pass `--commit` to track them (e.g. to hand the context to
+teammates who won't run `emit` themselves). The rendered slice is deterministic and token-budgeted,
+and contains only canon (superseded notes are excluded).
+
 ## Scope — control what gets captured (per user)
 
 Capture is gated by your per-user scope so personal or out-of-bounds projects never feed the
