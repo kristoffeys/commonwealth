@@ -50,6 +50,13 @@ export interface ResolvedBrain {
 /** Shape of the user registry JSON file (`~/.commonwealth/registry.json`). */
 export interface Registry {
   mappings: RegistryMapping[];
+  /**
+   * The org-brain for this user: the shared brain that cross-brain knowledge graduates *up* to
+   * (ADR-0023, #167). A deliberately *local per-machine* pointer — locating the org-brain must not
+   * require scanning every wired brain's config. Optional: absent until designated via
+   * {@link setOrgBrain} (`commonwealth org-brain set`).
+   */
+  orgBrain?: ResolvedBrain;
 }
 
 /** Options for {@link resolveBrainDir}; all optional (env + registry path overrides). */
@@ -167,7 +174,22 @@ async function readRegistryFile(registryPath: string): Promise<RegistryLoad> {
       clean.push(entry);
     }
   }
-  return { status: "ok", registry: { mappings: clean } };
+  const registry: Registry = { mappings: clean };
+  // Parse the org-brain pointer with the same discipline: keep it only when `brain` is a
+  // non-empty string; a malformed pointer is dropped (treated as "not designated") rather than
+  // throwing, so a partial edit can never make resolution crash.
+  const rawOrg = (obj as Registry).orgBrain;
+  if (
+    rawOrg &&
+    typeof rawOrg === "object" &&
+    typeof rawOrg.brain === "string" &&
+    rawOrg.brain.length > 0
+  ) {
+    const org: ResolvedBrain = { brain: rawOrg.brain };
+    if (typeof rawOrg.remote === "string" && rawOrg.remote.length > 0) org.remote = rawOrg.remote;
+    registry.orgBrain = org;
+  }
+  return { status: "ok", registry };
 }
 
 /**
@@ -363,6 +385,90 @@ export async function addRegistryMapping(
   await fs.writeFile(tmp, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
   await fs.rename(tmp, registryPath);
   return { added, updated };
+}
+
+/**
+ * Load, guard-against-corrupt, mutate, and atomically persist the registry. Centralizes the
+ * "never silently overwrite a corrupt registry" discipline (#78) shared by every writer: a
+ * present-but-unparseable file is backed up to `registry.json.corrupt-<ts>` and a clear error is
+ * thrown; a missing file starts from an empty registry. The `mutate` callback edits the registry
+ * in place. Writes pretty JSON via tmp-file + rename so a crash mid-write leaves the prior file
+ * intact.
+ */
+async function persistRegistry(
+  registryPath: string,
+  mutate: (registry: Registry) => void,
+): Promise<void> {
+  const load = await readRegistryFile(registryPath);
+  if (load.status === "corrupt") {
+    const backup = `${registryPath}.corrupt-${Date.now()}`;
+    await fs.rename(registryPath, backup).catch(() => fs.writeFile(backup, load.raw, "utf8"));
+    throw new Error(
+      `Refusing to overwrite a corrupt registry at ${registryPath} (backed up to ${backup}). ` +
+        `Fix or remove it, then retry.`,
+    );
+  }
+  const registry: Registry = load.status === "ok" ? load.registry : { mappings: [] };
+  mutate(registry);
+  await fs.mkdir(path.dirname(registryPath), { recursive: true });
+  const tmp = `${registryPath}.${process.pid}.tmp`;
+  await fs.writeFile(tmp, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
+  await fs.rename(tmp, registryPath);
+}
+
+/**
+ * List every wired project-brain directory (expanded, absolute), de-duplicated by absolute path so
+ * two checkouts of the same repo count once. Fills the "list *all* brains" gap — resolution only
+ * ever answered "which brain for *this* dir" before (#167). The org-brain (when designated) is
+ * excluded: it is the graduation *target*, not a project brain to scan. Returns `[]` on a missing
+ * or corrupt registry — never throws (a bad file simply lists no brains).
+ */
+export async function listWiredBrainDirs(opts: { registryPath?: string } = {}): Promise<string[]> {
+  const registry = await loadRegistry(resolveRegistryPath(opts.registryPath));
+  if (!registry) return [];
+  const orgDir = registry.orgBrain ? expand(registry.orgBrain.brain) : null;
+  const seen = new Set<string>();
+  const dirs: string[] = [];
+  for (const mapping of registry.mappings) {
+    const dir = expand(mapping.brain);
+    if (dir === orgDir || seen.has(dir)) continue;
+    seen.add(dir);
+    dirs.push(dir);
+  }
+  return dirs;
+}
+
+/**
+ * Read the designated org-brain (ADR-0023), with its `brain` path expanded to absolute and any
+ * clone-on-demand `remote` carried through (ADR-0019). `null` when none is designated, or on a
+ * missing/corrupt registry. Never throws.
+ */
+export async function getOrgBrain(
+  opts: { registryPath?: string } = {},
+): Promise<ResolvedBrain | null> {
+  const registry = await loadRegistry(resolveRegistryPath(opts.registryPath));
+  if (!registry?.orgBrain) return null;
+  const org: ResolvedBrain = { brain: expand(registry.orgBrain.brain) };
+  if (registry.orgBrain.remote) org.remote = registry.orgBrain.remote;
+  return org;
+}
+
+/**
+ * Designate `brain` as this user's org-brain (ADR-0023, #167). `brain` is `~`-expanded and resolved
+ * to an absolute path; an optional `remote` records where to clone it from on demand (ADR-0019).
+ * Idempotent overwrite of any prior pointer. Same safety as {@link addRegistryMapping}: refuses to
+ * clobber a corrupt registry, persists atomically. Preserves existing `mappings`.
+ */
+export async function setOrgBrain(
+  brain: string,
+  opts: { remote?: string; registryPath?: string } = {},
+): Promise<void> {
+  const registryPath = opts.registryPath ?? defaultRegistryPath();
+  const org: ResolvedBrain = { brain: expand(brain) };
+  if (opts.remote) org.remote = opts.remote;
+  await persistRegistry(registryPath, (registry) => {
+    registry.orgBrain = org;
+  });
 }
 
 /**

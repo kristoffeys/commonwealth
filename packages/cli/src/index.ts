@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { defaultAddDeps, runAdd } from "./add.js";
+import { cmdOrgBrain } from "./org-brain.js";
 import {
   cliVersion,
   defaultUpdateDeps,
@@ -57,6 +58,8 @@ export { runAsk, defaultAskEnv, formatAsk } from "./ask.js";
 export type { AskEnv } from "./ask.js";
 export { runAdd, defaultAddDeps } from "./add.js";
 export type { AddOptions, AddDeps } from "./add.js";
+export { runOrgBrain, defaultOrgBrainDeps, parseOrgBrainArgs, cmdOrgBrain } from "./org-brain.js";
+export type { OrgBrainOptions, OrgBrainDeps } from "./org-brain.js";
 export {
   cliVersion,
   isNewer,
@@ -83,6 +86,7 @@ function printUsage(): void {
       "  commonwealth add       [<folder>...] [--brain <dir>] [--remote <url>]",
       "                                                 wire folder(s) to an existing brain (allowlist +",
       "                                                 registry mapping + brains/ symlink) in one go",
+      "  commonwealth org-brain <set <dir> [--remote <url>] | show>   designate/show the org-brain (graduation target)",
       "  commonwealth reseed    [<repo>...] [--all]     mine repo(s) into the mapped brain and capture",
       "  commonwealth config    <list | get <k> | set <k> <v>>   read/set the brain's shared config",
       "  commonwealth status                            review queue + sync-daemon state",
@@ -167,6 +171,8 @@ export async function run(argv: string[]): Promise<number> {
       return cmdInit(rest);
     case "add":
       return cmdAdd(rest);
+    case "org-brain":
+      return cmdOrgBrain(rest);
     case "update":
       return runUpdate(defaultUpdateDeps());
     case "reseed":
