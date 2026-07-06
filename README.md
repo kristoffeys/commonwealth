@@ -342,11 +342,24 @@ commonwealth config set autoAdr true      # opt in per team (syncs with the brai
 ADR-style `decision` notes in the brain (they still pass the review queue and respect the
 scope filter). When off, decision candidates are dropped.
 
+`semanticDedup` (default **off**, ADR-0021): when on, the curation gate also catches
+near-duplicate notes phrased differently ("auth uses JWT" vs "we authenticate with bearer
+tokens") using embeddings, alongside the lexical check — with it off, behavior is unchanged and
+no embedder is loaded. Vectors live in the disposable index, never synced. The provider is
+`local` by default (on-machine; no note text leaves the box) and needs the optional model
+package installed on the host — enabling `local` without it prints how to add it; set
+`embeddings.provider` to `hosted` (an opt-in API that receives your note text) or `none` in
+`.commonwealth/config.json`. Contradiction detection is a separate follow-up.
+
+```bash
+commonwealth config set semanticDedup true   # opt in per team (syncs with the brain)
+```
+
 ## Packages
 
 | Package           | Status | What it is                                                                                                  |
 | ----------------- | ------ | ----------------------------------------------------------------------------------------------------------- |
-| `@cmnwlth/core`   | ✅     | Schema (4 note kinds), atomic note IO, brain scaffold, FTS5 index + derived `COMMONWEALTH.md`/`INDEX.md`         |
+| `@cmnwlth/core`   | ✅     | Schema (4 note kinds), atomic note IO, brain scaffold, FTS5 index (+ opt-in embeddings vectors) + derived `COMMONWEALTH.md`/`INDEX.md` |
 | `@cmnwlth/mcp`    | ✅     | MCP server exposing a brain to Claude Code (`commonwealth-mcp`)                                                  |
 | `@cmnwlth/sync`   | ✅     | Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings (`commonwealth-sync`)     |
 | `@cmnwlth/curate` | ✅     | Curation (dedupe/relevance) + in-repo review queue + per-user scope filter; drives the plugin's capture/inject hooks |

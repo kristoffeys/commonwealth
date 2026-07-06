@@ -1,9 +1,12 @@
 import {
+  cosineSimilarity,
+  embedProvider,
   hasSecrets,
-  isFeatureEnabled,
   listNotes,
   loadBrainConfig,
+  loadVectors,
   scanOptions,
+  type Embedder,
   type NewNoteInput,
   type Note,
 } from "@cmnwlth/core";
@@ -129,15 +132,69 @@ export interface CurateResult {
 }
 
 /**
+ * A semantic near-duplicate found for a candidate: the canon note it matched and the cosine
+ * score, or `undefined` when no canon vector reaches the threshold.
+ */
+interface SemanticHit {
+  id: string;
+  score: number;
+}
+
+/**
+ * Find the nearest canon note to `candidate` by cosine over stored embeddings, treating a score
+ * ≥ `threshold` as a near-duplicate (ADR-0021). Embedding the candidate is best-effort: a model
+ * failure logs and returns `undefined` (fall back to lexical), never aborts curation.
+ */
+async function semanticDuplicate(
+  candidate: NewNoteInput,
+  embedder: Embedder,
+  canonVectors: Map<string, Float32Array>,
+  threshold: number,
+): Promise<SemanticHit | undefined> {
+  let vec: Float32Array | undefined;
+  try {
+    [vec] = await embedder.embed([candidateText(candidate)]);
+  } catch (err) {
+    console.error(
+      `[commonwealth-curate] semantic dedup skipped for a candidate (embed failed): ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+    return undefined;
+  }
+  if (!vec) return undefined;
+
+  let bestId: string | undefined;
+  let bestScore = 0;
+  for (const [id, cvec] of canonVectors) {
+    const score = cosineSimilarity(vec, cvec);
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = id;
+    }
+  }
+  return bestScore >= threshold && bestId !== undefined
+    ? { id: bestId, score: bestScore }
+    : undefined;
+}
+
+/**
  * Run candidates through the curator and stage the accepted ones (ADR-0007). The existing
  * set is seeded from canon (`listNotes`) plus already-staged notes, and each accepted
  * candidate is folded back into it as we go — so within-batch near-duplicates are also
  * caught (only the first of a set is staged).
+ *
+ * When the `semanticDedup` flag is on (ADR-0021), an embeddings check runs *alongside* the
+ * lexical gate: a candidate whose embedding is a near-duplicate (cosine ≥ threshold) of an
+ * existing CANON note is rejected even when the Jaccard gate would have missed the paraphrase.
+ * The lexical gate is unchanged and still runs first; semantic dedup only adds rejections. The
+ * `embedder` is injectable for tests; in production it is resolved from the brain config, and any
+ * resolution/embed failure degrades gracefully to lexical-only.
  */
 export async function curate(
   brainDir: string,
   candidates: NewNoteInput[],
   curator: Curator = defaultCurator,
+  embedder?: Embedder | null,
 ): Promise<CurateResult> {
   const canon = await listNotes(brainDir);
   const staged = await listStaged(brainDir);
@@ -145,11 +202,30 @@ export async function curate(
 
   const result: CurateResult = { staged: [], rejected: [] };
 
+  const config = await loadBrainConfig(brainDir);
   // auto-ADR gate (ADR-0009 #33): decisions only flow through when the team has opted in.
-  const autoAdr = await isFeatureEnabled(brainDir, "autoAdr");
+  const autoAdr = Boolean(config.features.autoAdr);
   // Secret-scanner tuning from the brain config (#46): entropy detection + allowlist, off by
   // default. Loaded once here and applied to every candidate's secret gate.
-  const secretOpts = scanOptions(await loadBrainConfig(brainDir));
+  const secretOpts = scanOptions(config);
+
+  // Semantic dedup setup (ADR-0021), only when the flag is on. Resolve the embedder (unless one
+  // is injected) and load canon vectors once. Resolution is guarded: an absent/misconfigured
+  // provider disables semantic dedup for this run rather than failing the whole capture.
+  let semanticEmbedder: Embedder | null = null;
+  let canonVectors: Map<string, Float32Array> | null = null;
+  if (config.features.semanticDedup) {
+    try {
+      semanticEmbedder = embedder !== undefined ? embedder : await embedProvider(config.embeddings);
+    } catch (err) {
+      console.error(
+        `[commonwealth-curate] semantic dedup disabled: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+      semanticEmbedder = null;
+    }
+    if (semanticEmbedder) canonVectors = await loadVectors(brainDir);
+  }
 
   for (const candidate of candidates) {
     // Secret gate (#16): never stage a candidate carrying a credential. Reject before
@@ -179,6 +255,24 @@ export async function curate(
       });
       continue;
     }
+
+    // Semantic dedup (ADR-0021): the lexical gate accepted, but the embedding may still be a
+    // near-duplicate of an existing canon note phrased differently. Compare only against stored
+    // CANON vectors (in-batch/staged dupes are already caught lexically above); an empty vector
+    // set (no embedder-backed build yet) simply no-ops.
+    if (semanticEmbedder && canonVectors && canonVectors.size > 0) {
+      const hit = await semanticDuplicate(
+        candidate,
+        semanticEmbedder,
+        canonVectors,
+        config.embeddings.threshold,
+      );
+      if (hit) {
+        result.rejected.push({ candidate, reason: "duplicate", duplicateOf: hit.id });
+        continue;
+      }
+    }
+
     // Stage individually-guarded: a single malformed candidate (e.g. an invalid kind or a
     // field the schema rejects) is dropped on its own rather than aborting the whole batch and
     // discarding every other valid note in the session (#88).

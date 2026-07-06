@@ -1,6 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
+import { loadBrainConfig } from "./config.js";
+import { embedProvider, type Embedder } from "./embed.js";
 import { listNotes } from "./notes.js";
 import { type Note, type NoteKind } from "./schema.js";
 
@@ -81,17 +83,49 @@ function toRow(note: Note): IndexRow {
   };
 }
 
+/** Options for {@link buildIndex}. */
+export interface BuildIndexOptions {
+  /**
+   * Embedder used to populate the `vectors` table (ADR-0021). When omitted, the embedder is
+   * resolved from the brain config IFF the `semanticDedup` flag is on; pass `null` to force a
+   * vector-free build, or an explicit {@link Embedder} (e.g. in tests) to bypass config.
+   */
+  embedder?: Embedder | null;
+}
+
+/** Title + body text of a note, embedded as its semantic representation (matches the dedup gate). */
+function noteEmbedText(note: Note): string {
+  return `${note.frontmatter.title} ${note.body}`;
+}
+
+/** A note id and its embedding, staged for insertion into the `vectors` table. */
+interface VectorRow {
+  id: string;
+  vec: Float32Array;
+}
+
 /**
- * (Re)build the derived SQLite FTS5 index from the markdown notes under `brainDir`.
- * The index lives at `index/commonwealth.db`, is gitignored, and is fully disposable —
- * it can always be rebuilt from the files. See ADR-0005.
+ * (Re)build the derived SQLite index from the markdown notes under `brainDir`: an FTS5 table for
+ * lexical search (ADR-0005) and, when semantic dedup is enabled, a `vectors` table of per-note
+ * embeddings (ADR-0021). The index lives at `index/commonwealth.db`, is gitignored, and is fully
+ * disposable — it can always be rebuilt from the files.
  *
- * Performs a FULL rebuild each call (DROP + CREATE) so the result is a pure function
- * of the note set and running it twice is idempotent. Returns the count indexed.
+ * Performs a FULL rebuild each call (DROP + CREATE) so the result is a pure function of the note
+ * set (given a stable embedder) and running it twice is idempotent. Returns the counts.
  */
-export async function buildIndex(brainDir: string): Promise<{ indexed: number }> {
+export async function buildIndex(
+  brainDir: string,
+  opts?: BuildIndexOptions,
+): Promise<{ indexed: number; embedded: number }> {
   await fs.mkdir(path.join(brainDir, INDEX_DIR), { recursive: true });
   const notes = await listNotes(brainDir);
+
+  // Resolve the embedder BEFORE opening the db and OUTSIDE the sync transaction: embedding is
+  // async and better-sqlite3 transactions are synchronous, so all vectors must exist up front.
+  // Default (flag off, or resolution/embed fails) is a vector-free build — never a crash — so a
+  // misconfigured or uninstalled local provider degrades to lexical-only rather than breaking
+  // every index rebuild (and therefore search/sync).
+  const vectorRows = await computeVectors(brainDir, notes, opts);
 
   const db = new Database(dbPath(brainDir));
   try {
@@ -102,7 +136,7 @@ export async function buildIndex(brainDir: string): Promise<{ indexed: number }>
     // rolls the whole thing back: the db is never left with the old table dropped and the
     // new one missing/half-populated, which would make `search` throw "no such table"
     // forever (#101). Either the previous index survives intact, or the new one lands whole.
-    const rebuild = db.transaction((rows: IndexRow[]) => {
+    const rebuild = db.transaction((rows: IndexRow[], vecs: VectorRow[]) => {
       db.exec("DROP TABLE IF EXISTS notes_fts;");
       // `path` is UNINDEXED: stored/returned but not part of the full-text match.
       db.exec(
@@ -116,10 +150,114 @@ export async function buildIndex(brainDir: string): Promise<{ indexed: number }>
           "VALUES (@id, @kind, @title, @tags, @body, @path, @source, @status, @superseded);",
       );
       for (const row of rows) insert.run(row);
-    });
-    rebuild(notes.map(toRow));
 
-    return { indexed: notes.length };
+      // The `vectors` table is always (re)created for schema stability — empty when no embedder
+      // ran — so `loadVectors` never has to special-case an older, table-less index.
+      db.exec("DROP TABLE IF EXISTS vectors;");
+      db.exec(
+        "CREATE TABLE vectors (id TEXT PRIMARY KEY, dim INTEGER NOT NULL, vec BLOB NOT NULL);",
+      );
+      const insertVec = db.prepare("INSERT INTO vectors (id, dim, vec) VALUES (@id, @dim, @vec);");
+      for (const v of vecs) {
+        insertVec.run({
+          id: v.id,
+          dim: v.vec.length,
+          // Copy the exact backing bytes of the Float32Array (respecting byteOffset) into a Buffer.
+          vec: Buffer.from(v.vec.buffer, v.vec.byteOffset, v.vec.byteLength),
+        });
+      }
+    });
+    rebuild(notes.map(toRow), vectorRows);
+
+    return { indexed: notes.length, embedded: vectorRows.length };
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Embed every note for the `vectors` table, or return `[]` when semantic dedup is off / no
+ * embedder is available. Resolution and embedding are best-effort: any failure (flag off,
+ * provider absent, model error, count mismatch) logs and yields a vector-free build so a rebuild
+ * — and therefore search and sync — never crashes on an embeddings misconfiguration.
+ */
+async function computeVectors(
+  brainDir: string,
+  notes: Note[],
+  opts?: BuildIndexOptions,
+): Promise<VectorRow[]> {
+  let embedder: Embedder | null;
+  try {
+    if (opts && "embedder" in opts) {
+      embedder = opts.embedder ?? null;
+    } else {
+      const config = await loadBrainConfig(brainDir);
+      embedder = config.features.semanticDedup ? await embedProvider(config.embeddings) : null;
+    }
+  } catch (err) {
+    console.error(
+      `[commonwealth] semantic index skipped (embedder unavailable): ${errMessage(err)}`,
+    );
+    return [];
+  }
+  if (!embedder || notes.length === 0) return [];
+
+  try {
+    const vecs = await embedder.embed(notes.map(noteEmbedText));
+    if (vecs.length !== notes.length) {
+      console.error(
+        `[commonwealth] semantic index skipped: embedder returned ${vecs.length} vectors for ` +
+          `${notes.length} notes.`,
+      );
+      return [];
+    }
+    return notes.map((n, i) => ({ id: n.frontmatter.id, vec: vecs[i]! }));
+  } catch (err) {
+    console.error(`[commonwealth] semantic index skipped (embed failed): ${errMessage(err)}`);
+    return [];
+  }
+}
+
+/** Message text of an unknown thrown value. */
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Load the per-note embeddings from the derived index as an id→vector map (ADR-0021). Returns an
+ * empty map when the index or the `vectors` table doesn't exist yet, or is empty — so the semantic
+ * gate simply no-ops (falls back to lexical) until an embedder-backed {@link buildIndex} has run.
+ */
+export async function loadVectors(brainDir: string): Promise<Map<string, Float32Array>> {
+  const file = dbPath(brainDir);
+  try {
+    await fs.access(file);
+  } catch {
+    return new Map();
+  }
+
+  const db = new Database(file, { readonly: true });
+  try {
+    const hasTable = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vectors'")
+      .get();
+    if (hasTable === undefined) return new Map();
+
+    const rows = db.prepare("SELECT id, dim, vec FROM vectors").all() as Array<{
+      id: string;
+      dim: number;
+      vec: Buffer;
+    }>;
+    const map = new Map<string, Float32Array>();
+    for (const row of rows) {
+      // Copy into a fresh, correctly-aligned Float32Array — a Buffer's underlying ArrayBuffer is
+      // pooled and its byteOffset need not be 4-byte aligned, so we can't view it directly.
+      const vec = new Float32Array(row.dim);
+      const bytes = Math.min(row.vec.byteLength, vec.byteLength);
+      new Uint8Array(vec.buffer).set(new Uint8Array(row.vec.buffer, row.vec.byteOffset, bytes));
+      map.set(row.id, vec);
+    }
+    return map;
   } finally {
     db.close();
   }
