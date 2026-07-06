@@ -19,7 +19,9 @@
     "format:check": "prettier --check .",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "release": "pnpm -r build && changeset publish"
+    "release": "pnpm -r build && changeset publish",
+    "release:version": "node scripts/release.mjs",
+    "release:sync": "node scripts/release.mjs sync"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
