@@ -310,8 +310,19 @@ async function cmdScope(args: string[]): Promise<void> {
     case "allow": {
       const target = rest[0];
       if (!target) throw new Error("scope allow requires a <path>");
-      await addAllow(target);
+      const resolved = await addAllow(target);
       console.error(`[commonwealth-curate] allow += ${target}`);
+      // Allowed-but-unmapped is a dead state (#157): scope only gates WHETHER capture may
+      // happen; the registry decides WHICH brain a folder writes to. When the newly allowed
+      // path resolves to no brain, capture there still silently does nothing — warn instead
+      // of letting the user assume this command wired the folder up.
+      if ((await resolveBrainDir(resolved)) === null) {
+        console.error(
+          `[commonwealth-curate] WARNING: ${resolved} resolves to no brain — capture is now ` +
+            `allowed here but will do nothing. Wire it with \`commonwealth add ${target}\` ` +
+            `(or \`commonwealth init\`).`,
+        );
+      }
       return;
     }
     case "deny": {

@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isInScope, loadUserConfig, saveUserConfig, type UserConfig } from "../src/scope.js";
+import { addAllow, isInScope, loadUserConfig, saveUserConfig, type UserConfig } from "../src/scope.js";
 
 let configDir: string;
 let configPath: string;
@@ -53,6 +53,18 @@ describe("isInScope", () => {
     expect(isInScope("/anything/here", { allow: ["/"], deny: [] })).toBe(true);
     // deny of root blocks everything (allow is satisfied by root, then deny wins)
     expect(isInScope("/anything/here", { allow: ["/"], deny: ["/"] })).toBe(false);
+  });
+});
+
+describe("addAllow", () => {
+  it("returns the resolved absolute path it persisted (tilde expanded), idempotently", async () => {
+    const returned = await addAllow("~/allowed-folder", configPath);
+    expect(returned).toBe(path.join(os.homedir(), "allowed-folder"));
+    expect((await loadUserConfig(configPath)).allow).toEqual([returned]);
+
+    // Adding the same path again is a no-op but still returns the resolved entry.
+    expect(await addAllow("~/allowed-folder", configPath)).toBe(returned);
+    expect((await loadUserConfig(configPath)).allow).toEqual([returned]);
   });
 });
 

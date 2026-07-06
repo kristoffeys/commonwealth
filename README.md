@@ -85,6 +85,7 @@ Once set up, talk to the brain through your AI in any session. The `commonwealth
 rest — every command resolves the right brain from the current directory automatically:
 
 ```bash
+commonwealth add <folder> [--brain <dir>] # wire another folder to the brain, in one go
 commonwealth status                       # review queue + sync-daemon state
 commonwealth recall <query>               # search the brain
 commonwealth ask <question>               # a cited answer, synthesized from the brain
@@ -134,6 +135,15 @@ commonwealth scope check                 # → in-scope | out-of-scope (for the 
 
 Rule: in scope if `(allow is empty OR under an allow entry) AND under no deny entry`. With no
 config, everything is in scope; add a deny (or a narrow allow) to exclude.
+
+Scope only decides *whether* capture may happen in a folder — *which brain* the folder writes to
+is a separate mapping. To bring a new project folder in, don't `scope allow` it by hand; run
+
+```bash
+commonwealth add ~/work/new-project      # allowlist + brain mapping + symlink, in one go
+```
+
+which wires it to the brain your current directory resolves to (or pass `--brain <dir>`).
 
 ## Configuration
 

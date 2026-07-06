@@ -141,6 +141,46 @@ describe("built commonwealth binary", () => {
     }
   }, 180_000);
 
+  it("`add` wires a folder to an existing brain in one go (#157)", async () => {
+    const scratch = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-cli-add-")),
+    );
+    const brain = path.join(scratch, "brain");
+    const project = path.join(scratch, "work", "app");
+    const core = fileURLToPath(new URL("../../core/dist/index.js", import.meta.url));
+    const env = {
+      ...process.env,
+      COMMONWEALTH_CONFIG: path.join(scratch, "cfg.json"),
+      COMMONWEALTH_REGISTRY: path.join(scratch, "reg.json"),
+    };
+    delete env.COMMONWEALTH_BRAIN_DIR;
+    try {
+      await fs.mkdir(project, { recursive: true });
+      execFileSync("node", [
+        "-e",
+        `require(${JSON.stringify(core)}).initBrain(${JSON.stringify(brain)},{name:'x'})`,
+      ]);
+
+      const res = spawnSync("node", [distEntry, "add", project, "--brain", brain], {
+        env,
+        stdio: "pipe",
+      });
+      expect(res.status).toBe(0);
+
+      // One command → both stores: the capture allowlist AND the registry mapping.
+      const cfg = JSON.parse(await fs.readFile(path.join(scratch, "cfg.json"), "utf8")) as {
+        allow: string[];
+      };
+      expect(cfg.allow).toContain(project);
+      const reg = JSON.parse(await fs.readFile(path.join(scratch, "reg.json"), "utf8")) as {
+        mappings: Array<{ prefix: string; brain: string }>;
+      };
+      expect(reg.mappings).toEqual([{ prefix: project, brain }]);
+    } finally {
+      await fs.rm(scratch, { recursive: true, force: true });
+    }
+  });
+
   it("an unknown subcommand exits non-zero with usage", () => {
     const res = spawnSync("node", [distEntry, "frobnicate"], { stdio: "pipe" });
     expect(res.status).not.toBe(0);
