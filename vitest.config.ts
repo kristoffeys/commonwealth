@@ -11,7 +11,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["packages/**/test/**/*.test.ts"],
+    include: ["packages/**/test/**/*.test.ts", "scripts/**/*.test.mjs"],
     environment: "node",
     // Build + vendor ONCE up front so no test spawns a concurrent `pnpm -r build` that clobbers
     // dist/ mid-run (#111). Replaces the per-file build hooks the integration suites used to run.

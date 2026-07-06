@@ -1,0 +1,69 @@
+name: Version & Release
+
+# Cut a release from the GitHub UI (Actions → "Version & Release" → Run workflow):
+#  - bump every version-bearing file in lockstep (all package.json's + the plugin's runtime
+#    pins / plugin.json / marketplace listing) via scripts/release.mjs,
+#  - gate on a green typecheck + test + build,
+#  - commit `chore(release): vX.Y.Z`, tag it, push, and create a GitHub Release with notes.
+#
+# npm publishing stays in `release.yml` (on a `v*` tag / manual dispatch). NOTE: a tag pushed by
+# this workflow's GITHUB_TOKEN does NOT auto-trigger `release.yml` (GitHub suppresses recursive
+# workflow triggers from GITHUB_TOKEN). After this runs, dispatch the "Release" workflow to
+# publish to npm — or set a PAT here if you want the publish to chain automatically.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Semver bump (ignored if 'version' is set)"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: "Explicit X.Y.Z (optional; overrides bump)"
+        type: string
+        default: ""
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the release commit + tag and create the GitHub Release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Bump version across the monorepo
+        id: bump
+        run: |
+          ARG="${{ github.event.inputs.version || github.event.inputs.bump }}"
+          VERSION=$(node scripts/release.mjs "$ARG")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # Gate the release on a green build so a broken version never gets tagged/published.
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+      - name: Commit, tag, push
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(release): v${VERSION}"
+          git tag -a "v${VERSION}" -m "Release v${VERSION}"
+          git push --follow-tags
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: gh release create "v${VERSION}" --title "v${VERSION}" --generate-notes
