@@ -33,21 +33,71 @@ const EXTRACTION_TIMEOUT_MS = 120_000;
 export const DISABLE_HOOKS_ENV = "COMMONWEALTH_DISABLE_HOOKS";
 
 /**
+ * Ordered, deduped list of directories to try as the session's working directory. The
+ * hook-supplied cwd comes first (it's the harness's answer and normally correct), then
+ * `$CLAUDE_PROJECT_DIR`, then `process.cwd()`.
+ *
+ * Some launchers hand the hook a synthetic cwd that maps to no brain — e.g. Orca's rate-limit
+ * PTY runs the session from `~/Library/Application Support/orca/rate-limit-pty-cwd`, which isn't
+ * in anyone's registry. Without the fallbacks, every `/clear` in that state skips capture with
+ * "no-brain" even though the real project maps to a brain. `$CLAUDE_PROJECT_DIR` is the canonical
+ * project root Claude Code exports to hooks and is unaffected by such PTY cwd substitution, so it
+ * recovers the real directory (#174).
+ *
+ * @param {string} inputCwd  The hook-supplied cwd (already validated as a non-empty string).
+ * @returns {string[]}       Candidate directories to resolve a brain from, in priority order.
+ */
+function candidateCwds(inputCwd) {
+  const out = [];
+  const add = (c) => {
+    if (typeof c === "string" && c.length > 0 && !out.includes(c)) out.push(c);
+  };
+  add(inputCwd);
+  add(process.env.CLAUDE_PROJECT_DIR);
+  try {
+    add(process.cwd());
+  } catch {
+    // process.cwd() throws if the working directory was removed mid-session; just skip it.
+  }
+  return out;
+}
+
+/**
+ * Resolve the session's working directory to a brain, trying each {@link candidateCwds} entry in
+ * order and returning the first that maps to a brain (along with that directory). Returns null
+ * when none of the candidates map to a brain.
+ *
+ * @param {string} inputCwd  The hook-supplied cwd (already validated as a non-empty string).
+ * @param {object} deps      See the contract at the top of this file.
+ * @returns {Promise<{cwd: string, brain: string} | null>}
+ */
+async function resolveSessionBrain(inputCwd, deps) {
+  for (const cwd of candidateCwds(inputCwd)) {
+    const brain = await deps.resolveBrainDir(cwd);
+    if (brain) return { cwd, brain };
+  }
+  return null;
+}
+
+/**
  * SessionStart: resolve the brain for the session's cwd, honor the per-user scope gate,
  * and return the markdown context string to inject. Returns "" (inject nothing) when there
  * is no brain for this cwd or the cwd is out of scope — the two gates that make an
- * out-of-scope or brain-less session do NOTHING.
+ * out-of-scope or brain-less session do NOTHING. When the hook-supplied cwd maps to no brain,
+ * it falls back to `$CLAUDE_PROJECT_DIR` / `process.cwd()` (see {@link candidateCwds}); the
+ * scope gate and context then use whichever candidate actually resolved.
  *
  * @param {{ cwd: string }} input  Parsed SessionStart hook stdin.
  * @param {object} deps            See the contract at the top of this file.
  * @returns {Promise<string>}      Context markdown to print to stdout, or "".
  */
 export async function sessionStart(input, deps) {
-  const cwd = input?.cwd;
-  if (typeof cwd !== "string" || cwd.length === 0) return "";
+  const inputCwd = input?.cwd;
+  if (typeof inputCwd !== "string" || inputCwd.length === 0) return "";
 
-  const brain = await deps.resolveBrainDir(cwd);
-  if (!brain) return "";
+  const resolved = await resolveSessionBrain(inputCwd, deps);
+  if (!resolved) return "";
+  const { cwd, brain } = resolved;
 
   if (!(await deps.isInScope(cwd))) return "";
 
@@ -59,19 +109,25 @@ export async function sessionStart(input, deps) {
  * SessionEnd: resolve the brain, honor the scope gate, extract candidate notes from the
  * session transcript, and stage them via the review queue (capture). Out-of-scope or
  * brain-less sessions do NOTHING (they never extract candidates or capture). A session with
- * no candidates reports `{ captured: 0 }`.
+ * no candidates reports `{ captured: 0 }`. When the hook-supplied cwd maps to no brain, it
+ * falls back to `$CLAUDE_PROJECT_DIR` / `process.cwd()` (see {@link candidateCwds}); scope,
+ * capture, and the receipt then use whichever candidate actually resolved.
  *
  * @param {{ cwd: string, transcript_path?: string }} input  Parsed SessionEnd hook stdin.
  * @param {object} deps                                       See the contract above.
  * @returns {Promise<object>}  A small result object for the hook to log to stderr.
  */
 export async function sessionEnd(input, deps) {
-  const cwd = input?.cwd;
+  const inputCwd = input?.cwd;
   // No cwd: nothing to say and nowhere to anchor a receipt — skip silently.
-  if (typeof cwd !== "string" || cwd.length === 0) return { skipped: true, reason: "no-cwd" };
+  if (typeof inputCwd !== "string" || inputCwd.length === 0)
+    return { skipped: true, reason: "no-cwd" };
 
-  const brain = await deps.resolveBrainDir(cwd);
-  if (!brain) return await finishEnd(deps, cwd, { skipped: true, reason: "no-brain" });
+  const resolved = await resolveSessionBrain(inputCwd, deps);
+  // No brain for the hook cwd or any fallback. Anchor the receipt to the hook cwd so the next
+  // SessionStart there can explain the silence.
+  if (!resolved) return await finishEnd(deps, inputCwd, { skipped: true, reason: "no-brain" });
+  const { cwd, brain } = resolved;
 
   if (!(await deps.isInScope(cwd)))
     return await finishEnd(deps, cwd, { skipped: true, reason: "out-of-scope" });

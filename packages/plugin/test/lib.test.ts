@@ -61,6 +61,27 @@ describe("sessionStart", () => {
     expect(out).toBe("");
     expect(deps.resolveBrainDir).not.toHaveBeenCalled();
   });
+
+  it("falls back to $CLAUDE_PROJECT_DIR when the hook cwd maps to no brain (#174)", async () => {
+    const prev = process.env.CLAUDE_PROJECT_DIR;
+    process.env.CLAUDE_PROJECT_DIR = "/work/acme/app";
+    try {
+      const deps = makeDeps({
+        resolveBrainDir: vi.fn(async (cwd: string) =>
+          cwd === "/work/acme/app" ? "/brains/acme" : null,
+        ),
+      });
+      // Orca's rate-limit PTY hands the hook a synthetic cwd that isn't in the registry.
+      const out = await sessionStart({ cwd: "/synthetic/rate-limit-pty-cwd" }, deps);
+      expect(out).toContain("Relevant from the team brain");
+      // Scope + context are evaluated against the recovered project dir, not the synthetic cwd.
+      expect(deps.isInScope).toHaveBeenCalledWith("/work/acme/app");
+      expect(deps.getContext).toHaveBeenCalledWith("/brains/acme", "/work/acme/app");
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+      else process.env.CLAUDE_PROJECT_DIR = prev;
+    }
+  });
 });
 
 describe("sessionEnd", () => {
@@ -136,6 +157,54 @@ describe("sessionEnd", () => {
     const result = await sessionEnd({}, deps);
     expect(result).toEqual({ skipped: true, reason: "no-cwd" });
     expect(deps.saveReceipt).not.toHaveBeenCalled();
+  });
+
+  it("falls back to $CLAUDE_PROJECT_DIR and captures when the hook cwd maps to no brain (#174)", async () => {
+    const prev = process.env.CLAUDE_PROJECT_DIR;
+    process.env.CLAUDE_PROJECT_DIR = "/work/acme/app";
+    try {
+      const deps = makeDeps({
+        resolveBrainDir: vi.fn(async (cwd: string) =>
+          cwd === "/work/acme/app" ? "/brains/acme" : null,
+        ),
+      });
+      const result = await sessionEnd(
+        { cwd: "/synthetic/rate-limit-pty-cwd", transcript_path: "/tmp/t.jsonl" },
+        deps,
+      );
+      // Capture runs against the recovered project dir + its brain, not the synthetic cwd.
+      expect(deps.capture).toHaveBeenCalledWith("/brains/acme", "/work/acme/app", [
+        { kind: "memory", title: "T", body: "B" },
+      ]);
+      expect(result).toEqual({ captured: 1, staged: [{ kind: "memory", title: "T", body: "B" }] });
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+      else process.env.CLAUDE_PROJECT_DIR = prev;
+    }
+  });
+
+  it("still reports no-brain (anchored to the hook cwd) when no fallback maps to a brain (#174)", async () => {
+    const prev = process.env.CLAUDE_PROJECT_DIR;
+    delete process.env.CLAUDE_PROJECT_DIR;
+    try {
+      const deps = makeDeps({ resolveBrainDir: vi.fn(async () => null) });
+      const result = await sessionEnd(
+        { cwd: "/synthetic/rate-limit-pty-cwd", transcript_path: "/tmp/t.jsonl" },
+        deps,
+      );
+      expect(result).toEqual({ skipped: true, reason: "no-brain" });
+      expect(deps.extractCandidates).not.toHaveBeenCalled();
+      expect(deps.capture).not.toHaveBeenCalled();
+      expect(deps.saveReceipt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: "/synthetic/rate-limit-pty-cwd",
+          message: expect.stringContaining("no team brain"),
+        }),
+      );
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+      else process.env.CLAUDE_PROJECT_DIR = prev;
+    }
   });
 });
 
