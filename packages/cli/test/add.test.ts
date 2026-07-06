@@ -171,14 +171,14 @@ describe("defaultAddDeps (real IO)", () => {
     const code = await runAdd({ folders: [project], brain, cwd: root }, defaultAddDeps());
     expect(code).toBe(0);
 
-    const config = JSON.parse(
-      await fs.readFile(path.join(root, "config.json"), "utf8"),
-    ) as { allow: string[] };
+    const config = JSON.parse(await fs.readFile(path.join(root, "config.json"), "utf8")) as {
+      allow: string[];
+    };
     expect(config.allow).toContain(project);
 
-    const registry = JSON.parse(
-      await fs.readFile(path.join(root, "registry.json"), "utf8"),
-    ) as { mappings: Array<{ prefix: string; brain: string }> };
+    const registry = JSON.parse(await fs.readFile(path.join(root, "registry.json"), "utf8")) as {
+      mappings: Array<{ prefix: string; brain: string }>;
+    };
     expect(registry.mappings).toEqual([{ prefix: project, brain }]);
 
     // The convenience symlink lands next to the registry file.
@@ -202,9 +202,9 @@ describe("defaultAddDeps (real IO)", () => {
     const code = await runAdd({ folders: [second], cwd: first }, defaultAddDeps());
     expect(code).toBe(0);
 
-    const registry = JSON.parse(
-      await fs.readFile(path.join(root, "registry.json"), "utf8"),
-    ) as { mappings: Array<{ prefix: string; brain: string; remote?: string }> };
+    const registry = JSON.parse(await fs.readFile(path.join(root, "registry.json"), "utf8")) as {
+      mappings: Array<{ prefix: string; brain: string; remote?: string }>;
+    };
     expect(registry.mappings).toContainEqual({
       prefix: second,
       brain,

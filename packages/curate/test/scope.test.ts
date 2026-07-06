@@ -2,7 +2,13 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { addAllow, isInScope, loadUserConfig, saveUserConfig, type UserConfig } from "../src/scope.js";
+import {
+  addAllow,
+  isInScope,
+  loadUserConfig,
+  saveUserConfig,
+  type UserConfig,
+} from "../src/scope.js";
 
 let configDir: string;
 let configPath: string;
