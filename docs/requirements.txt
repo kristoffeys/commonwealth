@@ -1,0 +1,3 @@
+# Docs site toolchain (MkDocs Material). Installed by .github/workflows/docs.yml.
+mkdocs-material==9.5.44
+mkdocs-awesome-pages-plugin==2.9.3
