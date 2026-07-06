@@ -1,6 +1,6 @@
 {
   "name": "@cmnwlth/mcp",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "MCP server exposing a Commonwealth brain to Claude Code and other MCP clients",
   "license": "Apache-2.0",
   "type": "module",

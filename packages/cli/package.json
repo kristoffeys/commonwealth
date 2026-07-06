@@ -1,6 +1,6 @@
 {
   "name": "@cmnwlth/cli",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "The unified `commonwealth` CLI \u2014 starting with the zero-config `init` onboarding wizard",
   "license": "Apache-2.0",
   "type": "module",
