@@ -350,7 +350,7 @@ export function realDeps(overrides = {}) {
   // prebuild transitively. Pinned to the plugin's version for lockstep. Tests/local dev pass
   // `overrides.curateEntry` to run a locally-built copy with node instead of hitting the registry.
   const curateEntry = overrides.curateEntry ?? null;
-  const curatePackage = overrides.curatePackage ?? "@cmnwlth/curate@0.1.2";
+  const curatePackage = overrides.curatePackage ?? "@cmnwlth/curate@0.1.4";
   const runCurate = (args, runOpts) =>
     curateEntry
       ? run(nodeBin, [curateEntry, ...args], runOpts)

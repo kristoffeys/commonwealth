@@ -1,6 +1,6 @@
 {
   "name": "@cmnwlth/core",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "description": "Core substrate for Commonwealth: schema, note IO, scaffold, and the derived index",
   "license": "Apache-2.0",
   "type": "module",
