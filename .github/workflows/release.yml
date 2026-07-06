@@ -1,6 +1,6 @@
 name: Release
 
-# Publish the @cmnwlth/* packages to npm (#49). Two ways in:
+# Publish the @cmnwlth/* packages to npm (#49) and create the GitHub Release (#159). Two ways in:
 #  - push a `v*` tag (e.g. `v0.1.0`) → publishes the current versions, or
 #  - run this workflow manually (workflow_dispatch).
 # Versions are managed with Changesets: `pnpm changeset` to record a change, `pnpm
@@ -23,7 +23,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # create the GitHub Release for the tag
       id-token: write # npm provenance / OIDC
     steps:
       - uses: actions/checkout@v4
@@ -44,3 +44,20 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
+
+      # The everyday release path is a locally pushed tag (scripts/release.mjs --commit +
+      # `git push --follow-tags`), which lands here — so the GitHub Release is created here
+      # too (#159), with generated notes, AFTER the npm publish succeeded. Idempotent: a
+      # release that already exists (a re-run, or the Version & Release workflow's own step)
+      # is left alone. Skipped on a workflow_dispatch from a branch — no tag, no release.
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists — skipping."
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+          fi

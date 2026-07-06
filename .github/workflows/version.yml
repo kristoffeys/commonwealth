@@ -62,8 +62,15 @@ jobs:
           git tag -a "v${VERSION}" -m "Release v${VERSION}"
           git push --follow-tags
 
+      # Idempotent (#159): a re-run after the tag/release already landed must not fail here.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.bump.outputs.version }}
-        run: gh release create "v${VERSION}" --title "v${VERSION}" --generate-notes
+        run: |
+          if gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release v${VERSION} already exists — skipping."
+          else
+            gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" \
+              --title "v${VERSION}" --generate-notes --verify-tag
+          fi

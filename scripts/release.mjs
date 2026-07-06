@@ -170,7 +170,10 @@ function main() {
     git(["commit", "-m", `chore(release): v${version}`]);
     git(["tag", "-a", `v${version}`, "-m", `Release v${version}`]);
     console.error(`\nCommitted and tagged v${version}.`);
-    console.error(`Next: git push --follow-tags   (the Release workflow publishes on the tag)`);
+    console.error(
+      `Next: git push --follow-tags   (the Release workflow publishes to npm and creates ` +
+        `the GitHub Release with generated notes)`,
+    );
   } else if (!doCommit) {
     console.error(`\nFiles updated. Review, then commit + tag (or re-run with --commit).`);
   }
