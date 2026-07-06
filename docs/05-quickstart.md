@@ -38,6 +38,13 @@ session hooks), starts the sync daemon, and ensures your per-user scope config e
 anytime — it only does what's still missing. See the flags in `commonwealth init --help` (e.g.
 `--yes`, `--no-daemon`, `--no-seed`, `--brain <dir>`, `--remote <url>`).
 
+Prefer to install just the Claude Code plugin (the repo is its own plugin marketplace)?
+
+```bash
+claude plugin marketplace add kristoffeys/commonwealth
+claude plugin install commonwealth@commonwealth
+```
+
 ## 3. Use it
 
 - **In a Claude Code session** in this project, the plugin injects relevant team-brain context at

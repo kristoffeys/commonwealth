@@ -28,7 +28,7 @@ see reliably. That is exactly the shape per-repo routing needs.
 1. **The MCP is distributed via the plugin, installed at USER scope through a repo marketplace.**
    The repo root ships `.claude-plugin/marketplace.json` declaring the `commonwealth` plugin at
    `./packages/plugin`. Teammates run `claude plugin marketplace add kristoffeys/commonwealth`
-   then `claude plugin install commonwealth@cmnwlth`; the plugin's `commonwealth`
+   then `claude plugin install commonwealth@commonwealth`; the plugin's `commonwealth`
    server is then available globally in every session.
 2. **Per-repo brain routing is dynamic, from two independent resolvers:**
    - the **SessionStart hook** resolves the real session cwd → the brain via the registry and
@@ -51,7 +51,7 @@ see reliably. That is exactly the shape per-repo routing needs.
 - One install serves every repo; the brain is chosen per session by the hook and per process by
   the server, both via the registry. No brain is pinned into the registration.
 - Teammates install with two commands (`claude plugin marketplace add kristoffeys/commonwealth`
-  and `claude plugin install commonwealth@cmnwlth`), or an admin auto-provisions the
+  and `claude plugin install commonwealth@commonwealth`), or an admin auto-provisions the
   marketplace + plugin through managed settings (distribution doc §1).
 - `init` no longer needs the brain dir for the MCP step; the step is idempotent and safe to re-run.
 - The `--no-plugin` flag gates the step (`--no-mcp` kept as a backward-compatible alias).
