@@ -1,0 +1,11 @@
+# Controls the top-level nav order (awesome-pages plugin).
+# Page titles come from each file's H1; ADRs are globbed via docs/adr/.pages.
+nav:
+  - index.md
+  - 05-quickstart.md
+  - 01-architecture.md
+  - 02-data-model.md
+  - 03-distribution.md
+  - 06-self-host.md
+  - 04-roadmap.md
+  - adr
