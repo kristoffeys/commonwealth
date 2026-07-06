@@ -94,15 +94,17 @@ export function isInScope(cwd: string, config: UserConfig): boolean {
 
 /**
  * Add a path to the `allow` list (tilde-expanded to an absolute path) if not already
- * present, then persist. Used by the `scope allow` CLI command.
+ * present, then persist. Returns the resolved absolute path that was allowed, so callers
+ * (the `scope allow` CLI command) can run follow-up checks against the entry as stored.
  */
-export async function addAllow(pathArg: string, configPath = defaultConfigPath()): Promise<void> {
+export async function addAllow(pathArg: string, configPath = defaultConfigPath()): Promise<string> {
   const config = await loadUserConfig(configPath);
   const resolved = expand(pathArg);
   if (!config.allow.includes(resolved)) {
     config.allow.push(resolved);
     await saveUserConfig(config, configPath);
   }
+  return resolved;
 }
 
 /**

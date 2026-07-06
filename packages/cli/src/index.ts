@@ -3,6 +3,7 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { defaultAddDeps, runAdd } from "./add.js";
 import { cmdConfig, cmdReseed, delegateCurate, delegateSync } from "./commands.js";
 import { defaultOnboardDeps } from "./deps.js";
 import { defaultAskEnv, formatAsk, runAsk } from "./ask.js";
@@ -47,6 +48,8 @@ export { runDemo, defaultDemoEnv } from "./demo.js";
 export type { DemoResult, DemoEnv } from "./demo.js";
 export { runAsk, defaultAskEnv, formatAsk } from "./ask.js";
 export type { AskEnv } from "./ask.js";
+export { runAdd, defaultAddDeps } from "./add.js";
+export type { AddOptions, AddDeps } from "./add.js";
 
 /** Print `commonwealth` usage to stderr. */
 function printUsage(): void {
@@ -57,6 +60,9 @@ function printUsage(): void {
       "Usage:",
       "  commonwealth demo                              60-second throwaway sandbox brain (no setup)",
       "  commonwealth init      [flags]                 onboard: build, create/join brain, plugin, daemon",
+      "  commonwealth add       [<folder>...] [--brain <dir>] [--remote <url>]",
+      "                                                 wire folder(s) to an existing brain (allowlist +",
+      "                                                 registry mapping + brains/ symlink) in one go",
       "  commonwealth reseed    [<repo>...] [--all]     mine repo(s) into the mapped brain and capture",
       "  commonwealth config    <list | get <k> | set <k> <v>>   read/set the brain's shared config",
       "  commonwealth status                            review queue + sync-daemon state",
@@ -131,6 +137,8 @@ export async function run(argv: string[]): Promise<number> {
       return cmdDemo(rest);
     case "init":
       return cmdInit(rest);
+    case "add":
+      return cmdAdd(rest);
     case "reseed":
       return cmdReseed(rest);
     case "config":
@@ -260,6 +268,38 @@ async function cmdEmit(rest: string[]): Promise<number> {
   }
   process.stderr.write(formatEmitResult(result));
   return 0;
+}
+
+/**
+ * `commonwealth add [<folder>...] [--brain <dir>] [--remote <url>]` — wire folders to an
+ * existing brain without the full `init` orchestrator (#157): per folder, capture-allowlist +
+ * global-registry mapping + `~/.commonwealth/brains/<name>` symlink. With no folders, wires the
+ * cwd; with no `--brain`, uses the brain the cwd already resolves to.
+ */
+async function cmdAdd(rest: string[]): Promise<number> {
+  let values: { brain?: string; remote?: string };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseArgs({
+      args: rest,
+      options: { brain: { type: "string" }, remote: { type: "string" } },
+      allowPositionals: true,
+    }));
+  } catch (err) {
+    process.stderr.write(`${(err as Error).message}\n`);
+    printUsage();
+    return 2;
+  }
+
+  return runAdd(
+    {
+      folders: positionals,
+      ...(values.brain !== undefined ? { brain: values.brain } : {}),
+      ...(values.remote !== undefined ? { remote: values.remote } : {}),
+      cwd: process.cwd(),
+    },
+    defaultAddDeps(),
+  );
 }
 
 /** `commonwealth init` — the onboarding orchestrator (build → create/seed/join → plugin → daemon). */

@@ -104,6 +104,13 @@ commonwealth scope show
 
 Rule: in scope if `(allow is empty OR under an allow entry) AND under no deny entry`.
 
+Scope only gates *whether* capture may happen — *which brain* a folder writes to comes from the
+registry mapping. To wire a new folder to your brain (allowlist + mapping + symlink in one go):
+
+```bash
+commonwealth add ~/work/new-project [--brain <dir>]
+```
+
 ## Secrets never leave the brain
 
 Credentials are detected and **blocked at capture** and **scrubbed pre-commit** (defense in

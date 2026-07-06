@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -115,6 +115,48 @@ describe("built binary", () => {
       stdio: "pipe",
     }).toString();
     expect(out).toContain("Registry-resolved fact");
+
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("`scope allow` warns when the path maps to no brain, and stays quiet when mapped (#157)", async () => {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-allowwarn-")),
+    );
+    const unmapped = path.join(root, "personal", "proj");
+    const mapped = path.join(root, "work", "app");
+    await fs.mkdir(unmapped, { recursive: true });
+    await fs.mkdir(mapped, { recursive: true });
+    const registry = path.join(root, "registry.json");
+    await fs.writeFile(
+      registry,
+      JSON.stringify({
+        mappings: [{ prefix: path.join(root, "work"), brain: path.join(root, "brain") }],
+      }),
+    );
+    const env = {
+      ...process.env,
+      COMMONWEALTH_CONFIG: path.join(root, "config.json"),
+      COMMONWEALTH_REGISTRY: registry,
+    };
+    delete env.COMMONWEALTH_BRAIN_DIR;
+
+    // Allowed-but-unmapped: succeed (the allow IS recorded) but warn that capture stays inert.
+    const warn = spawnSync("node", [distEntry, "scope", "allow", unmapped], {
+      env,
+      encoding: "utf8",
+    });
+    expect(warn.status).toBe(0);
+    expect(warn.stderr).toContain("WARNING");
+    expect(warn.stderr).toContain("commonwealth add");
+
+    // A path the registry already maps produces no warning.
+    const quiet = spawnSync("node", [distEntry, "scope", "allow", mapped], {
+      env,
+      encoding: "utf8",
+    });
+    expect(quiet.status).toBe(0);
+    expect(quiet.stderr).not.toContain("WARNING");
 
     await fs.rm(root, { recursive: true, force: true });
   });
