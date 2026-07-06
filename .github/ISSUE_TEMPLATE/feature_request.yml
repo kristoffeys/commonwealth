@@ -1,0 +1,27 @@
+name: Feature request
+description: Propose a capability or improvement.
+labels: ["type:feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't you do today, or what is harder than it should be?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like to happen? A CLI sketch or example session helps.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you use now, or other shapes this could take.
+  - type: markdown
+    attributes:
+      value: |
+        Note: significant design decisions land as ADRs in `docs/adr/` — see CONTRIBUTING.md.

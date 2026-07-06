@@ -1,0 +1,51 @@
+name: Bug report
+description: Something in Commonwealth doesn't work as documented.
+labels: ["type:bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! A minimal reproduction gets bugs fixed fastest.
+        Security issue? Please use [private vulnerability reporting](https://github.com/kristoffeys/commonwealth/security/advisories/new) instead — see SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `commonwealth --version`.
+      placeholder: "0.1.4"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How is it installed?
+      options:
+        - npm global (npm i -g @cmnwlth/cli)
+        - npx
+        - workspace checkout (this repo)
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+      placeholder: |
+        1. ran `commonwealth …`
+        2. expected …
+        3. got …
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`commonwealth doctor --json` output"
+      description: Paste the output if the issue touches setup/sync/capture. Redact anything private.
+      render: json
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node version, Claude Code version (if plugin-related).
+      placeholder: "macOS 15, Node 22.11, Claude Code 2.x"
