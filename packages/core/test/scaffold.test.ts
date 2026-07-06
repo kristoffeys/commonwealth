@@ -56,7 +56,7 @@ describe("initBrain", () => {
     );
     expect(config.name).toBe("acme-brain");
     expect(config.schemaVersion).toBe(SCHEMA_VERSION);
-    expect(config.features.autoAdr).toBe(false); // feature flags default off (ADR-0009)
+    expect(config.features.autoAdr).toBe(true); // decisions traced by default (ADR-0022)
   });
 
   it("writes union-merge .gitattributes and index-ignoring .gitignore", async () => {

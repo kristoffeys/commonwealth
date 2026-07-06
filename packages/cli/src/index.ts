@@ -353,7 +353,7 @@ async function cmdInit(rest: string[]): Promise<number> {
         seed: true,
         plugin: claudePresent,
         daemon: true,
-        autoAdr: false,
+        autoAdr: true,
       };
       prompter = createReadlinePrompter();
       const outcome = await runWizard(defaults, prompter);

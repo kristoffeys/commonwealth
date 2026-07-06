@@ -198,6 +198,22 @@ commonwealth ask <question>               # cited retrieval for a question (agen
 Tip: to review a bulk reseed instead of auto-landing it, `commonwealth config set autoPromote
 false` first, then `reseed`, then `pending` / `promote`.
 
+### Capturing decisions
+
+Decisions are first-class. With `autoAdr` on (the default, ADR-0022) the brain records the
+decisions it detects in a session automatically; when you want to be sure a business/team
+decision is on the record — or log one that never touched a coding session — use the deliberate
+path from inside Claude Code:
+
+```
+/commonwealth:decide  we're standardizing on Postgres for the ledger, not DynamoDB
+```
+
+It writes a `decision` note through the normal curation gate and review queue, capturing **what**
+was decided, **when** (stamped), **who** decided (`deciders`), and **why** (the rationale and
+assumptions, in the body) — so reversals later *supersede* it rather than erase the reasoning.
+Turn the whole behavior off per brain with `commonwealth config set autoAdr false`.
+
 ### 1. Create a brain (done by `init`)
 
 A brain is just a git repository. `init` creates one under
@@ -334,13 +350,15 @@ ahead of the registry when you need to pin one project explicitly (an optional m
 Brain-level **feature flags** are toggled with the CLI and sync with the brain:
 
 ```bash
-commonwealth config list                 # show name, remotes, and all feature flags
-commonwealth config set autoAdr true      # opt in per team (syncs with the brain)
+commonwealth config list                    # show name, remotes, and all feature flags
+commonwealth config set autoAdr false        # opt a brain OUT of decision tracking
 ```
 
-`autoAdr` (default **off**): when on, captured **decisions** are auto-recorded as
-ADR-style `decision` notes in the brain (they still pass the review queue and respect the
-scope filter). When off, decision candidates are dropped.
+`autoAdr` (default **on**, ADR-0022): the brain records **decision** notes — both decisions
+auto-detected from a session and ones logged deliberately via [`/commonwealth:decide`](#capturing-decisions),
+so there's a durable trace of **what** was decided, **when**, **by whom** (`deciders`), and **why**
+(the body). They still pass the curation gate, review queue, and scope filter. Set it `false` to
+stop capturing decision notes in a brain entirely.
 
 `semanticDedup` (default **off**, ADR-0021): when on, the curation gate also catches
 near-duplicate notes phrased differently ("auth uses JWT" vs "we authenticate with bearer

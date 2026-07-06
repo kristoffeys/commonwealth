@@ -11,7 +11,7 @@ work-state / people`), auto-started by declaring it in the manifest (no manual
   `SessionEnd` extracts learnings from the transcript and stages them into the review queue.
 - **Brain registry** — resolves the current project directory → its brain repo
   (`@cmnwlth/core`'s `resolveBrainDir`, issue #14).
-- **`/commonwealth` commands** — manual `remember`, `recall`, `ask`, `promote`, `status`.
+- **`/commonwealth` commands** — manual `remember`, `decide`, `recall`, `ask`, `promote`, `status`.
 
 Everything real is done by the `@cmnwlth/*` packages; the plugin is glue. Markdown in the
 brain repo stays the source of truth.
@@ -24,7 +24,7 @@ hooks/hooks.json             SessionStart + SessionEnd → node <script>.mjs
 hooks/lib.mjs                testable, dependency-injected hook core
 hooks/session-start.mjs      thin stdin→lib→stdout entry (prints context)
 hooks/session-end.mjs        thin stdin→lib entry (stages candidates)
-commands/*.md                /commonwealth remember|recall|promote|status
+commands/*.md                /commonwealth remember|decide|recall|promote|status
 ```
 
 ## Runtime (published packages via npx)
