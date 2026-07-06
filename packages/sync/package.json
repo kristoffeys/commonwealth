@@ -1,6 +1,6 @@
 {
   "name": "@cmnwlth/sync",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings",
   "license": "Apache-2.0",
   "type": "module",
