@@ -1,9 +1,8 @@
 # Self-host guide
 
-Commonwealth's OSS core tier is **self-hostable with zero vendor lock-in**: the brain is an
-ordinary git repo you own, synced over any git remote you control (GitHub, GitLab, a bare repo on
-your own box). There is no Commonwealth server, no database to run, and no account. See
-[docs/03-distribution.md](./03-distribution.md) for the tiering rationale.
+Commonwealth is **self-hostable with zero vendor lock-in**: the brain is an ordinary git repo you
+own, synced over any git remote you control (GitHub, GitLab, a bare repo on your own box). There
+is no Commonwealth server, no database to run, and no account.
 
 ## The pieces
 
@@ -32,8 +31,8 @@ your own box). There is no Commonwealth server, no database to run, and no accou
    yet? Run `init` without it, create the empty remote, then
    `git -C <brain> remote add origin <url> && commonwealth sync once`.)
 
-2. **A teammate joins.** They build the CLI (see the [Quickstart](./05-quickstart.md)), then from
-   the same project run `commonwealth init`. When a brain already exists for the project they
+2. **A teammate joins.** They install the CLI (`npm i -g @cmnwlth/cli`), then from the same
+   project run `commonwealth init`. When a brain already exists for the project they
    **join** it (clone-and-go, time-to-first-value ≈ 0) rather than re-seeding. If their registry
    maps the project to a brain that isn't checked out locally yet — and the mapping carries a
    `remote` — the daemon (or `commonwealth sync once`) **clones it on demand** on first use, under
@@ -60,9 +59,12 @@ The brain's `.commonwealth/config.json` is committed, so these apply to everyone
 
 - **`features.autoPromote`** (default **on**) — captured notes promote straight to canon (gates
   still run). Set `false` to hold captures in the review queue for `commonwealth promote`.
-- **`features.autoAdr`** (default off) — auto-create decision notes when a decision is captured.
+- **`features.autoAdr`** (default **on**) — record decision notes (auto-detected and via
+  `/commonwealth:decide`). Set `false` to stop tracking decisions in a brain.
+- **`features.semanticDedup`** (default off) — also catch near-duplicate notes phrased
+  differently, using on-machine embeddings (needs an optional model package installed on enable).
 - **`secretScan`** (default `{ "entropy": false, "allowlist": [] }`) — opt into high-entropy
-  secret detection beyond the named patterns, with an allowlist for accepted values (#46).
+  secret detection beyond the named patterns, with an allowlist for accepted values.
 
 Toggle feature flags with `commonwealth config` / `commonwealth-curate feature enable <name>`;
 edit `secretScan` directly in the committed config file.
@@ -191,11 +193,9 @@ That's the whole export story — no proprietary format, no `export` command to 
 
 ## Distribution
 
-The `@cmnwlth/*` packages are published to npm (#49), so no build or committed runtime is needed:
+The `@cmnwlth/*` packages are published to npm, so no build step is needed:
 
 - **CLI:** `npm i -g @cmnwlth/cli` (or `npx @cmnwlth/cli init`).
 - **Plugin:** installing it from the marketplace works from a bare clone — its MCP server and hooks
-  run the published packages on demand via `npx` (`@cmnwlth/mcp`, `@cmnwlth/curate`), which pulls
-  `better-sqlite3`'s per-platform prebuilt binary transitively (#62). No platform-locked vendor.
-
-Building from source (the [Quickstart](./05-quickstart.md)) remains supported for development.
+  run the published packages on demand via `npx` (`@cmnwlth/mcp`, `@cmnwlth/curate`), which pull
+  `better-sqlite3`'s per-platform prebuilt binary transitively. Nothing platform-locked to commit.

@@ -163,10 +163,14 @@ commonwealth config set semanticDedup true   # smarter dedup (see below)
 
 ## Docs
 
-| Doc                                              | What it covers                                       |
-| ------------------------------------------------ | ---------------------------------------------------- |
-| [`docs/05-quickstart.md`](docs/05-quickstart.md) | Get a brain running for one project in minutes       |
-| [`docs/06-self-host.md`](docs/06-self-host.md)   | Share a brain across a team over your own git remote |
+| Doc                                                  | What it covers                                          |
+| ---------------------------------------------------- | ------------------------------------------------------- |
+| [`docs/05-quickstart.md`](docs/05-quickstart.md)     | Get a brain running for one project in minutes          |
+| [`docs/06-self-host.md`](docs/06-self-host.md)       | Share a brain across a team over your own git remote    |
+| [`docs/01-architecture.md`](docs/01-architecture.md) | How it works: git substrate, concurrency, the auto-bridge |
+| [`docs/02-data-model.md`](docs/02-data-model.md)     | The markdown schema: memory / decisions / work-state / people |
+| [`docs/03-distribution.md`](docs/03-distribution.md) | Distribution & auto-provisioning into Claude Code       |
+| [`docs/04-roadmap.md`](docs/04-roadmap.md)           | What's shipped and what's next                          |
 
 ## License
 
