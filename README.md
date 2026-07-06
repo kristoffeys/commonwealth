@@ -377,24 +377,6 @@ pnpm lint          # eslint
 pnpm format        # prettier --write
 ```
 
-### Cutting a release
-
-All `@cmnwlth/*` packages version in lockstep. `scripts/release.mjs` bumps **every**
-version-bearing file together — each `package.json`, plus the plugin's runtime pins
-(`@cmnwlth/mcp@X` / `@cmnwlth/curate@X`), `plugin.json`, and the marketplace listing (the last
-four are what a plain `changeset version` leaves behind).
-
-- **From the GitHub UI:** run the **Version & Release** workflow (Actions → Run workflow → pick
-  `patch`/`minor`/`major` or an explicit version). It bumps, gates on a green build, commits, tags
-  `vX.Y.Z`, pushes, and creates a GitHub Release. Then dispatch **Release** to publish to npm.
-- **Locally:**
-
-  ```bash
-  pnpm release:version minor --commit   # bump all files, commit, tag vX.Y.Z
-  git push --follow-tags                # the Release workflow publishes on the tag
-  pnpm release:sync                     # (maintenance) re-align plugin pins to the current version
-  ```
-
 Conventions and non-negotiable design principles live in
 [`CLAUDE.md`](CLAUDE.md); architecture decisions in [`docs/adr/`](docs/adr).
 
