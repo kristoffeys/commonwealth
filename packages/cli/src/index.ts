@@ -4,6 +4,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { defaultAddDeps, runAdd } from "./add.js";
+import {
+  cliVersion,
+  defaultUpdateDeps,
+  defaultUpdateNoticeDeps,
+  maybeNotifyUpdate,
+  runUpdate,
+} from "./update.js";
 import { cmdConfig, cmdReseed, delegateCurate, delegateSync } from "./commands.js";
 import { defaultOnboardDeps } from "./deps.js";
 import { defaultAskEnv, formatAsk, runAsk } from "./ask.js";
@@ -50,6 +57,19 @@ export { runAsk, defaultAskEnv, formatAsk } from "./ask.js";
 export type { AskEnv } from "./ask.js";
 export { runAdd, defaultAddDeps } from "./add.js";
 export type { AddOptions, AddDeps } from "./add.js";
+export {
+  cliVersion,
+  isNewer,
+  fetchLatestVersion,
+  detectInstallKind,
+  runUpdate,
+  defaultUpdateDeps,
+  maybeNotifyUpdate,
+  defaultUpdateCachePath,
+  defaultUpdateNoticeDeps,
+  CLI_PACKAGE,
+} from "./update.js";
+export type { UpdateDeps, UpdateNoticeDeps, InstallKind } from "./update.js";
 
 /** Print `commonwealth` usage to stderr. */
 function printUsage(): void {
@@ -78,6 +98,8 @@ function printUsage(): void {
       "  commonwealth scope     <show | allow <p> | deny <p> | check>   per-user capture scope",
       "  commonwealth recall    <query>                 search the brain",
       "  commonwealth ask       <question>              cited retrieval for a question (agent synthesizes)",
+      "  commonwealth update                            update the CLI to the latest published version",
+      "  commonwealth --version                         print the installed CLI version",
       "",
       "All commands resolve the brain from the registry for the current directory — no --dir needed.",
       "",
@@ -130,6 +152,12 @@ export async function run(argv: string[]): Promise<number> {
     return command === undefined ? 2 : 0;
   }
 
+  // Version is a stdout data contract (scripts do `commonwealth --version`), like git/node.
+  if (command === "--version" || command === "-v" || command === "version") {
+    process.stdout.write(`${cliVersion()}\n`);
+    return 0;
+  }
+
   // Unified subcommand surface (#93). `reseed`/`config` compose core+seed; the rest delegate to
   // the registry-aware curate/sync binaries (inheriting cwd, so they hit the mapped brain).
   switch (command) {
@@ -139,6 +167,8 @@ export async function run(argv: string[]): Promise<number> {
       return cmdInit(rest);
     case "add":
       return cmdAdd(rest);
+    case "update":
+      return runUpdate(defaultUpdateDeps());
     case "reseed":
       return cmdReseed(rest);
     case "config":
@@ -462,8 +492,15 @@ const isEntrypoint = (() => {
 })();
 
 if (isEntrypoint) {
-  run(process.argv.slice(2))
-    .then((code) => {
+  const argv = process.argv.slice(2);
+  run(argv)
+    .then(async (code) => {
+      // Passive update notice (#161), AFTER the command so it can't delay or reorder output.
+      // Pointless right after `update` or a bare version print; every other gate (TTY, CI,
+      // opt-out env, daily cache) lives in maybeNotifyUpdate itself.
+      if (!["update", "--version", "-v", "version"].includes(argv[0] ?? "")) {
+        await maybeNotifyUpdate(defaultUpdateNoticeDeps());
+      }
       process.exitCode = code;
     })
     .catch((err: unknown) => {

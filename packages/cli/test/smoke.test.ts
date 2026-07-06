@@ -22,6 +22,16 @@ describe("built commonwealth binary", () => {
     ).not.toThrow();
   });
 
+  it("`--version` prints the package version on stdout (#161)", async () => {
+    const pkg = JSON.parse(
+      await fs.readFile(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+    ) as { version: string };
+    for (const flag of ["--version", "-v", "version"]) {
+      const out = execFileSync("node", [distEntry, flag], { stdio: "pipe" }).toString().trim();
+      expect(out).toBe(pkg.version);
+    }
+  });
+
   it("dist entry has exactly one shebang", async () => {
     const content = await fs.readFile(distEntry, "utf8");
     const shebangs = content.split("\n").filter((l) => l.startsWith("#!"));

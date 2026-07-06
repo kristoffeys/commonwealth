@@ -96,7 +96,12 @@ commonwealth reject <id...>               # discard staged notes
 commonwealth sync start|stop|once         # control the background sync
 commonwealth health                       # freshness / trust score for the brain
 commonwealth doctor [--fix]               # diagnose (and optionally fix) the setup
+commonwealth update                       # update the CLI to the latest release
+commonwealth --version                    # print the installed CLI version
 ```
+
+The CLI checks npm at most once a day and prints a note on stderr when a newer version is
+published (TTY only, never in CI; set `COMMONWEALTH_NO_UPDATE_CHECK=1` to silence it).
 
 ### Capturing decisions
 
