@@ -3,8 +3,8 @@
 - Status: Accepted
 - Date: 2026-07-01
 - Deciders: kristof (owner), Claude (orchestrator)
-- Relates: [ADR-0002](0002-stack-and-layout.md), [ADR-0003](0003-concurrency-model.md),
-  [ADR-0005](0005-derived-index.md), [architecture](../01-architecture.md), issue #66
+- Relates: [ADR-0002](0002-implementation-stack.md), [ADR-0003](0003-concurrency-model.md),
+  [ADR-0005](0005-search-and-embeddings.md), [architecture](../01-architecture.md), issue #66
 
 ## Context
 

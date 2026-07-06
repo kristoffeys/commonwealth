@@ -148,8 +148,10 @@ product. It runs in four stages, wired into Claude Code lifecycle hooks + MCP.
 
 The concrete choices behind the above — embeddings (local-first, opt-in), the review-gate
 default, secret scanning, clone-on-demand access, and more — live as
-[Architecture Decision Records](adr/). Cross-brain graduation (project → org brain) is the main
-open thread; see the [roadmap](04-roadmap.md).
+[Architecture Decision Records](https://github.com/kristoffeys/commonwealth/tree/main/docs/adr).
+Cross-brain graduation (project → org brain) is the main open thread; see the
+[roadmap](https://github.com/kristoffeys/commonwealth/blob/main/docs/04-roadmap.md).
 
-See [`docs/02-data-model.md`](02-data-model.md) for the note schema and
-[`docs/03-distribution.md`](03-distribution.md) for how the plugin auto-provisions.
+See [the data model](02-data-model.md) for the note schema and
+[`docs/03-distribution.md`](https://github.com/kristoffeys/commonwealth/blob/main/docs/03-distribution.md)
+for how the plugin auto-provisions.

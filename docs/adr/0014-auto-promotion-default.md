@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-07-01
 - Deciders: kristof (owner), Claude (orchestrator)
-- Relates: [ADR-0007](0007-curation-and-review-queue.md), [ADR-0009](0009-brain-config-feature-flags.md),
+- Relates: [ADR-0007](0007-curation-review-gate.md), [ADR-0009](0009-brain-config-feature-flags.md),
   amends principle 4 in `CLAUDE.md`, issue-less (owner request)
 
 ## Context

@@ -7,7 +7,7 @@
 
 ## Context
 
-Commonwealth is open source by strategy (see [vision](../00-vision.md)) — OSS is the
+Commonwealth is open source by strategy (see the [README](../../README.md)) — OSS is the
 distribution and trust wedge. We must pick a license. The comparable cluster: GBrain
 (MIT), Dust (MIT), Mem0 (Apache-2.0), Cognee/Graphiti (Apache-2.0).
 

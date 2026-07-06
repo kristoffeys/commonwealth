@@ -10,6 +10,15 @@ copyright: Apache-2.0 licensed. Markdown is the source of truth.
 
 docs_dir: docs
 
+# The public site is end-user usage docs only. Internal material (ADRs, the
+# distribution/monetization strategy, the build roadmap) stays in the repo but is
+# excluded from the published build. requirements.txt is the site toolchain, not content.
+exclude_docs: |
+  adr/
+  03-distribution.md
+  04-roadmap.md
+  requirements.txt
+
 theme:
   name: material
   icon:

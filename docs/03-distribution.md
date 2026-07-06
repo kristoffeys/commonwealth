@@ -34,7 +34,7 @@ Sync daemon running  ──▶  SessionStart: pull + inject relevant context
 Claude Code supports **org-wide managed policy settings** (highest precedence in the config
 hierarchy). Reference the Commonwealth plugin (from the plugin marketplace / this repo) in your
 managed settings, and when a teammate's Claude Code reads the policy the plugin is present — no
-manual install. See [`packages/plugin/README.md`](../packages/plugin/README.md) for the exact
+manual install. See [`packages/plugin/README.md`](https://github.com/kristoffeys/commonwealth/blob/main/packages/plugin/README.md) for the exact
 `extraKnownMarketplaces` + `enabledPlugins` block.
 
 _Semi-_ automatic: first run still needs the user authenticated to the brain's git remote (their

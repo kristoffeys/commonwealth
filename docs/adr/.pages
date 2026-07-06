@@ -1,5 +1,0 @@
-# The ADR section: README first, then every ADR in numeric order (globbed).
-title: Decisions (ADRs)
-nav:
-  - README.md
-  - ...

@@ -4,7 +4,7 @@
 - Date: 2026-07-04
 - Deciders: kristof (owner), Claude (orchestrator)
 - Relates: [ADR-0003](0003-concurrency-model.md), [ADR-0005](0005-search-and-embeddings.md),
-  [ADR-0008](0008-scope-and-curation.md), issue #29
+  [ADR-0008](0008-curation-locality.md), issue #29
 
 ## Context
 

@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-07-02
 - Deciders: kristof (owner), Claude (orchestrator)
-- Relates: [ADR-0003](0003-concurrency-model.md), [ADR-0005](0005-derived-index.md),
+- Relates: [ADR-0003](0003-concurrency-model.md), [ADR-0005](0005-search-and-embeddings.md),
   [ADR-0011](0011-brain-wiring-global-registry.md), [data-model](../02-data-model.md), issue #90
 
 ## Context

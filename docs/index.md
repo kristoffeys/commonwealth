@@ -34,20 +34,14 @@ the door with whoever wrote it. Commonwealth is that layer, made multiplayer.
 - :material-rocket-launch: **[Quickstart](05-quickstart.md)**
   Get a brain running for one project in a couple of minutes, from npm.
 
-- :material-sitemap: **[Architecture](01-architecture.md)**
-  Git-as-substrate, the concurrency model (the crux), and the auto-bridge.
-
 - :material-file-tree: **[Data model](02-data-model.md)**
   The markdown/frontmatter schema for the four note kinds.
 
-- :material-source-branch: **[Distribution](03-distribution.md)**
-  Auto-provisioning into Claude Code; OSS plus monetization.
+- :material-sitemap: **[Architecture](01-architecture.md)**
+  Git-as-substrate, the concurrency model (the crux), and the auto-bridge.
 
 - :material-server: **[Self-host](06-self-host.md)**
   Run the whole thing on infrastructure you control.
-
-- :material-map-marker-path: **[Roadmap](04-roadmap.md)**
-  The phased plan (M0–M5), mapped to GitHub milestones.
 
 </div>
 
@@ -61,7 +55,7 @@ the door with whoever wrote it. Commonwealth is that layer, made multiplayer.
 4. **Curation is gated, and review-capable.** Auto-captured knowledge passes scope + dedup +
    secret gates before it reaches canon.
 
-Every significant decision is recorded as an **[Architecture Decision Record](adr/README.md)**.
+Every significant decision is recorded as an **[Architecture Decision Record](https://github.com/kristoffeys/commonwealth/tree/main/docs/adr)** in the repo.
 
 ---
 

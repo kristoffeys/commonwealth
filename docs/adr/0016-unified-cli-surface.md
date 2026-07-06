@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-07-02
 - Deciders: kristof (owner), Claude (orchestrator)
-- Relates: [ADR-0002](0002-stack-and-layout.md), [ADR-0012](0012-mcp-distribution-via-plugin.md),
+- Relates: [ADR-0002](0002-implementation-stack.md), [ADR-0012](0012-mcp-distribution-via-plugin.md),
   [ADR-0014](0014-auto-promotion-default.md), issue #93
 
 ## Context
