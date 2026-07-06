@@ -20,6 +20,14 @@ export {
   type Curator,
   type RejectedCandidate,
 } from "./curate.js";
+export {
+  graduateToOrgBrain,
+  DEFAULT_RECURRENCE_THRESHOLD,
+  RECURRENCE_LEXICAL_FLOOR,
+  type GraduateOptions,
+  type GraduationCandidate,
+  type GraduationResult,
+} from "./graduate.js";
 export { approve, approveAll, listPending, reject } from "./review.js";
 export { listStaged, stageNote, stagedAbsPath, stagingRoot } from "./staging.js";
 export { selectRelevant } from "./relevance.js";
