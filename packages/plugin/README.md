@@ -51,7 +51,7 @@ plugin marketplace. Add it and install (user scope / global — ADR-0012):
 
 ```bash
 claude plugin marketplace add kristoffeys/commonwealth
-claude plugin install commonwealth@cmnwlth
+claude plugin install commonwealth@commonwealth
 ```
 
 (Or point the marketplace at a local path / your fork / an internal mirror of this repo.)
@@ -79,7 +79,7 @@ marketplace and force-install the plugin:
     }
   },
   "enabledPlugins": {
-    "commonwealth@cmnwlth": true
+    "commonwealth@commonwealth": true
   }
 }
 ```
@@ -131,7 +131,7 @@ hand:
 3. **Register the brain** so it resolves: either drop a `.commonwealth/brain` marker in your
    project, add a `~/.commonwealth/registry.json` mapping, or `export COMMONWEALTH_BRAIN_DIR=/tmp/acme-brain`.
 4. **Install the plugin** (`claude plugin marketplace add <this repo>` → `claude plugin install
-commonwealth@cmnwlth`) and open Claude Code in an **in-scope** project directory.
+commonwealth@commonwealth`) and open Claude Code in an **in-scope** project directory.
 5. **SessionStart:** confirm the "Relevant from the team brain" block appears in context.
    In an **out-of-scope** dir (add it via `commonwealth-curate scope deny <dir>`), confirm
    nothing is injected.

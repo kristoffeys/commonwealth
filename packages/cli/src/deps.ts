@@ -151,6 +151,13 @@ export interface DefaultOnboardDepsOptions {
 /** The workspace packages whose `dist/index.js` must exist for the plugin to run standalone. */
 const REQUIRED_DIST_PACKAGES = ["core", "mcp", "sync", "curate", "seed", "cli"] as const;
 
+/**
+ * The public repo slug, used as the plugin-marketplace source when NOT running from a workspace
+ * checkout (#18): an npm-installed CLI has no checkout to add, and falling back to the user's
+ * own project repo would marketplace-add an unrelated directory.
+ */
+const PUBLIC_MARKETPLACE_REPO = "kristoffeys/commonwealth";
+
 /** True if the `<name>` executable resolves on the current PATH. */
 function hasExecutable(name: string): boolean {
   const probe = process.platform === "win32" ? "where" : "which";
@@ -331,10 +338,11 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
    * replacing the old raw local-scope `claude mcp add`. Steps, all best-effort and
    * idempotent, NONE throwing:
    *   a) refresh the vendored plugin bundle (so the plugin's vendor/ is up to date);
-   *   b) `claude plugin marketplace add <repoRoot>` — skipped if a `commonwealth` marketplace
-   *      is already configured (checked via `marketplace list`);
-   *   c) `claude plugin install commonwealth@cmnwlth` — skipped if already installed
-   *      (checked via `plugin list`);
+   *   b) `claude plugin marketplace add <source>` — the workspace checkout when running from
+   *      one, else the public GitHub repo (#18); skipped if a `commonwealth` marketplace is
+   *      already configured (checked via `marketplace list`);
+   *   c) `claude plugin install commonwealth@commonwealth` (plugin@marketplace, both named by
+   *      the repo's marketplace.json) — skipped if already installed (checked via `plugin list`);
    *   d) remove a STALE raw `commonwealth` MCP registration (`claude mcp remove -s local`) so
    *      it doesn't shadow the plugin's `commonwealth` server.
    * The brain is resolved per repo by the plugin + its SessionStart hook, so no brain dir is
@@ -353,9 +361,12 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
         log(`Plugin bundle exited with code ${res.status ?? "null"} (ignored).`);
     }
 
-    // (b) Register the repo as a marketplace unless a `commonwealth` marketplace already exists.
+    // (b) Register the marketplace unless a `commonwealth` marketplace already exists. From a
+    //     workspace checkout the checkout itself is the source (local iteration stays local);
+    //     otherwise (npm install) use the public repo.
     if (!hasClaudeEntry(["plugin", "marketplace", "list"], "commonwealth")) {
-      const add = spawnSync("claude", ["plugin", "marketplace", "add", repoRoot], {
+      const source = isWorkspace ? repoRoot : PUBLIC_MARKETPLACE_REPO;
+      const add = spawnSync("claude", ["plugin", "marketplace", "add", source], {
         stdio: "inherit",
       });
       if (add.error || add.status !== 0) {
@@ -366,9 +377,11 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
       }
     }
 
-    // (c) Install the plugin unless it is already installed.
+    // (c) Install the plugin unless it is already installed. The spec is plugin@marketplace;
+    //     BOTH are "commonwealth" per marketplace.json (the old `commonwealth@cmnwlth` spec
+    //     named a marketplace that never existed — #18).
     if (!hasClaudeEntry(["plugin", "list"], "commonwealth")) {
-      const install = spawnSync("claude", ["plugin", "install", "commonwealth@cmnwlth"], {
+      const install = spawnSync("claude", ["plugin", "install", "commonwealth@commonwealth"], {
         stdio: "inherit",
       });
       if (install.error || install.status !== 0) {

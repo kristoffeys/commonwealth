@@ -71,6 +71,13 @@ commonwealth init
 > session already open when you install won't see it until you restart. `/mcp` should then list
 > the `commonwealth` server.
 
+You can also install the Claude Code plugin directly — the repo is its own plugin marketplace:
+
+```bash
+claude plugin marketplace add kristoffeys/commonwealth
+claude plugin install commonwealth@commonwealth
+```
+
 Prefer to run non-interactively (CI, scripting)? Pass `--yes` to use defaults + flags:
 
 ```bash

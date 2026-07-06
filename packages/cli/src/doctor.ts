@@ -260,7 +260,7 @@ export async function diagnose(
             label: "Plugin",
             status: "warn",
             detail: "commonwealth plugin is not installed for this user.",
-            fix: "claude plugin marketplace add kristoffeys/commonwealth && claude plugin install commonwealth@cmnwlth",
+            fix: "claude plugin marketplace add kristoffeys/commonwealth && claude plugin install commonwealth@commonwealth",
           },
   );
 
