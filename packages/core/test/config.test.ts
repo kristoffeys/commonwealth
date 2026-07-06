@@ -24,21 +24,21 @@ afterEach(async () => {
 });
 
 describe("defaultBrainConfig", () => {
-  it("defaults autoAdr off", () => {
-    expect(defaultBrainConfig("x").features.autoAdr).toBe(false);
+  it("defaults autoAdr on (decisions are traced by default; ADR-0022)", () => {
+    expect(defaultBrainConfig("x").features.autoAdr).toBe(true);
   });
 });
 
 describe("brain config on a scaffolded brain", () => {
-  it("scaffolds config.json with features.autoAdr === false", async () => {
+  it("scaffolds config.json with features.autoAdr === true", async () => {
     await initBrain(dir, { name: "acme-brain" });
     const config = JSON.parse(await fs.readFile(brainConfigPath(dir), "utf8"));
-    expect(config.features.autoAdr).toBe(false);
+    expect(config.features.autoAdr).toBe(true);
   });
 
-  it("isFeatureEnabled is false by default", async () => {
+  it("isFeatureEnabled is true by default", async () => {
     await initBrain(dir);
-    expect(await isFeatureEnabled(dir, "autoAdr")).toBe(false);
+    expect(await isFeatureEnabled(dir, "autoAdr")).toBe(true);
   });
 
   it("setFeature persists and reloads", async () => {
@@ -54,7 +54,7 @@ describe("brain config on a scaffolded brain", () => {
 describe("loadBrainConfig resilience", () => {
   it("returns defaults without throwing when no config file exists", async () => {
     const config = await loadBrainConfig(dir); // fresh mkdtemp, no .commonwealth
-    expect(config.features.autoAdr).toBe(false);
+    expect(config.features.autoAdr).toBe(true);
     expect(config.remotes).toEqual([]);
     expect(config.curation).toEqual({});
     expect(config.name).toBe(path.basename(dir));
@@ -68,7 +68,8 @@ describe("loadBrainConfig resilience", () => {
       "utf8",
     );
     const config = await loadBrainConfig(dir);
-    expect(config.features.autoAdr).toBe(false);
+    // A key absent from the file is filled from defaults (autoAdr defaults on; ADR-0022).
+    expect(config.features.autoAdr).toBe(true);
   });
 
   it("preserves unknown feature keys and lets file values win", async () => {

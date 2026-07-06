@@ -51,8 +51,12 @@ export const FEATURE_FLAGS: ReadonlyArray<{
 }> = [
   {
     name: "autoAdr",
-    description: "Auto-create ADR/decision notes in the brain when a decision is captured",
-    default: false,
+    description:
+      "Record decision notes in the brain — both auto-detected decisions from a session and " +
+      "explicit ones logged via /commonwealth:decide. Default ON so every team keeps a trace of " +
+      "what was decided, when, by whom, and why. Set false to stop capturing decision notes in " +
+      "this brain entirely.",
+    default: true,
   },
   {
     name: "autoPromote",

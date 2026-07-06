@@ -29,7 +29,19 @@ const memoryCandidate = {
 };
 
 describe("autoAdr gate", () => {
-  it("rejects decisions with auto-adr-disabled when the flag is off (default)", async () => {
+  it("stages decisions by default (autoAdr defaults on; ADR-0022)", async () => {
+    const result = await curate(brainDir, [decisionCandidate, memoryCandidate]);
+
+    expect(result.rejected).toHaveLength(0);
+    expect(result.staged.map((n) => n.frontmatter.kind).sort()).toEqual(["decision", "memory"]);
+
+    const staged = await listStaged(brainDir);
+    expect(staged).toHaveLength(2);
+  });
+
+  it("rejects decisions with auto-adr-disabled once the flag is turned off", async () => {
+    await setFeature(brainDir, "autoAdr", false);
+
     const result = await curate(brainDir, [decisionCandidate, memoryCandidate]);
 
     expect(result.staged).toHaveLength(1);
@@ -44,16 +56,22 @@ describe("autoAdr gate", () => {
     expect(staged[0]?.frontmatter.kind).toBe("memory");
   });
 
-  it("stages decisions once autoAdr is enabled", async () => {
-    await setFeature(brainDir, "autoAdr", true);
+  it("records decision provenance — deciders + status — through the gate (the /decide path)", async () => {
+    const result = await curate(brainDir, [
+      {
+        kind: "decision",
+        title: "Use Postgres for the ledger",
+        body: "Chose Postgres over DynamoDB for the money ledger: we need multi-row transactions.",
+        fields: { deciders: ["ana", "wei"], status: "accepted" },
+      },
+    ]);
 
-    const result = await curate(brainDir, [decisionCandidate]);
-
-    expect(result.rejected).toHaveLength(0);
     expect(result.staged).toHaveLength(1);
-    expect(result.staged[0]?.frontmatter.kind).toBe("decision");
-
-    const staged = await listStaged(brainDir);
-    expect(staged.map((n) => n.frontmatter.id)).toContain(result.staged[0]?.frontmatter.id);
+    const fm = result.staged[0]?.frontmatter;
+    expect(fm?.kind).toBe("decision");
+    // who + when + status are traced; when (created) is stamped automatically.
+    expect(fm && "deciders" in fm ? fm.deciders : undefined).toEqual(["ana", "wei"]);
+    expect(fm && "status" in fm ? fm.status : undefined).toBe("accepted");
+    expect(fm?.created).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });

@@ -57,7 +57,8 @@ function usage(): void {
       "  commonwealth-curate approve <id...> [--dir <brain>]",
       "  commonwealth-curate reject <id...> [--dir <brain>]",
       "  commonwealth-curate approve-all [--dir <brain>]",
-      "  commonwealth-curate stage --kind <kind> --title <t> --body <b> [--tags a,b] [--dir <brain>]",
+      "  commonwealth-curate stage --kind <kind> --title <t> --body <b> [--tags a,b]",
+      "      [--deciders a,b] [--status <s>] [--dir <brain>]   (deciders/status: decisions)",
       "  commonwealth-curate context [--dir <brain>] [--cwd <dir>] [--query <q>] [--limit <n>]",
       "  commonwealth-curate capture [--dir <brain>] [--cwd <dir>] [--from <json-file>]",
       "  commonwealth-curate scope show",
@@ -117,13 +118,17 @@ async function cmdStage(dir: string, args: string[]): Promise<void> {
       title: { type: "string" },
       body: { type: "string" },
       tags: { type: "string" },
+      // Decision provenance (ADR-0022): who decided, and the decision's lifecycle status. Stored
+      // as kind-specific `fields` on the note (schema-validated); meaningful for `--kind decision`.
+      deciders: { type: "string" },
+      status: { type: "string" },
       // Tolerated here (handled by the top-level parser) so `--dir` doesn't error.
       dir: { type: "string" },
     },
     allowPositionals: false,
   });
 
-  const { kind, title, body, tags } = values;
+  const { kind, title, body, tags, deciders, status } = values;
   if (!kind || !title || !body) {
     throw new Error("stage requires --kind, --title and --body");
   }
@@ -131,18 +136,23 @@ async function cmdStage(dir: string, args: string[]): Promise<void> {
     throw new Error(`invalid --kind "${kind}"; expected one of: ${NOTE_KINDS.join(", ")}`);
   }
 
+  const csv = (s: string): string[] =>
+    s
+      .split(",")
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+
+  // Kind-specific frontmatter fields go in `fields`, validated against the schema on write.
+  const fields: Record<string, unknown> = {};
+  if (deciders) fields.deciders = csv(deciders);
+  if (status) fields.status = status;
+
   const candidate: NewNoteInput = {
     kind,
     title,
     body,
-    ...(tags
-      ? {
-          tags: tags
-            .split(",")
-            .map((t) => t.trim())
-            .filter((t) => t.length > 0),
-        }
-      : {}),
+    ...(tags ? { tags: csv(tags) } : {}),
+    ...(Object.keys(fields).length > 0 ? { fields } : {}),
   };
 
   const result = await curate(dir, [candidate]);
