@@ -1,28 +1,26 @@
 # Quickstart
 
-Get a Commonwealth brain running for one project in a couple of minutes. This is the
-from-source path — no published npm package or committed `vendor/` bundle required; you build
-the CLI locally and it just works.
+Get a Commonwealth brain running for one project in a couple of minutes, from npm.
 
 ## Prerequisites
 
-- **Node ≥ 22** and **pnpm** (`corepack enable` gives you pnpm).
-- **git** on your `PATH` (a brain _is_ a git repo).
-- Optionally, the `claude` CLI if you want automatic session capture via the plugin.
+- **Node ≥ 22** and **git** on your `PATH` (a brain _is_ a git repo).
+- Optionally, the `claude` CLI (Claude Code) for automatic session capture via the plugin.
 
-## 1. Build the CLI
+## 0. Try it with no setup (optional)
 
 ```bash
-git clone https://github.com/kristoffeys/commonwealth.git
-cd commonwealth
-pnpm install
-pnpm build          # build every package (tsup)
-pnpm link-cli       # put `commonwealth` on your PATH → ~/.local/bin/commonwealth
+npx @cmnwlth/cli demo
 ```
 
-`pnpm link-cli` writes a tiny wrapper that runs the built CLI from this checkout, so every
-`commonwealth <verb>` below works. Make sure `~/.local/bin` is on your `PATH`. Prefer not to
-link? Every command also runs as `node /path/to/commonwealth/packages/cli/dist/index.js <verb>`.
+Scaffolds a throwaway brain for a fictional team and answers questions whose answers live only in
+its notes, then cleans up after itself (`--keep` to poke around the files first).
+
+## 1. Install the CLI
+
+```bash
+npm i -g @cmnwlth/cli      # or run any command with: npx @cmnwlth/cli <command>
+```
 
 ## 2. Initialize a brain for your project
 
@@ -34,23 +32,24 @@ commonwealth init
 ```
 
 One idempotent command does the whole setup: creates a brain repo (a separate git repo under
-`~/.commonwealth/brains/<project>-<hash>`), registers this project → that brain, seeds it by
-mining your git history / ADRs / agent config into the review queue, installs the Commonwealth
-plugin (MCP + session hooks), starts the sync daemon, and ensures your per-user scope config
-exists. Re-run it anytime — it only does what's still missing. See the flags in
-`commonwealth init --help` (e.g. `--yes`, `--no-daemon`, `--no-seed`, `--brain <dir>`).
+`~/.commonwealth/brains/<project>`), registers this project → that brain, seeds it by mining your
+git history / ADRs / agent config into the review queue, installs the Commonwealth plugin (MCP +
+session hooks), starts the sync daemon, and ensures your per-user scope config exists. Re-run it
+anytime — it only does what's still missing. See the flags in `commonwealth init --help` (e.g.
+`--yes`, `--no-daemon`, `--no-seed`, `--brain <dir>`, `--remote <url>`).
 
 ## 3. Use it
 
-- **In a Claude Code session** in this project, the plugin injects relevant team-brain context
-  at session start and captures durable knowledge at session end (subject to the scope + curation
+- **In a Claude Code session** in this project, the plugin injects relevant team-brain context at
+  session start and captures durable knowledge at session end (subject to the scope + curation
   gates). Ask it something your project already knows.
 - **From the CLI**:
 
   ```bash
   commonwealth status        # review queue + sync-daemon state
-  commonwealth health        # freshness/trust score (stale / unverified / orphaned counts)
   commonwealth recall <q>    # search the brain
+  commonwealth ask <q>       # a cited answer synthesized from the brain
+  commonwealth health        # freshness/trust score (stale / unverified / orphaned counts)
   commonwealth pending       # notes awaiting review (when autoPromote is off)
   commonwealth promote --all # approve staged notes into canon
   ```
@@ -61,7 +60,7 @@ MCP client.
 ## What just happened
 
 - Your notes are **plain markdown** in the brain repo — the source of truth. Any index/DB is
-  derived and rebuildable (ADR-0003/0005).
+  derived and rebuildable.
 - Captured knowledge passes the **scope + dedup + secret gates** before it lands. By default
   (`autoPromote`) it goes straight to canon; set the flag off to require manual review.
 

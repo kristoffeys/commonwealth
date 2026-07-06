@@ -31,7 +31,7 @@ tags: [auth, security, acme]
 created: 2026-07-01
 author: kristof
 status: active # active | superseded | stale
-verified: 2026-07-01 # last time checked against reality (Kage-style)
+verified: 2026-07-01 # last time checked against reality
 sources: [decisions/2026-06-30-auth-jwt-vs-session-7c1e.md]
 relates: [[people/acme-security-lead]]
 ---
@@ -112,7 +112,7 @@ Waiting on Acme to confirm tax-rounding rule → [[people/acme-billing-lead]].
 ### `people/` — people-threads
 
 One file per person/relationship (teammate, client contact, vendor). The thread of
-context you'd want before emailing them. GBrain's people-graph, but team-shared.
+context you'd want before emailing them — a people-graph, team-shared.
 
 ```markdown
 ---
@@ -135,13 +135,13 @@ on our timeline in June — sensitive to scope creep.
 - **`id`** — equals the filename (minus `.md`); stable, collision-proof
   (`<date>-<slug>-<shortid>`). Never reused. Renames are discouraged (breaks links);
   supersede instead.
-- **Wikilinks `[[id]]`** — the graph. The curation agent extracts typed edges from these
-  (à la GBrain, zero-LLM where possible: `supersedes`, `relates`, `superseded_by`,
-  `deciders`). Backlinks are derived into the index.
+- **Wikilinks `[[id]]`** — the graph. Typed edges are extracted from these without an LLM
+  where possible (`supersedes`, `relates`, `superseded_by`, `deciders`). Backlinks are derived
+  into the index.
 - **`status` + supersede, never delete.** Knowledge is versioned by superseding, not
   destroying — git already keeps history; superseding keeps the _reasoning_ visible.
-- **`verified` / `stale`** — the curation agent stamps freshness. A brain that can't tell
-  fresh from stale rots (this is why we verify, Kage-style).
+- **`verified` / `stale`** — freshness is stamped during curation. A brain that can't tell
+  fresh from stale rots — which is why notes carry a freshness signal.
 - **`author` / `updated`** — provenance for trust and for the team feed.
 
 ## Derived artifacts (generated, gitignored or `merge=union`)

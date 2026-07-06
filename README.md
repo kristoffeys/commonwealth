@@ -1,415 +1,176 @@
 # Commonwealth — a multiplayer second brain for teams
 
-> It's the shared, agent-readable context substrate every
-> team member's AI reads _before_ it acts. Instant onboarding. Anti-bus-factor.
-> Plain markdown. Git-backed. Open source.
+> The shared, agent-readable context every teammate's AI reads _before_ it acts.
+> Instant onboarding. Anti-bus-factor. Plain markdown. Git-backed. Open source.
 
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) &nbsp;`v0.1.0` — published on npm as `@cmnwlth/*` (`npm i -g @cmnwlth/cli`).
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) &nbsp;Published on npm as `@cmnwlth/*`.
 
-Most teams have a personal-productivity story (`~/vault`, Obsidian, CLAUDE.md) and an
-enterprise-search story (Glean, Notion AI). Nothing in between owns the **reasoning
-layer** of a small team — the _why_ behind decisions, the current work-state, the
-threads with people, the memory that would otherwise walk out the door with whoever
-wrote it.
+Most teams have a personal-notes story (Obsidian, `CLAUDE.md`) and an enterprise-search story
+(Glean, Notion AI). Nothing in between owns the **reasoning layer** of a small team — the _why_
+behind decisions, the current work-state, the memory that would otherwise walk out the door with
+whoever wrote it.
 
 Commonwealth is that layer, made multiplayer:
 
-- **Plain markdown, git-backed.** Your knowledge is files you own, diffable and
-  portable. No proprietary store to be locked into or lose.
-- **Per-project brains.** Each project gets its own brain (one git repo). Members
-  read/write it through their existing AI (Claude Code first).
-- **Agent-native.** Exposed over MCP so any teammate's agent reads the brain before
-  acting and writes back what it learns.
-- **Conflict-free by design.** One fact per file with collision-proof names, so
-  concurrent writers union-merge instead of clobbering each other.
-- **Secrets never sync.** Credentials (API keys, tokens, private keys, `.env`-style
-  assignments) are detected and blocked at capture and scrubbed pre-commit. Opt into
-  high-entropy detection (with a per-brain allowlist) via `secretScan` in the brain config.
-- **Open source** (Apache-2.0). Distribution and trust wedge in a crowded market.
+- **Plain markdown, git-backed.** Your knowledge is files you own — diffable, portable, no
+  proprietary store to be locked into.
+- **Per-project brains.** Each project gets its own brain (one git repo). Everyone reads and
+  writes it through their existing AI (Claude Code first).
+- **Agent-native.** Exposed over MCP, so a teammate's agent reads the brain before acting and
+  writes back what it learns.
+- **Conflict-free by design.** One fact per file with collision-proof names, so concurrent
+  writers merge instead of clobbering each other.
+- **Decisions are traced.** What was decided, when, by whom, and why — captured by default.
+- **Secrets never sync.** API keys, tokens, and `.env`-style secrets are detected and blocked at
+  capture and scrubbed before commit.
+- **Open source**, Apache-2.0.
 
 ## How it fits together
 
 ```
-Claude Code ──MCP──▶ @cmnwlth/mcp ──▶ @cmnwlth/core ──▶  brain/  (markdown, git repo)
-                                          ▲                  │
- @cmnwlth/sync (resident daemon) ─────────┘   pull/commit/push ↕  remote (any git host)
-   watches the brain, syncs continuously, serializes writes, resolves conflicts as siblings
+Claude Code (every teammate)
+     │   reads before acting · writes back what it learns   (MCP)
+     ▼
+  your brain  =  plain markdown in a git repo
+     │   background sync: pull · commit · push · conflict-free merge
+     ▼
+  git remote (GitHub / GitLab / your own) — the team shares it
 ```
 
-## Install as a Claude Code plugin
+## Quick start
 
-The **supported install is the plugin** (ADR-0012). The `@cmnwlth/plugin` bundles the MCP
-server + lifecycle hooks and installs at **user scope (global)**, so the `commonwealth`
-tools (`search`/`read`/`remember`/…) and the auto-bridge are available in **every** session —
-not just the directory you installed from. A session auto-loads relevant brain context at start
-and captures learnings at end — **scope-gated** (personal projects excluded) and routed through
-the review queue.
+**Requirements:** Node ≥ 22 and git. Claude Code for the in-editor experience.
 
-Add this repo as a marketplace, then install the plugin:
-
-```bash
-claude plugin marketplace add kristoffeys/commonwealth   # or a path/fork/mirror of this repo
-claude plugin install commonwealth@cmnwlth
-```
-
-> **Then restart Claude Code and run `/mcp`.** Plugins only (re)load at session start, so a
-> session already running when you install will still show the plugin as "failed to load" —
-> restart, and `/mcp` should list the `commonwealth` server. Open a session inside a synced
-> project (e.g. one you ran `commonwealth init` in) and the right brain loads automatically.
-
-**Per-repo routing is dynamic.** There is no baked-in brain: the SessionStart hook resolves the
-real session cwd → its brain via the registry (ADR-0011), and the MCP server independently
-resolves its brain via `@cmnwlth/core.resolveBrainDir` — so one global install serves every
-repo and each session talks to the right brain. `commonwealth init` performs this install for you
-(and wires the registry mapping); it replaced the old raw local-scope `claude mcp add`, which was
-invisible outside its install dir and pinned one brain.
-
-For a team, an admin auto-provisions it to everyone via Claude Code **managed settings**
-(`extraKnownMarketplaces` + `enabledPlugins`) — see [`packages/plugin/README.md`](packages/plugin/README.md).
-The steps below wire the same pieces manually (à la carte).
-
-## Getting started
-
-**Requirements:** Node ≥ 22, git (plus [pnpm](https://pnpm.io) 10+ for the from-source path).
-
-### See it in 60 seconds (no setup)
+**See it in 60 seconds, no setup:**
 
 ```bash
 npx @cmnwlth/cli demo
 ```
 
-Scaffolds a throwaway brain for a fictional payments team and replays a few questions whose answers
-live only in that team's notes — recall over git-backed markdown, no account, no config. It cleans
-up after itself (`--keep` to poke around the files).
+Scaffolds a throwaway brain for a fictional payments team and answers a few questions whose
+answers live only in that team's notes. It cleans up after itself (`--keep` to poke around).
 
-Once published to npm (#49), install the CLI directly:
-
-```bash
-npm i -g @cmnwlth/cli      # then: commonwealth init
-# or run without installing:    npx @cmnwlth/cli init
-```
-
-Until the first release, build from source:
+**Set up a brain for your project — one command:**
 
 ```bash
-git clone https://github.com/kristoffeys/commonwealth.git
-cd Commonwealth
-pnpm install
-pnpm build            # build the CLI + all packages
-pnpm link-cli         # put `commonwealth` on your PATH (pre-npm wrapper → ~/.local/bin, #49)
-```
-
-> `pnpm link-cli` writes a tiny wrapper to `~/.local/bin/commonwealth` that runs the built CLI
-> from this repo, so every `commonwealth <verb>` below just works. Make sure `~/.local/bin` is
-> on your `PATH`. Prefer not to link? Every command also runs as
-> `node /path/to/Commonwealth/packages/cli/dist/index.js <verb>`.
-
-### One command: `commonwealth init`
-
-From the project you want a brain for, run **one** command. It is fully idempotent — run
-it again anytime, it only does what's still missing:
-
-```bash
+npm i -g @cmnwlth/cli     # or run any command with: npx @cmnwlth/cli <command>
+cd your-project
 commonwealth init
 ```
 
-`init` does the whole setup end to end:
+`init` is an interactive wizard (press Enter to accept each default). It:
 
-1. **Builds** the workspace if the `dist/` artifacts are missing (`pnpm -r build`).
-2. **Creates** a brain for this project (or **joins** the one it already belongs to).
-3. **Syncs** one or more folders into the brain: each is added to the capture allowlist and
-   wired to the brain in the **global user registry** (`~/.commonwealth/registry.json`), plus a
-   convenience `~/.commonwealth/brains/<name>` symlink so you can `ls`/`cd` your brains. (A
-   per-project `.commonwealth/brain` marker remains an optional manual override.)
-4. **Seeds** the brain from one or more repos — mining git history, ADRs, and agent config
-   (`CLAUDE.md` / `.cursorrules` / `AGENTS.md`) — into the review queue.
-5. **Installs** the Commonwealth plugin (global, user scope) — bundling the MCP server + the
-   scope-gated SessionStart/SessionEnd hooks — so every session reads/writes the brain and the
-   right brain is resolved per repo (ADR-0011/0012).
-6. **Starts** the sync daemon for the brain (detached).
-7. **Ensures** your per-user scope config exists at `~/.commonwealth/config.json` (an empty
-   `{ "allow": [], "deny": [] }` is created if it is missing) — so it is always present after
-   `init`, even if you skip the allowlist step or no folder ends up allow-listed.
+1. Creates a brain for this project — or **joins** the one it already belongs to.
+2. Lets you multi-select which folders to sync into the brain and which repos to **seed** from
+   (mining git history, ADRs, and agent config like `CLAUDE.md` / `.cursorrules` / `AGENTS.md`).
+3. Installs the Commonwealth **plugin** into Claude Code (MCP server + session hooks), so every
+   session reads and writes the right brain automatically.
+4. Starts the background **sync daemon** and sets up your capture scope.
 
-Run in a terminal, `init` is an **interactive wizard**: it asks each choice with a sensible
-default (press Enter to accept). After the brain directory it asks **which directory to scan
-for projects** (default: the parent of the current repo), discovers the git repos beneath it,
-and lets you **multi-select** which folders to _sync_ into the brain and which repos to _seed_
-from now (seed defaults to your sync selection). Selection accepts `all`, `none`, or a
-comma/space list of the numbered items; Enter keeps the defaults. If no repos are found it
-falls back to the current repo for both. It then asks whether to install the plugin, start the
-daemon, enable auto-ADR, and an optional brain git remote — then a final `Proceed?` before
-making any changes. Declining `Proceed?` prints `Aborted.` and changes nothing.
+> After install, **restart Claude Code and run `/mcp`** — plugins load at session start, so a
+> session already open when you install won't see it until you restart. `/mcp` should then list
+> the `commonwealth` server.
 
-Non-interactively (piped/CI, or with `--yes`) it never prompts: pass `--yes` to run with
-defaults + flags, or the run is a no-op that tells you to re-run in a terminal. Common flags:
+Prefer to run non-interactively (CI, scripting)? Pass `--yes` to use defaults + flags:
 
 ```bash
-init --yes                  # non-interactive; skip the wizard and all prompts (defaults + flags)
-init --brain <dir>          # where to create the brain (default: ~/.commonwealth/brains/<project>)
-init --sync <dir,dir,...>   # folders to sync into the brain (default: this repo)
-init --seed-repo <dir,...>  # repos to seed from now (default: the --sync folders)
-init --reseed               # re-seed even if this project already resolves to a brain
-init --auto-adr             # enable auto-ADR capture for the brain
-init --remote <url>         # add <url> as the brain's git origin remote
-init --no-scope             # skip adding folders to the capture allowlist
-init --no-seed              # create the brain but skip mining/staging candidates
-init --no-plugin            # skip installing the plugin (MCP + hooks); alias: --no-mcp
-init --no-daemon            # skip starting the sync daemon
-init --no-build             # skip the workspace build
+commonwealth init --yes --sync ~/work/app --seed-repo ~/work/app --remote git@github.com:you/brain.git
 ```
 
-`--sync` and `--seed-repo` both take a comma-separated list of directories, so a single
-`init --yes --sync ~/work/a,~/work/b --seed-repo ~/work/a` wires two folders into the brain
-and seeds from one of them.
+Then open a Claude Code session in the project and ask it something your team already knows.
 
-> Not yet published to npm — for now the tools run from the built `dist/` in this repo.
-> `commonwealth init` and the plugin's auto-provisioning already work from the built repo;
-> npm-published binaries are a later milestone (see the roadmap). When missing steps are
-> needed, `claude` and `pnpm` must be on `PATH`; if either is absent, `init` skips that
-> step with a note instead of failing.
+## Everyday use
 
-That's it — open a Claude Code session in the project and ask it something your team
-already knows. The rest of this section documents the pieces `init` wires up, in case you
-want to run or reconfigure them individually.
-
-### Everyday commands
-
-`init` is for onboarding; day-to-day you use `commonwealth <verb>`. Every command resolves the
-brain from the registry for the current directory — no `--dir`, no re-running `init` (ADR-0016):
+Once set up, talk to the brain through your AI in any session. The `commonwealth` CLI covers the
+rest — every command resolves the right brain from the current directory automatically:
 
 ```bash
-commonwealth reseed [<repo>...] [--all]   # mine repo(s) into the mapped brain and capture
-commonwealth config list                  # show the brain's config + feature flags
-commonwealth config set autoPromote false # e.g. require manual review before canon
 commonwealth status                       # review queue + sync-daemon state
-commonwealth doctor [--fix] [--json]      # diagnose the install/sync chain; --fix restarts a dead daemon
-commonwealth verify-restore [--from-remote]  # clone + prove full disaster recovery (CI gate)
-commonwealth emit [--commit]              # write brain context for Cursor/Copilot/Codex into this repo
-commonwealth sync start|stop|once         # control/run the sync daemon
+commonwealth recall <query>               # search the brain
+commonwealth ask <question>               # a cited answer, synthesized from the brain
+commonwealth reseed [<repo>] [--all]      # mine repo(s) into the brain again
 commonwealth pending                      # notes awaiting review
 commonwealth promote <id...> | --all      # approve staged notes into canon
 commonwealth reject <id...>               # discard staged notes
-commonwealth scope show|allow|deny|check  # per-user capture scope
-commonwealth recall <query>               # search the brain
-commonwealth ask <question>               # cited retrieval for a question (agent writes the answer)
+commonwealth sync start|stop|once         # control the background sync
+commonwealth health                       # freshness / trust score for the brain
+commonwealth doctor [--fix]               # diagnose (and optionally fix) the setup
 ```
-
-Tip: to review a bulk reseed instead of auto-landing it, `commonwealth config set autoPromote
-false` first, then `reseed`, then `pending` / `promote`.
 
 ### Capturing decisions
 
-Decisions are first-class. With `autoAdr` on (the default, ADR-0022) the brain records the
-decisions it detects in a session automatically; when you want to be sure a business/team
-decision is on the record — or log one that never touched a coding session — use the deliberate
-path from inside Claude Code:
+Decisions are first-class. Commonwealth records decisions it detects in a session automatically;
+to be sure a business or team decision is on the record — or to log one that never touched a
+coding session — use the deliberate path inside Claude Code:
 
 ```
 /commonwealth:decide  we're standardizing on Postgres for the ledger, not DynamoDB
 ```
 
-It writes a `decision` note through the normal curation gate and review queue, capturing **what**
-was decided, **when** (stamped), **who** decided (`deciders`), and **why** (the rationale and
-assumptions, in the body) — so reversals later *supersede* it rather than erase the reasoning.
-Turn the whole behavior off per brain with `commonwealth config set autoAdr false`.
+It writes a `decision` note capturing **what** was decided, **when**, **who** decided it, and
+**why** — so a later reversal *supersedes* it rather than erasing the reasoning.
 
-### 1. Create a brain (done by `init`)
+### Review vs. auto-promote
 
-A brain is just a git repository. `init` creates one under
-`~/.commonwealth/brains/<project>` (override with `--brain`). To scaffold one by hand
-instead, the four folders (`memory/ decisions/ work-state/ people/`) are created on first
-write:
+By default, captured notes go **straight into canon** after the dedup + secret gates. To hold
+them in a review queue for approval instead, flip the per-brain flag (it syncs with the brain):
 
 ```bash
-mkdir ~/my-brain && cd ~/my-brain && git init
-# optional: back it with a remote so teammates can share it
-git remote add origin git@github.com:you/my-brain.git
+commonwealth config set autoPromote false   # require manual review
+commonwealth pending                         # see what's waiting
+commonwealth promote <id...> | --all         # approve into canon
 ```
 
-### 2. Read/write the brain from Claude Code (MCP) (done by `init`)
+### Keep personal projects out (scope)
 
-`init` installs the plugin for you (global, user scope), which registers the
-`commonwealth` MCP server. To do it manually, add the marketplace and install the plugin:
-
-```bash
-claude plugin marketplace add kristoffeys/commonwealth
-claude plugin install commonwealth@cmnwlth
-```
-
-The server resolves its brain per repo via the registry (ADR-0011); to pin one brain for a
-one-off standalone run you can still `export COMMONWEALTH_BRAIN_DIR="$HOME/my-brain"` before
-launching Claude Code (it takes precedence). Then, in a Claude Code session, the brain is
-available through these tools:
-
-| Tool              | What it does                                               |
-| ----------------- | ---------------------------------------------------------- |
-| `search`          | full-text (FTS5) search over the brain                     |
-| `read`            | read a note by path                                        |
-| `remember`        | record a new note through the curation gate (secret + dedup + autoPromote) |
-| `list-work-state` | list active workstreams                                    |
-| `who-is`          | look up a person note                                      |
-
-### 3. Keep it synced (resident daemon) (done by `init`)
-
-`init` starts this daemon for you (detached). To run it yourself so local edits and
-teammates' changes converge continuously:
-
-```bash
-commonwealth sync start     # resident daemon for the brain mapped to this repo
-commonwealth sync once      # one-shot sync instead of resident
-commonwealth sync stop      # stop it; `commonwealth status` shows daemon state
-```
-
-Check whether the brain is decaying with the trust rollup:
-
-```bash
-commonwealth health         # freshness/trust score + stale / unverified / contradicted / orphaned counts
-commonwealth consolidate    # supersede cross-user near-duplicate canon notes (--dry-run to preview)
-```
-
-The daemon commits + pushes on change, pulls on a poll interval, rebuilds the search
-index, and — on a genuine same-file conflict — keeps **both** versions as sibling notes
-(never overwrites) with a conflict record for review.
-
-### 4. Auto-promotion (and optional review)
-
-By default (`autoPromote`, ADR-0014) captured notes promote **straight into canon** — the
-curation engine still dedupes near-identical notes, drops trivial ones, and scrubs secrets
-first; only the manual review step is skipped. Turn the per-brain flag off to hold captures
-in a `staging/` queue for approval instead. The flag lives in the brain's
-`.commonwealth/config.json`, so it syncs team-wide:
-
-```bash
-commonwealth config set autoPromote false   # require manual review for this brain
-commonwealth pending                        # what's awaiting review
-commonwealth promote <id...> | --all        # approve into canon
-commonwealth reject  <id...>                # discard
-```
-
-Automatic capture at session end and relevance-gated injection at session start are wired
-by the plugin (see above).
-
-### 5. Keep personal projects out of the brain (scope)
-
-A **per-user, local** allow/deny list decides which project folders are in scope. Only
-sessions whose folder is in scope are ever captured or injected — personal projects stay
-out. It lives in `~/.commonwealth/config.json` (overridable via `$COMMONWEALTH_CONFIG`) and
-is never synced. `commonwealth init` always ensures this file exists (creating an empty
-`{ "allow": [], "deny": [] }` if missing), so it is present even when no folder is allow-listed.
+A per-user, local allow/deny list decides which folders are ever captured or injected — personal
+projects stay out. It lives in `~/.commonwealth/config.json` and is never synced.
 
 ```bash
 commonwealth scope allow ~/work          # only capture work under here…
 commonwealth scope deny  ~/work/secret   # …except this (deny wins)
 commonwealth scope check                 # → in-scope | out-of-scope (for the cwd)
-commonwealth scope show
 ```
 
-Rule: in scope if `(allow is empty OR under an allow entry) AND under no deny entry`.
-Default (no config) = everything in scope; add a deny (or a narrow allow) to exclude.
-
-## Seed the brain from your repo (cold-start)
-
-A fresh brain shouldn't be empty. Seeding is part of `commonwealth init` (see [Getting
-started](#one-command-commonwealth-init)): it detects your repo, mines its existing
-knowledge (git history — merged PRs + notable commits — ADRs, and agent-config like
-`CLAUDE.md` / `.cursorrules` / `AGENTS.md`), previews what it found, and on confirm captures
-the candidates. With `autoPromote` on (the default) they land in canon; with it off they
-stage into the review queue. Pass `--no-seed` to create the brain without mining.
-
-A teammate running `init` where a brain already exists **joins** it instead of re-seeding
-(TTFV ≈ 0 — they clone an already-full brain). To re-mine a repo into an existing brain
-later, use the unified verb:
-
-```bash
-commonwealth reseed          # mine the current repo into its mapped brain and capture
-commonwealth reseed --all    # mine every git repo found under the cwd
-commonwealth pending         # review the candidates (if autoPromote is off)
-```
-
-With `autoPromote` on (default) captures — including seeded mines — land in canon after the
-dedup/validation/secret gates. Set the per-brain `autoPromote` flag to `false` to route
-everything through the `staging/` review queue first (ADR-0014).
+Rule: in scope if `(allow is empty OR under an allow entry) AND under no deny entry`. With no
+config, everything is in scope; add a deny (or a narrow allow) to exclude.
 
 ## Configuration
 
-Commonwealth keeps a few files under `~/.commonwealth/` and one inside each brain,
-deliberately separate:
+Commonwealth keeps a few small files, deliberately separate:
 
-| File                                | Scope                 | Synced?           | Holds                                                            |
-| ----------------------------------- | --------------------- | ----------------- | --------------------------------------------------------------- |
-| `~/.commonwealth/config.json`       | per-user, per-machine | no                | the folder **scope** allow/deny (above)                         |
-| `~/.commonwealth/registry.json`     | per-user, per-machine | no                | **brain routing**: `prefix → brain` mappings (resolver layer 3) |
-| `~/.commonwealth/brains/<name>`     | per-user, per-machine | no                | convenience **symlink** to each brain dir (for `ls`/`cd`)       |
-| `<brain>/.commonwealth/config.json` | shared with the brain | yes (in the repo) | brain **name**, remotes, and global **feature flags**           |
+| File                                | Scope        | Synced? | Holds                                                  |
+| ----------------------------------- | ------------ | ------- | ------------------------------------------------------ |
+| `~/.commonwealth/config.json`       | per-user     | no      | the folder **scope** allow/deny                        |
+| `~/.commonwealth/registry.json`     | per-user     | no      | **brain routing**: which directory maps to which brain |
+| `<brain>/.commonwealth/config.json` | in the brain | yes     | brain **name**, remotes, and **feature flags**         |
 
-`registry.json` is the default source of truth for which brain a directory maps to — written
-by `init` for every synced folder. A per-project `.commonwealth/brain` marker file resolves
-ahead of the registry when you need to pin one project explicitly (an optional manual override).
-
-Brain-level **feature flags** are toggled with the CLI and sync with the brain:
+Team-wide **feature flags** live in the brain config and are toggled with the CLI:
 
 ```bash
-commonwealth config list                    # show name, remotes, and all feature flags
+commonwealth config list                     # name, remotes, and all flags
 commonwealth config set autoAdr false        # opt a brain OUT of decision tracking
+commonwealth config set semanticDedup true   # smarter dedup (see below)
 ```
 
-`autoAdr` (default **on**, ADR-0022): the brain records **decision** notes — both decisions
-auto-detected from a session and ones logged deliberately via [`/commonwealth:decide`](#capturing-decisions),
-so there's a durable trace of **what** was decided, **when**, **by whom** (`deciders`), and **why**
-(the body). They still pass the curation gate, review queue, and scope filter. Set it `false` to
-stop capturing decision notes in a brain entirely.
-
-`semanticDedup` (default **off**, ADR-0021): when on, the curation gate also catches
-near-duplicate notes phrased differently ("auth uses JWT" vs "we authenticate with bearer
-tokens") using embeddings, alongside the lexical check — with it off, behavior is unchanged and
-no embedder is loaded. Vectors live in the disposable index, never synced. The provider is
-`local` by default (on-machine; no note text leaves the box) and needs the optional model
-package installed on the host — enabling `local` without it prints how to add it; set
-`embeddings.provider` to `hosted` (an opt-in API that receives your note text) or `none` in
-`.commonwealth/config.json`. Contradiction detection is a separate follow-up.
-
-```bash
-commonwealth config set semanticDedup true   # opt in per team (syncs with the brain)
-```
-
-## Packages
-
-| Package           | Status | What it is                                                                                                  |
-| ----------------- | ------ | ----------------------------------------------------------------------------------------------------------- |
-| `@cmnwlth/core`   | ✅     | Schema (4 note kinds), atomic note IO, brain scaffold, FTS5 index (+ opt-in embeddings vectors) + derived `COMMONWEALTH.md`/`INDEX.md` |
-| `@cmnwlth/mcp`    | ✅     | MCP server exposing a brain to Claude Code (`commonwealth-mcp`)                                                  |
-| `@cmnwlth/sync`   | ✅     | Resident sync daemon + engine: git pull/commit/push, write queue, conflict-as-siblings (`commonwealth-sync`)     |
-| `@cmnwlth/curate` | ✅     | Curation (dedupe/relevance) + in-repo review queue + per-user scope filter; drives the plugin's capture/inject hooks |
-| `@cmnwlth/plugin` | ✅     | Claude Code plugin: MCP + scope-gated SessionStart/SessionEnd hooks + /commonwealth commands + auto-provisioning |
-| `@cmnwlth/seed`   | ✅     | Cold-start seeding: git-history miner + agent-config importer → candidate notes (`commonwealth-seed`)            |
-| `@cmnwlth/cli`    | ✅     | The unified `commonwealth` CLI — `init` onboarding wizard (detect → preview → confirm → seed, + join mode)       |
-
-## Development
-
-```bash
-pnpm build         # build all packages (tsup)
-pnpm typecheck     # tsc --noEmit across packages
-pnpm test          # vitest
-pnpm lint          # eslint
-pnpm format        # prettier --write
-```
-
-Conventions and non-negotiable design principles live in
-[`CLAUDE.md`](CLAUDE.md); architecture decisions in [`docs/adr/`](docs/adr).
+- **`autoAdr`** (default **on**) — records decision notes (auto-detected and via
+  `/commonwealth:decide`). Set false to stop tracking decisions in a brain entirely.
+- **`autoPromote`** (default **on**) — captured notes land in canon directly; set false to
+  require manual review.
+- **`semanticDedup`** (default **off**) — also catch near-duplicate notes phrased differently
+  ("auth uses JWT" vs "we authenticate with bearer tokens"), using embeddings. Runs on-machine by
+  default (no note text leaves the box) and needs an optional model package installed on enable.
 
 ## Docs
 
-| Doc                                                  | What it covers                                                            |
-| ---------------------------------------------------- | ------------------------------------------------------------------------- |
-| [`docs/05-quickstart.md`](docs/05-quickstart.md)     | Get a brain running for one project in minutes (from source)              |
-| [`docs/06-self-host.md`](docs/06-self-host.md)       | Share a brain across a team over your own git remote; per-brain config    |
-| [`docs/01-architecture.md`](docs/01-architecture.md) | Git-as-substrate, the concurrency model (the crux), sync daemon, curation |
-| [`docs/02-data-model.md`](docs/02-data-model.md)     | The markdown schema: memory / decisions / work-state / people-threads     |
-| [`docs/03-distribution.md`](docs/03-distribution.md) | Auto-provisioning into Claude, OSS + monetization                         |
-| [`docs/04-roadmap.md`](docs/04-roadmap.md)           | Phased build plan and open questions                                      |
-| [`docs/adr/`](docs/adr)                              | Architecture Decision Records                                             |
-
+| Doc                                                  | What it covers                                          |
+| ---------------------------------------------------- | ------------------------------------------------------- |
+| [`docs/05-quickstart.md`](docs/05-quickstart.md)     | Get a brain running for one project in minutes          |
+| [`docs/06-self-host.md`](docs/06-self-host.md)       | Share a brain across a team over your own git remote    |
+| [`docs/01-architecture.md`](docs/01-architecture.md) | How it works: git substrate, concurrency, the auto-bridge |
+| [`docs/02-data-model.md`](docs/02-data-model.md)     | The markdown schema: memory / decisions / work-state / people |
+| [`docs/03-distribution.md`](docs/03-distribution.md) | Distribution & auto-provisioning into Claude Code       |
+| [`docs/04-roadmap.md`](docs/04-roadmap.md)           | What's shipped and what's next                          |
 
 ## License
 

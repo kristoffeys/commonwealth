@@ -17,8 +17,8 @@ The whole system rests on three decisions, in order of how much they define the 
 ## 1. Git is the substrate
 
 The brain _is_ a git repository of markdown. No proprietary store is the source of
-truth. This is the ownership/portability guarantee and the thing that separates us from
-basic-memory (cloud), Mem0/Cognee/Zep (opaque index), and Notion (block DB).
+truth — that is the ownership and portability guarantee: your knowledge stays in files you
+own, not an opaque index or a block database you can't leave.
 
 - **One repo per project brain.** `acme-brain`, `internal-brain`, etc. A team may also
   have an `org-brain` for cross-project knowledge. (Monorepo-of-brains is a later option;
@@ -47,9 +47,9 @@ acme-brain/                      # a git repo = one project's brain
 
 ## 2. Concurrency: design it out
 
-Concurrency is where every competitor is weakest (basic-memory mtime-wins overwrites;
-whole-file rewriters like Cline are merge-conflict-prone; GBrain is single-player). We
-don't want to _win_ merge conflicts — we want to **not have them**.
+Concurrency is where most shared-memory tools are weakest — mtime-wins overwrites,
+whole-file rewrites that conflict, or simply being single-player. We don't want to _win_
+merge conflicts — we want to **not have them**.
 
 Three mechanisms, in priority order:
 
@@ -82,8 +82,8 @@ those:
   acquire → pull/rebase → apply → push, with retry. This is the "queueing mechanism"
   from the brief, scoped down to only where it's actually needed (same-file edits),
   not every write.
-- On genuine conflict, **never silently overwrite** (basic-memory's sin). Write both
-  versions as sibling notes and file a `conflict:` curation task for review.
+- On genuine conflict, **never silently overwrite**. Write both versions as sibling notes
+  and file a `conflict:` curation task for review.
 
 **Net:** ~all writes are new atomic files (conflict-free unions); indexes are derived
 (no manual merges); only same-file edits touch the queue, and even those degrade to a
@@ -107,13 +107,13 @@ product. It runs in four stages, wired into Claude Code lifecycle hooks + MCP.
 - The agent proposes candidate memories from the session (decisions made, gotchas
   learned, work-state changes). Two paths: explicit MCP `remember` calls during the
   session, and an end-of-session sweep that drafts notes.
-- Candidates land in a **staging area** (`memory/_staging/`), not straight into canon.
+- Candidates land in a **staging area** (`staging/`), not straight into canon.
 
-### Curate (curation agent, runs on staging + nightly)
+### Curate (curation gate, runs on staging + nightly)
 
-- **Dedupe** against existing notes (embedding + entity match).
-- **Verify** where possible — Kage's best idea: check memory against reality (e.g. a
-  claim about code vs. the actual code). Mark `verified:` / `stale:`.
+- **Dedupe** against existing notes — lexical, plus optional embeddings (`semanticDedup`).
+- **Verify** where possible — check memory against reality (e.g. a claim about code vs. the
+  actual code). Mark `verified:` / `stale:`.
 - **Contradiction check** — flag notes that conflict with canon; open a review task.
 - **Relevance gate** — score whether a candidate is worth committing/sharing at all
   (avoid junk accumulation). Low-value → drop; high-value → promote.
@@ -144,18 +144,12 @@ product. It runs in four stages, wired into Claude Code lifecycle hooks + MCP.
 | **Claude Code plugin** | Bundles MCP server config + lifecycle hooks (SessionStart pull+inject, Stop capture) + the brain registry. The auto-provisioning unit (see distribution). |
 | **Brain registry**     | Maps a working directory / project → its brain repo(s), so the plugin mounts the right brain automatically.                                               |
 
-## Open architectural questions
+## Decisions of record
 
-- **Embeddings for the derived index** — local model vs. hosted? (Ownership argues local
-  or pluggable.)
-- **Review gate default** — PR-per-promotion vs. a lighter in-repo review queue for
-  high-trust small teams? Probably configurable per brain.
-- **Relevance-gated injection** budget — how much context to inject at SessionStart
-  without blowing the window. Needs a ranking + token budget.
-- **Cross-brain knowledge** — when does something graduate from a project brain to the
-  org brain? Manual promotion vs. curation-agent suggestion.
-- **Secrets hygiene** — brains will tempt people to paste credentials. Need a
-  pre-commit scrubber / secret scanner in the daemon.
+The concrete choices behind the above — embeddings (local-first, opt-in), the review-gate
+default, secret scanning, clone-on-demand access, and more — live as
+[Architecture Decision Records](adr/). Cross-brain graduation (project → org brain) is the main
+open thread; see the [roadmap](04-roadmap.md).
 
 See [`docs/02-data-model.md`](02-data-model.md) for the note schema and
 [`docs/03-distribution.md`](03-distribution.md) for how the plugin auto-provisions.
