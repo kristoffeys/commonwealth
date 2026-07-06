@@ -1,15 +1,18 @@
 # 21. Embeddings: opt-in local-first semantic dedup, vectors in the derived index
 
-- Status: Proposed
-- Date: 2026-07-05
-- Deciders: kristof (owner) — _pending acceptance_; Claude (orchestrator, proposer)
+- Status: Accepted
+- Date: 2026-07-05 (accepted 2026-07-06)
+- Deciders: kristof (owner); Claude (orchestrator, proposer)
 - Relates: [ADR-0005](0005-search-and-embeddings.md) (pluggable embeddings later),
   [ADR-0003](0003-concurrency-model.md) (derived index is disposable),
   [ADR-0007](0007-curation-review-gate.md)/[ADR-0008](0008-curation-locality.md) (the gates),
   [ADR-0009](0009-brain-config-feature-flags.md) (feature flags), issue #107
 
-> Proposal for the owner to accept or amend. It fills in the concrete design ADR-0005 deferred; it
-> changes no behavior until the feature flag is turned on.
+> Fills in the concrete design ADR-0005 deferred. It changes no behavior until the `semanticDedup`
+> feature flag is turned on. One refinement was made during implementation (see the note on the
+> local provider in decision 2): the local model package is not even an `optionalDependencies`
+> entry — it is installed by the team only on enable — so the base install pulls nothing extra at
+> all, which is a stronger version of the light-install guarantee than "optional dependency".
 
 ## Context
 
@@ -36,13 +39,19 @@ cost — nor send their brain to a hosted API by default (the ownership thesis).
 
 2. **`Embedder` interface + config-selected provider.** `embed(texts: string[]) =>
    Promise<Float32Array[]>`. Providers:
-   - **`local` (recommended default when enabled):** a small sentence-embedding model loaded via an
-     **optional dependency** — declared `optionalDependencies` / dynamically imported, so it is
-     installed and downloaded **only when the feature is enabled**. The base install stays light and
-     offline; no note text leaves the machine.
-   - **`hosted` (opt-in adapter):** a hosted embeddings API, selected only by explicit config, with
-     the config surface stating plainly that note text is sent to that provider. Never a default.
-   - **`none` (the default):** no embedder; today's lexical-only behavior, unchanged.
+   - **`local` (the provider default once the flag is on):** a small sentence-embedding model
+     (`Xenova/all-MiniLM-L6-v2`, ~384-dim) loaded by **dynamically importing a package that is NOT
+     a dependency of Commonwealth at all** — not even `optionalDependencies`. The team installs it
+     on the host only when it turns the feature on; absent, `embedProvider` throws an actionable
+     "install it or switch provider" error. The base install pulls nothing extra; no note text
+     leaves the machine.
+   - **`hosted` (opt-in adapter):** an OpenAI-compatible embeddings API (`{ data: [{ embedding }] }`),
+     selected only by explicit `embeddings.provider: "hosted"` + `endpoint` config, with the config
+     surface stating plainly that note text is sent to that provider. Never a default. No new
+     runtime dependency — it uses the platform `fetch`.
+   - **`none`:** no embedder; today's lexical-only behavior. The *effective* default is this,
+     guaranteed by the `semanticDedup` flag being off (decision 5) — so a fresh brain never loads
+     an embedder regardless of the stored `provider` value.
 
 3. **Vectors live in the derived SQLite index — no second datastore.** A `vectors(id, dim, vec)`
    table in the existing gitignored index (ADR-0003/0005): disposable, rebuilt from markdown,
@@ -50,10 +59,15 @@ cost — nor send their brain to a hosted API by default (the ownership thesis).
    is hundreds–low-thousands of notes, so O(n) per candidate is fine and adds **no native vector
    store** (no sqlite-vec/LanceDB) to maintain or ship.
 
-4. **Gate wiring.** When enabled, curation embeds the candidate, finds the nearest **canon** note by
-   cosine, and treats `>= threshold` as a near-duplicate — feeding the *existing* dedup outcome
-   (skip / supersede), **augmenting, not replacing** the Jaccard gate (lexical still runs; either
-   can flag a dup). Consolidation (ADR-0017) can use the same signal for cross-user near-dupes.
+4. **Gate wiring.** `buildIndex` populates the `vectors` table for all canon notes when the flag is
+   on (embedding is best-effort — a misconfigured/absent provider logs and yields a vector-free
+   build rather than breaking the rebuild, and hence search/sync). When curating, the gate embeds
+   only the **candidate**, cosines it against the stored **canon** vectors, and treats
+   `>= threshold` (default **0.85**) as a near-duplicate — feeding the *existing* dedup outcome,
+   **augmenting, not replacing** the Jaccard gate (lexical still runs first; either can flag a dup).
+   An empty/stale vector set simply no-ops to lexical-only (a missed dup, never a crash — the same
+   staleness contract the lexical FTS index already has). Consolidation (ADR-0017) can use the same
+   signal for cross-user near-dupes.
 
 5. **Off by default, via a feature flag** (`semanticDedup`, ADR-0009). Flag off ⇒ no embedder is
    loaded, no model downloaded, behavior byte-identical to today. This is the ADR-0005 "local-first,
@@ -84,14 +98,24 @@ cost — nor send their brain to a hosted API by default (the ownership thesis).
 - **Ship contradiction detection in this ADR.** Rejected: cosine can't reliably tell disagreement
   from similarity; high false-positive `contradicted` tags would erode trust. Separate follow-up.
 
-## Implementation sketch (non-binding, if accepted)
+## Implementation (as shipped)
 
-1. `@cmnwlth/core`: `Embedder` interface + a `none` no-op; a `vectors` table in the index schema
-   with cosine helpers; an `embedProvider(config)` selector.
-2. Optional `local` provider package/module (dynamic import of the model lib) behind
-   `optionalDependencies`; `hosted` provider behind config.
-3. `@cmnwlth/curate`: when `semanticDedup` is on, add the cosine-nearest-canon check alongside the
-   Jaccard dedup in the curation gate + consolidation.
-4. `semanticDedup` feature flag (default off) in brain config; `commonwealth config` toggles it.
-5. Tests: dedup catches a paraphrase the lexical gate misses; flag-off path loads no embedder and is
-   unchanged; vectors rebuild from markdown; cosine correctness.
+1. `@cmnwlth/core` (`embed.ts`): `Embedder` interface, pure `cosineSimilarity`, and an
+   `embedProvider(config.embeddings)` selector (`none` → null, `local` → dynamic import, `hosted` →
+   `fetch` adapter). `index-db.ts` gains a `vectors(id, dim, vec)` table (rebuilt in the same
+   single transaction as the FTS table) plus `loadVectors(brainDir)`; `buildIndex(brainDir, { embedder })`
+   embeds all notes up front (async, outside the sync transaction) and stores them.
+2. `local` provider dynamically imports `@xenova/transformers` (not a declared dependency) with an
+   actionable error when absent; `hosted` posts to a config-set endpoint via the platform `fetch`.
+3. `@cmnwlth/curate` (`curate.ts`): when `semanticDedup` is on, embed the candidate and reject it as
+   a `duplicate` if cosine to any canon vector ≥ `embeddings.threshold`, alongside the Jaccard gate.
+   The embedder is injectable (tests) and resolved from config in production; any failure degrades
+   to lexical-only.
+4. `semanticDedup` feature flag (default off) + an `embeddings` block (`provider`/`threshold`/…) in
+   brain config; `commonwealth feature enable semanticDedup` toggles the master switch.
+5. Tests: dedup catches a paraphrase the lexical gate misses (with a deterministic stand-in
+   embedder, no model download in CI); flag-off path loads no embedder and is unchanged; empty
+   vectors no-op rather than false-reject; vectors round-trip and rebuild from markdown; cosine and
+   provider-selection correctness.
+
+Contradiction detection remains out of scope (decision 1) — its own follow-up.

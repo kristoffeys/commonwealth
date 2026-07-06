@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { EmbeddingsConfig } from "./embed.js";
 import { SCHEMA_VERSION } from "./schema.js";
 import type { ScanOptions } from "./secrets.js";
 
@@ -25,6 +26,12 @@ export interface BrainConfig {
    * known false positives to suppress. Off + empty by default (preserves the zero-FP default).
    */
   secretScan: { entropy: boolean; allowlist: string[] };
+  /**
+   * Embeddings settings for semantic dedup (ADR-0021). Inert unless the `semanticDedup` feature
+   * flag is on; then `provider` picks how vectors are produced (`local` on-machine by default,
+   * `hosted` opt-in, `none` to disable). See {@link EmbeddingsConfig}.
+   */
+  embeddings: EmbeddingsConfig;
 }
 
 /** Build the {@link ScanOptions} for the secret scanner from a brain's config (#46). */
@@ -55,7 +62,21 @@ export const FEATURE_FLAGS: ReadonlyArray<{
       "skipped (ADR-0014). Set false to require manual /commonwealth:promote.",
     default: true,
   },
+  {
+    name: "semanticDedup",
+    description:
+      "Embeddings-backed semantic dedup in the curation gate (ADR-0021): catch near-duplicate " +
+      "notes phrased differently, alongside the lexical check. Off by default; when on, uses the " +
+      "embeddings.provider (local on-machine by default). Enabling `local` needs the optional " +
+      "model package installed on the host.",
+    default: false,
+  },
 ];
+
+/** Default embeddings config (ADR-0021): local provider, inert until `semanticDedup` is on. */
+export function defaultEmbeddingsConfig(): EmbeddingsConfig {
+  return { provider: "local", threshold: 0.85 };
+}
 
 /** Build the default `features` map from {@link FEATURE_FLAGS} (each flag at its default). */
 function defaultFeatures(): Record<string, boolean> {
@@ -78,6 +99,7 @@ export function defaultBrainConfig(name: string): BrainConfig {
     curation: {},
     features: defaultFeatures(),
     secretScan: { entropy: false, allowlist: [] },
+    embeddings: defaultEmbeddingsConfig(),
   };
 }
 
@@ -148,6 +170,28 @@ export async function loadBrainConfig(brainDir: string): Promise<BrainConfig> {
       ...(typeof obj.features === "object" && obj.features !== null ? obj.features : {}),
     },
     secretScan: normalizeSecretScan(obj.secretScan, defaults.secretScan),
+    embeddings: normalizeEmbeddings(obj.embeddings, defaults.embeddings),
+  };
+}
+
+/** Coerce a config file's `embeddings` block into the typed shape, falling back per field. */
+function normalizeEmbeddings(raw: unknown, fallback: EmbeddingsConfig): EmbeddingsConfig {
+  if (typeof raw !== "object" || raw === null) return fallback;
+  const obj = raw as Partial<EmbeddingsConfig>;
+  const provider =
+    obj.provider === "none" || obj.provider === "local" || obj.provider === "hosted"
+      ? obj.provider
+      : fallback.provider;
+  const threshold =
+    typeof obj.threshold === "number" && Number.isFinite(obj.threshold)
+      ? obj.threshold
+      : fallback.threshold;
+  return {
+    provider,
+    threshold,
+    ...(typeof obj.model === "string" ? { model: obj.model } : {}),
+    ...(typeof obj.endpoint === "string" ? { endpoint: obj.endpoint } : {}),
+    ...(typeof obj.apiKeyEnv === "string" ? { apiKeyEnv: obj.apiKeyEnv } : {}),
   };
 }
 
