@@ -102,6 +102,7 @@ commonwealth promote <id...> | --all      # approve staged notes into canon
 commonwealth reject <id...>               # discard staged notes
 commonwealth sync start|stop|once         # control the background sync
 commonwealth health                       # freshness / trust score for the brain
+commonwealth graduate [--suggest]         # propose facts recurring across ≥2 brains to the org-brain
 commonwealth doctor [--fix]               # diagnose (and optionally fix) the setup
 commonwealth update                       # update the CLI to the latest release
 commonwealth --version                    # print the installed CLI version
@@ -133,6 +134,21 @@ commonwealth config set autoPromote false   # require manual review
 commonwealth pending                         # see what's waiting
 commonwealth promote <id...> | --all         # approve into canon
 ```
+
+### Graduate shared knowledge to an org-brain
+
+When the same fact recurs across several project brains — a convention, a shared-infra rule — it
+can **graduate** to an _org-brain_ everyone reads. Graduation is opt-in and safe by default:
+
+```bash
+commonwealth org-brain set ~/brains/org   # designate the org-brain (once, per machine)
+commonwealth graduate --suggest           # scan wired brains; stage recurring facts for review
+```
+
+A note is only ever considered when it carries `graduate: true`, and even then it must recur
+across **≥2 distinct brains** to be proposed. Candidates are **staged for manual review** in the
+org-brain (with `sources:` back-links to where they came from) — never auto-promoted across the
+trust boundary, regardless of any brain's `autoPromote`. See [ADR-0023](docs/adr/0023-org-brain-graduation.md).
 
 ### Keep personal projects out (scope)
 

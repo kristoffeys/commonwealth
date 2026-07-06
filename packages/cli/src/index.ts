@@ -95,6 +95,7 @@ function printUsage(): void {
       "  commonwealth emit      [--commit]              write brain context for Cursor/Copilot/Codex into this repo",
       "  commonwealth health                            freshness/trust rollup for the brain",
       "  commonwealth consolidate  [--dry-run]          supersede near-duplicate canon notes",
+      "  commonwealth graduate  [--suggest] [--dry-run]  promote knowledge recurring across ≥2 brains to the org-brain",
       "  commonwealth sync      <start | stop | once>   control/run the sync daemon",
       "  commonwealth pending                           list notes awaiting review",
       "  commonwealth promote   <id...> | --all         approve staged notes into canon",
@@ -198,6 +199,8 @@ export async function run(argv: string[]): Promise<number> {
       return delegateCurate(["health"]);
     case "consolidate":
       return delegateCurate(["consolidate", ...rest]);
+    case "graduate":
+      return delegateCurate(["graduate", ...rest]);
     case "pending":
       return delegateCurate(["list"]);
     case "promote":

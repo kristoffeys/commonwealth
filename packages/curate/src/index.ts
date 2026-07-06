@@ -14,6 +14,7 @@ import {
 } from "@cmnwlth/core";
 import { captureCandidates } from "./capture.js";
 import { consolidateCanon } from "./consolidate.js";
+import { graduateToOrgBrain } from "./graduate.js";
 import { formatContext } from "./context.js";
 import { curate } from "./curate.js";
 import { selectRelevant } from "./relevance.js";
@@ -67,6 +68,7 @@ function usage(): void {
       "  commonwealth-curate scope deny <path>",
       "  commonwealth-curate health [--dir <brain>]",
       "  commonwealth-curate consolidate [--dry-run] [--dir <brain>]",
+      "  commonwealth-curate graduate [--suggest] [--dry-run] [--threshold <n>] [--org-dir <brain>]",
       "  commonwealth-curate feature list [--dir <brain>]",
       "  commonwealth-curate feature enable <name> [--dir <brain>]",
       "  commonwealth-curate feature disable <name> [--dir <brain>]",
@@ -416,6 +418,54 @@ async function cmdConsolidate(dir: string, args: string[]): Promise<void> {
 }
 
 /**
+ * `graduate [--suggest] [--dry-run] [--threshold <n>] [--org-dir <brain>]` — org-brain graduation
+ * (#110): scan every wired project brain for opted-in notes that recur across ≥2 brains and stage
+ * a candidate into the org-brain for manual review. Unlike other subcommands it resolves NO single
+ * brain from cwd — it locates the org-brain (from `--org-dir` or the registry pointer) and
+ * enumerates the rest itself. `--suggest` is accepted for ergonomics (the only mode is suggest).
+ */
+async function cmdGraduate(args: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      suggest: { type: "boolean" },
+      "dry-run": { type: "boolean" },
+      threshold: { type: "string" },
+      "org-dir": { type: "string" },
+    },
+    allowPositionals: false,
+  });
+  const threshold = values.threshold !== undefined ? Number(values.threshold) : undefined;
+  if (threshold !== undefined && (Number.isNaN(threshold) || threshold <= 0 || threshold > 1)) {
+    console.error("[commonwealth-curate] graduate: --threshold must be a number in (0, 1]");
+    process.exitCode = 1;
+    return;
+  }
+  const result = await graduateToOrgBrain({
+    dryRun: values["dry-run"] === true,
+    ...(threshold !== undefined ? { threshold } : {}),
+    ...(typeof values["org-dir"] === "string" ? { orgBrainDir: values["org-dir"] } : {}),
+  });
+  if (result.skipped) {
+    console.error(`[commonwealth-curate] graduate skipped: ${result.skipped}`);
+    return;
+  }
+  for (const s of result.skippedBrains) {
+    console.error(`[commonwealth-curate] graduate: skipped brain ${s.brain}: ${s.reason}`);
+  }
+  const verb = values["dry-run"] ? "would stage" : "staged";
+  console.error(
+    `[commonwealth-curate] ${result.clusters} cross-brain cluster(s); ${verb} ` +
+      `${values["dry-run"] ? result.candidates.length : result.staged.length} candidate(s)` +
+      (result.rejected.length > 0 ? `; ${result.rejected.length} rejected by gate` : ""),
+  );
+  // stdout: one line per candidate — `<kind>  <title>  <- src1, src2` — composable with other tools.
+  for (const c of result.candidates) {
+    console.log(`${c.kind}\t${c.title}\t<- ${c.sources.join(", ")}`);
+  }
+}
+
+/**
  * `commonwealth-curate` CLI entry (ADR-0007). Diagnostics go to stderr; approved/staged paths
  * and ids go to stdout so they compose with other tools. NO shebang here — tsup's banner
  * supplies it; a source shebang would break the built binary.
@@ -473,6 +523,10 @@ async function main(): Promise<void> {
       break;
     case "consolidate":
       await cmdConsolidate(await requireBrain(), rest);
+      break;
+    case "graduate":
+      // No requireBrain(): graduate locates the org-brain + wired brains itself.
+      await cmdGraduate(rest);
       break;
     default:
       usage();
