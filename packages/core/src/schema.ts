@@ -52,6 +52,14 @@ const baseShape = {
    * (ADR-0015). Optional: pre-existing and non-project notes are "unattributed".
    */
   source: z.string().optional(),
+  /**
+   * Opt-in marker that this note may **graduate** to the org-brain — the audience-widening,
+   * cross-trust-boundary promotion of knowledge that recurs across ≥2 project brains (ADR-0023,
+   * #168, #110). Absent/`false` means the note stays in its repo; only `graduate: true` makes it
+   * eligible, and even then it is staged for manual review, never auto-promoted. Optional and
+   * additive — a note without it is simply never a graduation candidate (no schema-version bump).
+   */
+  graduate: z.boolean().optional(),
   /** Wikilink targets (`[[id]]` or bare id) to related notes. */
   relates: z.array(z.string()).default([]),
 };

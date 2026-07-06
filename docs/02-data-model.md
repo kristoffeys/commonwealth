@@ -143,6 +143,10 @@ on our timeline in June — sensitive to scope creep.
 - **`verified` / `stale`** — freshness is stamped during curation. A brain that can't tell
   fresh from stale rots — which is why notes carry a freshness signal.
 - **`author` / `updated`** — provenance for trust and for the team feed.
+- **`graduate`** — opt-in marker (`graduate: true`) that a note may be promoted to the
+  org-brain, the audience-widening promotion of knowledge that recurs across ≥2 project brains
+  (ADR-0023). Absent/`false` keeps the note in its repo. Strictly opt-in and even then staged for
+  manual review — graduation never leaves a repo silently.
 
 ## Derived artifacts (generated, gitignored or `merge=union`)
 

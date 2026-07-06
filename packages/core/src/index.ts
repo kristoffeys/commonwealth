@@ -1,4 +1,5 @@
 export * from "./schema.js";
+export * from "./graduate-policy.js";
 export * from "./embed.js";
 export * from "./config.js";
 export * from "./ids.js";
