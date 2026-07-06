@@ -145,4 +145,19 @@ describe("built commonwealth binary", () => {
     const res = spawnSync("node", [distEntry, "frobnicate"], { stdio: "pipe" });
     expect(res.status).not.toBe(0);
   });
+
+  it("runs when invoked through a symlink, like an npm-installed global bin", async () => {
+    // npm bins are symlinks; the ESM loader realpaths import.meta.url while argv[1] stays
+    // the link, so a naive entrypoint guard never fires and every command silently exits 0.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cw-bin-"));
+    const link = path.join(dir, "commonwealth");
+    try {
+      await fs.symlink(distEntry, link);
+      const res = spawnSync("node", [link, "frobnicate"], { stdio: "pipe" });
+      expect(res.status).not.toBe(0);
+      expect(res.stderr.toString()).toContain("Usage");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });

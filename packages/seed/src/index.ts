@@ -1,3 +1,5 @@
+import { realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { gatherCandidates } from "./seed.js";
 
@@ -93,8 +95,17 @@ export async function run(argv: string[]): Promise<number> {
   return 0;
 }
 
-const isEntrypoint =
-  process.argv[1] !== undefined && import.meta.url === new URL(`file://${process.argv[1]}`).href;
+// npm installs bins as symlinks while the ESM loader resolves import.meta.url to the
+// realpath, so argv[1] must be realpath'd before comparing or the guard never matches.
+const isEntrypoint = (() => {
+  const argv1 = process.argv[1];
+  if (argv1 === undefined) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(argv1)).href;
+  } catch {
+    return false;
+  }
+})();
 
 if (isEntrypoint) {
   run(process.argv.slice(2))
