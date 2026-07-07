@@ -637,7 +637,20 @@ function resolveRegistryPath() {
   return path.join(os.homedir(), ".commonwealth", "registry.json");
 }
 
-async function loadRegistryMappings(registryPath) {
+/** Parse a `defaultBrain`/brain-pointer field: bare string or `{ brain, remote }`; null otherwise. */
+function parseBrainField(raw) {
+  if (typeof raw === "string" && raw.length > 0) return { brain: raw };
+  if (raw && typeof raw === "object" && typeof raw.brain === "string" && raw.brain.length > 0) {
+    return { brain: raw.brain, ...(typeof raw.remote === "string" ? { remote: raw.remote } : {}) };
+  }
+  return null;
+}
+
+/**
+ * Load the registry's rules, defaultBrain, and legacy mappings (ADR-0024). Null on missing/corrupt.
+ * Mirror of core's registry parsing (kept in sync with packages/core/src/registry.ts).
+ */
+async function loadRegistryData(registryPath) {
   const raw = await readFileOrNull(registryPath);
   if (raw === null) return null;
   let parsed;
@@ -646,20 +659,136 @@ async function loadRegistryMappings(registryPath) {
   } catch {
     return null;
   }
-  const mappings =
-    parsed && typeof parsed === "object" && Array.isArray(parsed.mappings) ? parsed.mappings : [];
-  return mappings.filter(
-    (m) =>
-      m && typeof m === "object" && typeof m.prefix === "string" && typeof m.brain === "string",
-  );
+  if (!parsed || typeof parsed !== "object") return null;
+  const mappings = Array.isArray(parsed.mappings)
+    ? parsed.mappings.filter(
+        (m) =>
+          m && typeof m === "object" && typeof m.prefix === "string" && typeof m.brain === "string",
+      )
+    : [];
+  const rules = Array.isArray(parsed.rules)
+    ? parsed.rules.filter((r) => r && typeof r === "object" && (r.repo || r.org || r.prefix))
+    : [];
+  return { mappings, rules, defaultBrain: parseBrainField(parsed.defaultBrain) };
+}
+
+/** Reduce a git remote URL to `owner/repo` (mirror of core's slugFromRemote, ADR-0015). */
+function slugFromRemote(remote) {
+  let s = remote.trim().replace(/\.git$/i, "");
+  s = s.replace(/^[a-z]+:\/\//i, "").replace(/^[^@]+@/, "");
+  s = s.replace(/^[^/:]+[:/]/, "");
+  const parts = s.split("/").filter((p) => p.length > 0);
+  return parts.length === 0 ? null : parts.slice(-2).join("/");
 }
 
 /**
- * Resolve the brain for `startDir`: (1) nearest `.commonwealth/brain` marker whose target
- * exists (a dangling marker is skipped so it falls through, #68) → (2) nearest ancestor that
- * is itself a brain (`.commonwealth/schema-version`, #74) → (3) user registry prefix mapping →
- * (4) `$COMMONWEALTH_BRAIN_DIR` → (5) null. Pure fs/path; never throws. Exported for tests so
- * the real resolution path is covered (not just injected fakes).
+ * The cwd's git identity (`owner/repo` from `origin`) for `repo`/`org` rule matching (ADR-0024).
+ * Uses a single `git config` call so worktrees and clones resolve correctly — a worktree's `.git`
+ * is a file pointing at the main repo, where `origin` lives, and git handles that transparently.
+ * Falls back to the repo-root / cwd basename, mirroring core's `resolveProjectSource`. Called
+ * lazily — only when an identity rule is present — so path-only registries never invoke git.
+ */
+async function gitOriginSlug(startDir) {
+  let root = null;
+  for (const dir of walkUp(startDir)) {
+    try {
+      await fs.stat(path.join(dir, ".git"));
+      root = dir;
+      break;
+    } catch {
+      // no .git here — keep walking up
+    }
+  }
+  if (root === null) return path.basename(startDir);
+  const res = await run("git", ["-C", root, "config", "--get", "remote.origin.url"], {
+    timeoutMs: 3000,
+  });
+  const url = res.code === 0 ? res.stdout.trim() : "";
+  const slug = url.length > 0 ? slugFromRemote(url) : null;
+  return slug ?? path.basename(root);
+}
+
+// --- Rule engine (mirror of core registry.ts matchRules; ADR-0024) --------------------
+const TIER_REPO = 4;
+const TIER_ORG = 3;
+const TIER_PREFIX = 2;
+const TIER_STAR = 1;
+
+function ruleIsCatchAll(rule) {
+  return rule.repo === "*" || rule.org === "*" || rule.prefix === "*";
+}
+
+/** Highest-tier matcher of `rule` that matches `(start, slug)`, or null. Mirror of core scoreRule. */
+function scoreRule(rule, start, slug) {
+  if (ruleIsCatchAll(rule)) return { tier: TIER_STAR, len: 0 };
+  let tier = 0;
+  let len = 0;
+  if (rule.repo && slug && slug.toLowerCase() === rule.repo.toLowerCase()) {
+    tier = TIER_REPO;
+    len = rule.repo.length;
+  }
+  if (tier < TIER_ORG && rule.org) {
+    const owner = rule.org.replace(/\/\*$/, "").toLowerCase();
+    const slugOwner = slug && slug.includes("/") ? (slug.split("/")[0] ?? "").toLowerCase() : "";
+    if (slugOwner && slugOwner === owner) {
+      tier = TIER_ORG;
+      len = owner.length;
+    }
+  }
+  if (tier < TIER_PREFIX && rule.prefix) {
+    const p = expandPath(rule.prefix);
+    if (isUnder(start, p)) {
+      tier = TIER_PREFIX;
+      len = p.length;
+    }
+  }
+  return tier > 0 ? { tier, len } : null;
+}
+
+/**
+ * Evaluate the ruleset for `(start, slug)`. Returns `{ matched, brain }`: `matched:false` = no rule
+ * matched (caller falls through to env); `matched:true` with a `brain` path = routed; `matched:true,
+ * brain:null` = a deny, or a bare allow with no default brain — a matched no-op that STOPS
+ * resolution (never falls through to the env brain). Most-specific wins; deny breaks ties.
+ */
+function matchRulesJs(start, slug, rules, defaultBrain) {
+  let best = null;
+  for (const rule of rules) {
+    const m = scoreRule(rule, start, slug);
+    if (!m) continue;
+    if (
+      !best ||
+      m.tier > best.tier ||
+      (m.tier === best.tier && m.len > best.len) ||
+      (m.tier === best.tier && m.len === best.len && rule.deny === true && best.rule.deny !== true)
+    ) {
+      best = { tier: m.tier, len: m.len, rule };
+    }
+  }
+  if (!best) return { matched: false, brain: null };
+  const { rule } = best;
+  if (rule.deny) return { matched: true, brain: null };
+  if (rule.brain) return { matched: true, brain: expandPath(rule.brain) };
+  if (defaultBrain) return { matched: true, brain: expandPath(defaultBrain.brain) };
+  return { matched: true, brain: null };
+}
+
+/** Legacy mappings folded in as prefix rules, appended after explicit rules (ADR-0024 §7). */
+function combinedRulesJs(reg) {
+  const legacy = reg.mappings.map((m) => ({
+    prefix: m.prefix,
+    brain: m.brain,
+    ...(m.remote ? { remote: m.remote } : {}),
+  }));
+  return [...reg.rules, ...legacy];
+}
+
+/**
+ * Resolve the brain for `startDir`: (1) nearest valid `.commonwealth/brain` marker (#68) →
+ * (2) nearest ancestor that is itself a brain (#74) → (3) the unified ruleset (ADR-0024: rules +
+ * folded legacy mappings; most-specific wins, deny → no capture) → (4) `$COMMONWEALTH_BRAIN_DIR`
+ * → (5) null. Returns null for a denied cwd so the hook skips capture there. Mirror of core's
+ * `resolveBrain`; never throws. Exported for tests so the real resolution path is covered.
  */
 export async function realResolveBrainDir(startDir) {
   if (typeof startDir !== "string" || startDir.length === 0) return null;
@@ -680,12 +809,20 @@ export async function realResolveBrainDir(startDir) {
   for (const dir of walkUp(start)) {
     if (await isFile(path.join(dir, BRAIN_IDENTITY_REL))) return dir;
   }
-  const mappings = await loadRegistryMappings(resolveRegistryPath());
-  if (mappings) {
-    for (const m of mappings) {
-      if (isUnder(start, expandPath(m.prefix))) return expandPath(m.brain);
+
+  const reg = await loadRegistryData(resolveRegistryPath());
+  if (reg) {
+    const rules = combinedRulesJs(reg);
+    if (rules.length > 0) {
+      // Resolve git identity once, and only when an identity rule could use it (path-only is cheap).
+      const needsSlug = rules.some((r) => (r.repo && r.repo !== "*") || (r.org && r.org !== "*"));
+      const slug = needsSlug ? await gitOriginSlug(start) : null;
+      const m = matchRulesJs(start, slug, rules, reg.defaultBrain);
+      // A matched rule STOPS resolution — brain path when routed, null for deny / undestined allow.
+      if (m.matched) return m.brain;
     }
   }
+
   const env = process.env.COMMONWEALTH_BRAIN_DIR;
   if (env && env.length > 0) return path.resolve(env);
   return null;

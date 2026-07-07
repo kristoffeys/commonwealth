@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveProjectSource } from "./source.js";
 
 /**
  * The brain registry (issue #14): resolve which brain repo a given working directory maps
@@ -47,8 +48,69 @@ export interface ResolvedBrain {
   remote?: string;
 }
 
+/**
+ * One rule in the unified ruleset (ADR-0024). A rule has exactly one **matcher** and one
+ * **outcome**.
+ *
+ * Matchers (precedence tier, most-specific first): `repo` (exact `owner/repo`) > `org`
+ * (`owner/*` or `owner`) > `prefix` (a `~`-expandable path prefix; longest wins within the tier)
+ * > the catch-all. `repo`/`org` are matched against {@link resolveProjectSource} (a cwd's git
+ * `origin` reduced to a slug, ADR-0015), so they follow a repo across worktrees, clones, and
+ * machines — which path prefixes cannot. Any matcher field whose value is `"*"` is the catch-all
+ * (matches everything, lowest precedence).
+ *
+ * Outcomes: `brain` routes here; `deny: true` means "never capture here" (wins on a
+ * specificity tie); neither (a **bare allow**) routes to the registry's {@link Registry.defaultBrain}.
+ */
+export interface Rule {
+  /** Exact `owner/repo` identity match (case-insensitive), or `"*"` for the catch-all. */
+  repo?: string;
+  /** Owner match: `"owner/*"` or `"owner"` (case-insensitive), or `"*"` for the catch-all. */
+  org?: string;
+  /** Path-prefix match (`~`-allowed); a `cwd` under it matches. `"*"` is the catch-all. */
+  prefix?: string;
+  /** Route matched cwds here (`~`-allowed). Omitted on a deny rule or a bare allow. */
+  brain?: string;
+  /** When true, matched cwds are out of scope — never captured. Wins over an allow on a tie. */
+  deny?: boolean;
+  /** Git remote for {@link brain}'s clone-on-demand (ADR-0019). */
+  remote?: string;
+  /**
+   * `"local"` (this machine only, never synced — the default) vs `"shared"` (may live with the
+   * brain and propagate to teammates). Personal denies stay `local`. Reserved for the shared-vs-local
+   * work (ADR-0024 §5); parsed and preserved but not yet acted on.
+   */
+  origin?: "local" | "shared";
+}
+
+/**
+ * The outcome of resolving a working directory against the unified ruleset (ADR-0024). Unlike
+ * {@link ResolvedBrain} (`brain | null`), this distinguishes an explicit **deny** (a rule said
+ * "out of scope here") from **none** (nothing matched) — the two feed different hook receipts.
+ * This three-way result IS the scope gate: `brain` = in scope for that brain, `denied` = out of
+ * scope, `none` = nothing configured here.
+ */
+export type BrainResolution =
+  { kind: "brain"; brain: string; remote?: string } | { kind: "denied" } | { kind: "none" };
+
 /** Shape of the user registry JSON file (`~/.commonwealth/registry.json`). */
 export interface Registry {
+  /**
+   * The unified ruleset (ADR-0024): match by git identity or path → brain / deny / default.
+   * Preferred going forward. Optional (absent on legacy files); when present it is evaluated
+   * alongside {@link mappings} (each legacy mapping folds in as an equivalent `prefix` rule).
+   */
+  rules?: Rule[];
+  /**
+   * The brain a *matched* rule routes to when it names no `brain` (a bare allow). NOT a catch-all
+   * for unmatched directories — an unmatched cwd still resolves to `none`, so a default brain never
+   * turns on capture-everywhere (that is an explicit `*` rule). ADR-0024 §4.
+   */
+  defaultBrain?: ResolvedBrain;
+  /**
+   * Legacy `prefix → brain` mappings (ADR-0011, superseded by ADR-0024). Still read and folded
+   * into resolution as `prefix` rules so every existing install keeps working with zero migration.
+   */
   mappings: RegistryMapping[];
   /**
    * The org-brain for this user: the shared brain that cross-brain knowledge graduates *up* to
@@ -145,6 +207,53 @@ function resolveRegistryPath(explicit?: string): string {
 type RegistryLoad =
   { status: "ok"; registry: Registry } | { status: "missing" } | { status: "corrupt"; raw: string };
 
+/**
+ * Validate one raw rule (ADR-0024). Returns a clean {@link Rule} or null. A rule must have at
+ * least one non-empty string matcher (`repo` / `org` / `prefix`); the outcome fields (`brain`,
+ * `deny`, `remote`, `origin`) are copied only when well-typed. Never throws.
+ */
+function parseRule(raw: unknown): Rule | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const str = (v: unknown): string | undefined =>
+    typeof v === "string" && v.length > 0 ? v : undefined;
+
+  const repo = str(r.repo);
+  const org = str(r.org);
+  const prefix = str(r.prefix);
+  if (!repo && !org && !prefix) return null; // no matcher → not a usable rule
+
+  const rule: Rule = {};
+  if (repo) rule.repo = repo;
+  if (org) rule.org = org;
+  if (prefix) rule.prefix = prefix;
+  const brain = str(r.brain);
+  if (brain) rule.brain = brain;
+  if (r.deny === true) rule.deny = true;
+  const remote = str(r.remote);
+  if (remote) rule.remote = remote;
+  if (r.origin === "local" || r.origin === "shared") rule.origin = r.origin;
+  return rule;
+}
+
+/**
+ * Parse a `defaultBrain` / brain-pointer field that may be a bare string (`"~/brain"`) or a
+ * `{ brain, remote }` object. Returns a {@link ResolvedBrain} (path kept as-written, expanded by
+ * callers) or null when nothing usable is present. Never throws.
+ */
+function parseResolvedBrainField(raw: unknown): ResolvedBrain | null {
+  if (typeof raw === "string" && raw.length > 0) return { brain: raw };
+  if (raw && typeof raw === "object") {
+    const o = raw as Record<string, unknown>;
+    if (typeof o.brain === "string" && o.brain.length > 0) {
+      const rb: ResolvedBrain = { brain: o.brain };
+      if (typeof o.remote === "string" && o.remote.length > 0) rb.remote = o.remote;
+      return rb;
+    }
+  }
+  return null;
+}
+
 /** Read + classify the registry file. Never throws; distinguishes missing from corrupt. */
 async function readRegistryFile(registryPath: string): Promise<RegistryLoad> {
   const raw = await readFileOrNull(registryPath);
@@ -175,6 +284,22 @@ async function readRegistryFile(registryPath: string): Promise<RegistryLoad> {
     }
   }
   const registry: Registry = { mappings: clean };
+
+  // Parse the unified ruleset (ADR-0024) with the same defensive discipline: skip any malformed
+  // rule rather than throwing, so a partial hand-edit degrades to "fewer rules", never a crash.
+  if (Array.isArray((obj as Registry).rules)) {
+    const rules: Rule[] = [];
+    for (const r of (obj as Registry).rules as unknown[]) {
+      const rule = parseRule(r);
+      if (rule) rules.push(rule);
+    }
+    if (rules.length > 0) registry.rules = rules;
+  }
+  // The default brain: a bare string (`"~/brain"`) or a `{ brain, remote }` object; anything else
+  // is dropped.
+  const defaultBrain = parseResolvedBrainField((obj as Registry).defaultBrain);
+  if (defaultBrain) registry.defaultBrain = defaultBrain;
+
   // Parse the org-brain pointer with the same discipline: keep it only when `brain` is a
   // non-empty string; a malformed pointer is dropped (treated as "not designated") rather than
   // throwing, so a partial edit can never make resolution crash.
@@ -227,71 +352,199 @@ export async function resolveBrainDir(
   return (await resolveBrainMapping(startDir, opts))?.brain ?? null;
 }
 
+/** Specificity tiers for rule matching (higher wins). Ties break by length, then deny-wins. */
+const TIER_REPO = 4;
+const TIER_ORG = 3;
+const TIER_PREFIX = 2;
+const TIER_STAR = 1;
+
+/** True when any of a rule's matcher fields is the universal catch-all `"*"`. */
+function isCatchAll(rule: Rule): boolean {
+  return rule.repo === "*" || rule.org === "*" || rule.prefix === "*";
+}
+
+/**
+ * Score how `rule` matches `(start, slug)`, or null if it doesn't. Returns the rule's
+ * highest-tier matching matcher: catch-all < prefix < org < repo. `slug` is the cwd's git
+ * identity ({@link resolveProjectSource}); null when the cwd isn't a repo (only path/catch-all
+ * rules can then match). Pure.
+ */
+function scoreRule(
+  rule: Rule,
+  start: string,
+  slug: string | null,
+): { tier: number; len: number } | null {
+  if (isCatchAll(rule)) return { tier: TIER_STAR, len: 0 };
+  let tier = 0;
+  let len = 0;
+  if (rule.repo && slug && slug.toLowerCase() === rule.repo.toLowerCase()) {
+    tier = TIER_REPO;
+    len = rule.repo.length;
+  }
+  if (tier < TIER_ORG && rule.org) {
+    const owner = rule.org.replace(/\/\*$/, "").toLowerCase();
+    const slugOwner = slug && slug.includes("/") ? (slug.split("/")[0] ?? "").toLowerCase() : "";
+    if (slugOwner && slugOwner === owner) {
+      tier = TIER_ORG;
+      len = owner.length;
+    }
+  }
+  if (tier < TIER_PREFIX && rule.prefix) {
+    const p = expand(rule.prefix);
+    if (isUnder(start, p)) {
+      tier = TIER_PREFIX;
+      len = p.length;
+    }
+  }
+  return tier > 0 ? { tier, len } : null;
+}
+
+/**
+ * Evaluate the unified ruleset (ADR-0024) for `(start, slug)`. Returns:
+ * - `null` when NO rule matched (caller falls through to the env layer);
+ * - `{ kind: "denied" }` when the winning rule denies;
+ * - `{ kind: "brain" }` when the winner routes (its `brain`, else the registry `defaultBrain`);
+ * - `{ kind: "none" }` when a bare allow won but no `defaultBrain` is configured — a matched but
+ *   undestined rule, which stops resolution (no env fallback) rather than capturing nowhere.
+ *
+ * Winner = the single most-specific matching rule (tier, then prefix length), with **deny winning
+ * on an exact tie**. Pure.
+ */
+function matchRules(
+  start: string,
+  slug: string | null,
+  rules: Rule[],
+  defaultBrain: ResolvedBrain | null,
+): BrainResolution | null {
+  let best: { tier: number; len: number; rule: Rule } | null = null;
+  for (const rule of rules) {
+    const m = scoreRule(rule, start, slug);
+    if (!m) continue;
+    if (
+      !best ||
+      m.tier > best.tier ||
+      (m.tier === best.tier && m.len > best.len) ||
+      // exact specificity tie → deny wins over allow
+      (m.tier === best.tier && m.len === best.len && rule.deny === true && best.rule.deny !== true)
+    ) {
+      best = { tier: m.tier, len: m.len, rule };
+    }
+  }
+  if (!best) return null;
+  const { rule } = best;
+  if (rule.deny) return { kind: "denied" };
+  if (rule.brain) {
+    return {
+      kind: "brain",
+      brain: expand(rule.brain),
+      ...(rule.remote ? { remote: rule.remote } : {}),
+    };
+  }
+  // Bare allow → route to the default brain, if any. With none configured this is a matched-but-
+  // undestined rule: resolve to `none` (a no-op) rather than silently falling back to the env brain.
+  if (defaultBrain) {
+    return {
+      kind: "brain",
+      brain: expand(defaultBrain.brain),
+      ...(defaultBrain.remote ? { remote: defaultBrain.remote } : {}),
+    };
+  }
+  return { kind: "none" };
+}
+
+/**
+ * Fold legacy `prefix → brain` mappings (ADR-0011) into `prefix` rules and concatenate them after
+ * the explicit {@link Registry.rules}. Legacy mappings always carry a brain, so they become
+ * allow-with-brain rules at the prefix tier — reproducing the old longest-prefix-wins behavior via
+ * the shared length tiebreak.
+ */
+function combinedRules(registry: Registry): Rule[] {
+  const legacy: Rule[] = registry.mappings.map((m) => ({
+    prefix: m.prefix,
+    brain: m.brain,
+    ...(m.remote ? { remote: m.remote } : {}),
+  }));
+  return [...(registry.rules ?? []), ...legacy];
+}
+
+/**
+ * Resolve a working directory against the full model (ADR-0024), returning the three-way
+ * {@link BrainResolution} — `brain` (in scope, routed), `denied` (an explicit deny rule; out of
+ * scope), or `none` (nothing configured here). This is the scope-aware entry point the hooks
+ * should use. Order (first hit wins):
+ *
+ * 1. `.commonwealth/brain` marker (nearest valid ancestor) — human override.
+ * 2. A directory that is itself a brain (`.commonwealth/schema-version`).
+ * 3. The unified ruleset ({@link Registry.rules} + folded legacy `mappings`) — most-specific
+ *    match wins, deny breaks ties; a bare allow routes to `defaultBrain`.
+ * 4. `COMMONWEALTH_BRAIN_DIR` env fallback.
+ * 5. `none`.
+ *
+ * The cwd's git identity is resolved once (and only when an identity rule is present), so
+ * path-only registries never pay the git cost. Never throws on missing/unreadable files.
+ */
+export async function resolveBrain(
+  startDir: string,
+  opts: ResolveBrainOptions = {},
+): Promise<BrainResolution> {
+  const start = path.resolve(startDir);
+  const registryPath = resolveRegistryPath(opts.registryPath);
+
+  // 1) Explicit marker file, nearest ancestor wins — but only when its target actually exists.
+  //    A dangling marker (brain moved/removed, or a stale one from older onboarding) is skipped so
+  //    resolution falls through rather than being hijacked to a dead path (#68).
+  for (const dir of walkUp(start)) {
+    const raw = await readFileOrNull(path.join(dir, MARKER_REL));
+    if (raw !== null) {
+      const target = raw.trim();
+      if (target.length > 0) {
+        const resolved = expand(target, dir);
+        if (await isDir(resolved)) return { kind: "brain", brain: resolved };
+      }
+    }
+  }
+
+  // 2) A directory that is itself a brain, nearest ancestor wins (keyed off `schema-version`).
+  for (const dir of walkUp(start)) {
+    if (await isFile(path.join(dir, BRAIN_IDENTITY_REL))) return { kind: "brain", brain: dir };
+  }
+
+  // 3) The unified ruleset (explicit rules + folded legacy mappings).
+  const registry = await loadRegistry(registryPath);
+  if (registry) {
+    const rules = combinedRules(registry);
+    if (rules.length > 0) {
+      // Resolve git identity once, only if an identity rule could use it (path-only stays cheap).
+      const needsSlug = rules.some((r) => (r.repo && r.repo !== "*") || (r.org && r.org !== "*"));
+      const slug = needsSlug ? await resolveProjectSource(start) : null;
+      const result = matchRules(start, slug, rules, registry.defaultBrain ?? null);
+      if (result) return result;
+    }
+  }
+
+  // 4) Env fallback.
+  const env = opts.env ?? process.env.COMMONWEALTH_BRAIN_DIR;
+  if (env && env.length > 0) return { kind: "brain", brain: path.resolve(env) };
+
+  // 5) Nothing matched.
+  return { kind: "none" };
+}
+
 /**
  * Like {@link resolveBrainDir}, but returns the full {@link ResolvedBrain} — the brain path AND
- * the git `remote` to clone from when it came from a registry mapping (ADR-0019). Marker/self/env
- * layers carry no remote. Callers that may need to materialize a not-yet-cloned brain (the sync
- * daemon, `doctor`) use this; read-only callers can keep using {@link resolveBrainDir}. Still pure
- * and side-effect-free: it never touches the network or clones — that is the caller's explicit act.
+ * the git `remote` to clone from when it came from a registry mapping (ADR-0019). A thin wrapper
+ * over {@link resolveBrain}: both `denied` and `none` collapse to `null` (no brain), preserving
+ * the pre-ADR-0024 contract for callers that only care "which brain, if any". Callers that must
+ * distinguish an explicit deny from an unmapped dir (the scope gate) use {@link resolveBrain}.
+ * Still side-effect-free: it never clones — that is the caller's explicit act.
  */
 export async function resolveBrainMapping(
   startDir: string,
   opts: ResolveBrainOptions = {},
 ): Promise<ResolvedBrain | null> {
-  const start = path.resolve(startDir);
-  const registryPath = resolveRegistryPath(opts.registryPath);
-
-  // 1) Explicit marker file, nearest ancestor wins — but only when its target actually
-  //    exists. A marker whose target is missing (a brain that was moved/removed, or a stale
-  //    marker left by an older onboarding) is skipped so resolution falls through to the
-  //    registry rather than being hijacked to a dead path (#68). We keep walking up in case
-  //    a higher ancestor carries a valid marker.
-  for (const dir of walkUp(start)) {
-    const markerPath = path.join(dir, MARKER_REL);
-    const raw = await readFileOrNull(markerPath);
-    if (raw !== null) {
-      const target = raw.trim();
-      if (target.length > 0) {
-        const resolved = expand(target, dir);
-        if (await isDir(resolved)) return { brain: resolved };
-        // Dangling marker: ignore it and continue (next ancestor marker, then layers 2–4).
-      }
-    }
-  }
-
-  // 2) A directory that is itself a brain, nearest ancestor wins. Keyed off the brain-only
-  //    `schema-version` file so the global scope-config dir is never mistaken for a brain.
-  for (const dir of walkUp(start)) {
-    if (await isFile(path.join(dir, BRAIN_IDENTITY_REL))) return { brain: dir };
-  }
-
-  // 3) User registry mappings; the LONGEST (most-specific) matching prefix wins, regardless of
-  //    insertion order — so a narrow `/work/app` mapping is never shadowed by a broader `/work`
-  //    one that merely happens to appear earlier in the file (#103). Carries the mapping's remote
-  //    (ADR-0019) so a missing brain can clone-on-demand.
-  const registry = await loadRegistry(registryPath);
-  if (registry) {
-    let best: ResolvedBrain | null = null;
-    let bestLen = -1;
-    for (const mapping of registry.mappings) {
-      const prefix = expand(mapping.prefix);
-      if (isUnder(start, prefix) && prefix.length > bestLen) {
-        bestLen = prefix.length;
-        best = {
-          brain: expand(mapping.brain),
-          ...(mapping.remote ? { remote: mapping.remote } : {}),
-        };
-      }
-    }
-    if (best !== null) return best;
-  }
-
-  // 4) Env fallback.
-  const env = opts.env ?? process.env.COMMONWEALTH_BRAIN_DIR;
-  if (env && env.length > 0) return { brain: path.resolve(env) };
-
-  // 5) Nothing matched.
-  return null;
+  const result = await resolveBrain(startDir, opts);
+  if (result.kind !== "brain") return null;
+  return { brain: result.brain, ...(result.remote ? { remote: result.remote } : {}) };
 }
 
 /**
@@ -469,6 +722,114 @@ export async function setOrgBrain(
   await persistRegistry(registryPath, (registry) => {
     registry.orgBrain = org;
   });
+}
+
+/**
+ * A rule's canonical matcher key — used to dedupe rules by "what they match" (ignoring their
+ * outcome). Two rules with the same key target the same repo/org/path, so a writer updates in
+ * place rather than appending a duplicate. Catch-all (`"*"` in any matcher) canonicalizes to
+ * `"*"`. `null` when the rule has no matcher. Case-insensitive for identity; prefixes expand.
+ */
+export function ruleMatcherKey(rule: Rule): string | null {
+  if (isCatchAll(rule)) return "*";
+  if (rule.repo) return `repo:${rule.repo.toLowerCase()}`;
+  if (rule.org) return `org:${rule.org.replace(/\/\*$/, "").toLowerCase()}`;
+  if (rule.prefix) return `prefix:${expand(rule.prefix)}`;
+  return null;
+}
+
+/** Normalize a rule for storage: expand path-ish fields to absolute; keep identity as written. */
+function normalizeRuleForStore(rule: Rule): Rule {
+  const out: Rule = {};
+  if (rule.repo) out.repo = rule.repo;
+  if (rule.org) out.org = rule.org;
+  if (rule.prefix) out.prefix = rule.prefix === "*" ? "*" : expand(rule.prefix);
+  if (rule.brain) out.brain = expand(rule.brain);
+  if (rule.deny) out.deny = true;
+  if (rule.remote) out.remote = rule.remote;
+  if (rule.origin) out.origin = rule.origin;
+  return out;
+}
+
+/**
+ * Add or update a rule in the unified ruleset (ADR-0024). Dedupe is by {@link ruleMatcherKey}: a
+ * rule with the same matcher has its outcome (brain / deny / remote) replaced in place; otherwise
+ * the rule is appended. Path-ish fields are expanded to absolute; identity matchers are kept as
+ * written (matching is case-insensitive). Same durability as {@link addRegistryMapping}: atomic
+ * write, refuse-to-clobber-corrupt. Throws if the rule has no matcher.
+ */
+export async function addRule(
+  rule: Rule,
+  opts: { registryPath?: string } = {},
+): Promise<{ added: boolean; updated: boolean }> {
+  const registryPath = opts.registryPath ?? defaultRegistryPath();
+  const key = ruleMatcherKey(rule);
+  if (!key) throw new Error("a rule needs a matcher: one of repo, org, or prefix");
+  const normalized = normalizeRuleForStore(rule);
+  let added = false;
+  let updated = false;
+  await persistRegistry(registryPath, (registry) => {
+    if (!registry.rules) registry.rules = [];
+    const idx = registry.rules.findIndex((r) => ruleMatcherKey(r) === key);
+    if (idx === -1) {
+      registry.rules.push(normalized);
+      added = true;
+    } else if (JSON.stringify(registry.rules[idx]) !== JSON.stringify(normalized)) {
+      registry.rules[idx] = normalized;
+      updated = true;
+    }
+  });
+  return { added, updated };
+}
+
+/**
+ * Remove every rule whose matcher equals `matcher`'s (by {@link ruleMatcherKey}). Returns the count
+ * removed (0 when none matched). `matcher` need only carry the matcher fields (repo/org/prefix).
+ * Atomic, refuse-to-clobber-corrupt.
+ */
+export async function removeRule(
+  matcher: Rule,
+  opts: { registryPath?: string } = {},
+): Promise<{ removed: number }> {
+  const registryPath = opts.registryPath ?? defaultRegistryPath();
+  const key = ruleMatcherKey(matcher);
+  if (!key) throw new Error("a matcher is required: one of repo, org, or prefix");
+  let removed = 0;
+  await persistRegistry(registryPath, (registry) => {
+    if (!registry.rules) return;
+    const before = registry.rules.length;
+    registry.rules = registry.rules.filter((r) => ruleMatcherKey(r) !== key);
+    removed = before - registry.rules.length;
+  });
+  return { removed };
+}
+
+/**
+ * Set (or clear) the registry's {@link Registry.defaultBrain} — the brain a bare-allow rule routes
+ * to (ADR-0024 §4). Pass a brain path (`~`-expanded) with an optional clone-on-demand `remote`, or
+ * `null` to clear it. Atomic, refuse-to-clobber-corrupt.
+ */
+export async function setDefaultBrain(
+  brain: string | null,
+  opts: { remote?: string; registryPath?: string } = {},
+): Promise<void> {
+  const registryPath = opts.registryPath ?? defaultRegistryPath();
+  await persistRegistry(registryPath, (registry) => {
+    if (brain === null) {
+      delete registry.defaultBrain;
+      return;
+    }
+    const rb: ResolvedBrain = { brain: expand(brain) };
+    if (opts.remote) rb.remote = opts.remote;
+    registry.defaultBrain = rb;
+  });
+}
+
+/** Read the full registry (rules, defaultBrain, legacy mappings, orgBrain); `null` if missing/corrupt. */
+export async function loadRegistryFile(
+  opts: { registryPath?: string } = {},
+): Promise<Registry | null> {
+  return loadRegistry(resolveRegistryPath(opts.registryPath));
 }
 
 /**

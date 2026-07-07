@@ -1,6 +1,6 @@
 # 11. Brain wiring: the global user registry is the default source of truth
 
-- Status: Accepted
+- Status: Superseded by [ADR-0024](0024-rule-based-brain-resolution.md)
 - Date: 2026-07-01
 - Deciders: kristof (owner), Claude (orchestrator)
 - Relates: [ADR-0008](0008-curation-locality.md), [ADR-0009](0009-brain-config-feature-flags.md),

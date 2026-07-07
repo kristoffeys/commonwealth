@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { defaultAddDeps, runAdd } from "./add.js";
 import { cmdOrgBrain } from "./org-brain.js";
+import { cmdRegistry } from "./registry.js";
 import {
   cliVersion,
   defaultUpdateDeps,
@@ -59,6 +60,13 @@ export type { AskEnv } from "./ask.js";
 export { runAdd, defaultAddDeps } from "./add.js";
 export type { AddOptions, AddDeps } from "./add.js";
 export { runOrgBrain, defaultOrgBrainDeps, parseOrgBrainArgs, cmdOrgBrain } from "./org-brain.js";
+export {
+  runRegistry,
+  defaultRegistryDeps,
+  parseRegistryArgs,
+  parseMatcher,
+  cmdRegistry,
+} from "./registry.js";
 export type { OrgBrainOptions, OrgBrainDeps } from "./org-brain.js";
 export {
   cliVersion,
@@ -100,6 +108,7 @@ function printUsage(): void {
       "  commonwealth pending                           list notes awaiting review",
       "  commonwealth promote   <id...> | --all         approve staged notes into canon",
       "  commonwealth reject    <id...>                 discard staged notes",
+      "  commonwealth registry  <show | route | allow | deny | remove | default>  brain-resolution rules",
       "  commonwealth scope     <show | allow <p> | deny <p> | check>   per-user capture scope",
       "  commonwealth recall    <query>                 search the brain",
       "  commonwealth ask       <question>              cited retrieval for a question (agent synthesizes)",
@@ -174,6 +183,8 @@ export async function run(argv: string[]): Promise<number> {
       return cmdAdd(rest);
     case "org-brain":
       return cmdOrgBrain(rest);
+    case "registry":
+      return cmdRegistry(rest);
     case "update":
       return runUpdate(defaultUpdateDeps());
     case "reseed":
