@@ -183,24 +183,51 @@ describe("sessionEnd", () => {
     }
   });
 
-  it("still reports no-brain (anchored to the hook cwd) when no fallback maps to a brain (#174)", async () => {
+  it("skips a synthetic PTY cwd SILENTLY (no receipt) when no fallback maps to a brain (#180)", async () => {
+    // Orca's rate-limit PTY runs with $CLAUDE_PROJECT_DIR unset, so #174's fallback can't recover
+    // the real project. Rather than nag "map it in your registry" every rate-limit cycle (wrong
+    // advice — the project IS mapped), sessionEnd skips silently and leaves no receipt.
     const prev = process.env.CLAUDE_PROJECT_DIR;
     delete process.env.CLAUDE_PROJECT_DIR;
     try {
       const deps = makeDeps({ resolveBrainDir: vi.fn(async () => null) });
       const result = await sessionEnd(
+        {
+          cwd: "/Users/x/Library/Application Support/orca/rate-limit-pty-cwd",
+          transcript_path: "/tmp/t.jsonl",
+        },
+        deps,
+      );
+      expect(result).toEqual({ skipped: true, reason: "synthetic-cwd" });
+      expect(deps.extractCandidates).not.toHaveBeenCalled();
+      expect(deps.capture).not.toHaveBeenCalled();
+      // No receipt: nothing to surface on the next SessionStart in the synthetic cwd.
+      expect(deps.saveReceipt).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+      else process.env.CLAUDE_PROJECT_DIR = prev;
+    }
+  });
+
+  it("a synthetic PTY cwd still captures when a fallback DOES recover a brain (#180)", async () => {
+    // The silent-skip only kicks in when nothing maps. If $CLAUDE_PROJECT_DIR recovers the real
+    // project, a session that merely launched via the PTY captures normally.
+    const prev = process.env.CLAUDE_PROJECT_DIR;
+    process.env.CLAUDE_PROJECT_DIR = "/work/acme/app";
+    try {
+      const deps = makeDeps({
+        resolveBrainDir: vi.fn(async (cwd: string) =>
+          cwd === "/work/acme/app" ? "/brains/acme" : null,
+        ),
+      });
+      const result = await sessionEnd(
         { cwd: "/synthetic/rate-limit-pty-cwd", transcript_path: "/tmp/t.jsonl" },
         deps,
       );
-      expect(result).toEqual({ skipped: true, reason: "no-brain" });
-      expect(deps.extractCandidates).not.toHaveBeenCalled();
-      expect(deps.capture).not.toHaveBeenCalled();
-      expect(deps.saveReceipt).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cwd: "/synthetic/rate-limit-pty-cwd",
-          message: expect.stringContaining("no team brain"),
-        }),
-      );
+      expect(deps.capture).toHaveBeenCalledWith("/brains/acme", "/work/acme/app", [
+        { kind: "memory", title: "T", body: "B" },
+      ]);
+      expect(result).toEqual({ captured: 1, staged: [{ kind: "memory", title: "T", body: "B" }] });
     } finally {
       if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
       else process.env.CLAUDE_PROJECT_DIR = prev;
@@ -217,6 +244,9 @@ describe("endReceiptMessage (#96)", () => {
   });
   it("returns null for a no-cwd skip (nothing useful to say)", () => {
     expect(endReceiptMessage({ skipped: true, reason: "no-cwd" })).toBe(null);
+  });
+  it("returns null for a synthetic-cwd skip — the PTY nag is suppressed (#180)", () => {
+    expect(endReceiptMessage({ skipped: true, reason: "synthetic-cwd" })).toBe(null);
   });
   it("reports zero and non-zero capture counts", () => {
     expect(endReceiptMessage({ captured: 0 })).toContain("no durable knowledge");
