@@ -103,7 +103,7 @@ function printUsage(): void {
       "  commonwealth scope     <show | allow <p> | deny <p> | check>   per-user capture scope",
       "  commonwealth recall    <query>                 search the brain",
       "  commonwealth ask       <question>              cited retrieval for a question (agent synthesizes)",
-      "  commonwealth update                            update the CLI to the latest published version",
+      "  commonwealth update                            update the CLI + refresh the Claude Code plugin",
       "  commonwealth --version                         print the installed CLI version",
       "",
       "All commands resolve the brain from the registry for the current directory — no --dir needed.",
