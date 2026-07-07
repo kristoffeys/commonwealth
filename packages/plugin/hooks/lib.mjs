@@ -180,6 +180,47 @@ async function finishEnd(deps, cwd, result) {
 }
 
 /**
+ * Launch the SessionEnd capture as a DETACHED background worker and return at once.
+ *
+ * SessionEnd is fire-and-forget: Claude Code does not wait for it and, on `/clear`, tears the old
+ * session down immediately and starts the next one. Capture does an LLM extraction (tens of
+ * seconds), so running it inline as an ordinary child of the hook process means that child is
+ * killed mid-flight on `/clear` — before it can extract, capture, or write the receipt. That is
+ * why every `/clear` silently captured nothing while the identical hook run standalone (nothing to
+ * kill it) worked (#190). Detaching fixes it: `detached: true` puts the worker in its OWN process
+ * group/session (setsid), so the teardown signals sent to the old session's group never reach it;
+ * `stdio: "ignore"` + `unref()` let the hook process exit immediately without waiting. The worker
+ * then finishes in the background — notes land seconds after `/clear`, and the next SessionStart in
+ * the directory surfaces the receipt as designed (#96).
+ *
+ * The hook JSON is passed as a single argv element (it is tiny — cwd/transcript_path/reason, never
+ * the transcript itself), because a detached child with `stdio: "ignore"` has no stdin to read.
+ *
+ * @param {string|object} rawInput  The hook stdin (raw string or parsed object) to hand the worker.
+ * @param {{ workerPath: string, nodeBin?: string, spawnFn?: Function }} opts
+ * @returns {Promise<object|null>}  The spawned child (unref'd), or null if it could not launch.
+ */
+export async function launchCaptureWorker(rawInput, opts = {}) {
+  const workerPath = opts.workerPath;
+  if (typeof workerPath !== "string" || workerPath.length === 0) return null;
+  const nodeBin = opts.nodeBin ?? process.execPath;
+  const spawnFn = opts.spawnFn ?? (await import("node:child_process")).spawn;
+  const payload = typeof rawInput === "string" ? rawInput : JSON.stringify(rawInput ?? {});
+  let child;
+  try {
+    child = spawnFn(nodeBin, [workerPath, payload], { detached: true, stdio: "ignore" });
+  } catch {
+    // A hook must never break the session: if the worker can't be spawned, capture is skipped
+    // (this session's knowledge is lost) but the session start/end proceeds unharmed.
+    return null;
+  }
+  // Don't keep the hook process alive waiting on the worker — it must return at once so the
+  // harness isn't blocked, while the worker (its own process group) runs to completion.
+  if (child && typeof child.unref === "function") child.unref();
+  return child;
+}
+
+/**
  * Human-readable one-liner for a {@link sessionEnd} outcome, or `null` when there is nothing
  * worth telling the user. Turns the silent no-op (#96) into a specific explanation: a skip
  * says WHY (no brain / out of scope), a zero-capture says the extractor found nothing, and a

@@ -274,3 +274,63 @@ describe("realDeps().capture (real curate binary over stdin)", () => {
     expect(candidates[0].title).toBe("from stdin");
   });
 });
+
+describe("SessionEnd detached capture worker (#190 — survives `/clear` teardown)", () => {
+  const hooksDir = fileURLToPath(new URL("../hooks", import.meta.url));
+
+  // The core of the #190 fix: on `/clear`, Claude Code fires SessionEnd fire-and-forget, then
+  // tears the session down at once. If capture ran as an ordinary child of the hook, that teardown
+  // (a signal to the hook's process group) would kill it mid-extraction — every `/clear` captured
+  // nothing. session-end.mjs now launches the worker DETACHED (its own process group via setsid),
+  // so a group-kill of the launcher can't reach it. This test proves exactly that: it kills the
+  // launcher's entire process group and asserts the worker still ran to completion.
+  it("finishes its work after the launcher's process group is killed", async () => {
+    const marker = path.join(tmp, "worker-ran.json");
+    // Stub worker: wait long enough that it is still running when we kill the launcher's group,
+    // then record the hook JSON it was handed on argv[2]. Proves both survival and arg delivery.
+    const stubWorker = path.join(tmp, "stub-worker.mjs");
+    await fs.writeFile(
+      stubWorker,
+      [
+        "import { promises as fs } from 'node:fs';",
+        "const input = process.argv[2] ?? '';",
+        "await new Promise((r) => setTimeout(r, 800));",
+        `await fs.writeFile(${JSON.stringify(marker)}, input);`,
+      ].join("\n"),
+    );
+
+    const { spawn } = await import("node:child_process");
+    // Launch the REAL session-end.mjs as its own process-group leader (detached) so `-pid` targets
+    // the whole group. COMMONWEALTH_CAPTURE_WORKER swaps in the fast stub for the real LLM pipeline.
+    const launcher = spawn("node", [path.join(hooksDir, "session-end.mjs")], {
+      detached: true,
+      stdio: ["pipe", "ignore", "ignore"],
+      env: { ...process.env, COMMONWEALTH_CAPTURE_WORKER: stubWorker },
+    });
+    const pgid = launcher.pid!;
+    launcher.stdin!.end(
+      JSON.stringify({ cwd: "/work/x", transcript_path: "/t.jsonl", reason: "clear" }),
+    );
+
+    // The launcher must return immediately (it only spawns the worker and exits).
+    await new Promise<void>((resolve) => launcher.on("close", () => resolve()));
+
+    // Simulate `/clear`: SIGKILL the launcher's ENTIRE process group. A worker in the SAME group
+    // (the pre-fix behavior) would die here; the detached worker (own group) survives.
+    try {
+      process.kill(-pgid, "SIGKILL");
+    } catch {
+      // ESRCH: the group is already empty because the worker is NOT in it — exactly the fix.
+    }
+
+    // Give the detached worker time to finish its wait + write.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    const got = await fs.readFile(marker, "utf8").catch(() => null);
+    expect(
+      got,
+      "detached worker should have written its marker despite the group kill",
+    ).not.toBeNull();
+    expect(JSON.parse(got!).reason).toBe("clear");
+  });
+});

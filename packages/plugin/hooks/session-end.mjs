@@ -1,10 +1,18 @@
-// SessionEnd hook entry. Reads the hook JSON from stdin (which includes `transcript_path`),
-// resolves the brain + scope, extracts capture candidates from the transcript, and stages
-// them via the review queue. Prints nothing to stdout; a one-line summary goes to stderr.
-// Run via `node session-end.mjs` from hooks.json — no shebang needed.
+// SessionEnd hook entry. Reads the hook JSON from stdin (which includes `transcript_path`), then
+// hands the work to a DETACHED background worker (capture-worker.mjs) and returns AT ONCE.
+//
+// Why detached: SessionEnd is fire-and-forget — Claude Code does not wait for it and, on `/clear`,
+// tears the old session down immediately and starts the next one. Capture does an LLM extraction
+// (tens of seconds), so doing it inline here means this hook process is killed mid-flight on
+// `/clear` before it writes anything — which is why every `/clear` silently captured nothing
+// (#190). The worker runs in its own process group (setsid via `detached: true`), so teardown
+// signals don't reach it; it finishes in the background and the next SessionStart surfaces the
+// receipt (#96). Run via `node session-end.mjs` from hooks.json — no shebang needed.
 //
 // Hard rule: a hook must never break the session. On ANY error we log to stderr and exit 0.
-import { DISABLE_HOOKS_ENV, realDeps, sessionEnd } from "./lib.mjs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { DISABLE_HOOKS_ENV, launchCaptureWorker } from "./lib.mjs";
 
 /** Read all of stdin as a UTF-8 string. */
 async function readStdin() {
@@ -21,21 +29,14 @@ async function main() {
   if (process.env[DISABLE_HOOKS_ENV] === "1") return;
 
   const raw = await readStdin();
-  let input;
-  try {
-    input = JSON.parse(raw);
-  } catch {
-    input = {};
-  }
-  const result = await sessionEnd(input, realDeps());
-  if (result && result.skipped) {
-    console.error(
-      `[commonwealth] session-end: captured nothing (${result.reason ?? "skipped"}); ` +
-        `the next session in this directory will show why`,
-    );
-  } else if (result && typeof result.captured === "number") {
-    console.error(`[commonwealth] session-end: staged ${result.captured} candidate note(s)`);
-  }
+  // The heavy lifting (extract → capture → receipt) is the worker's job; this entry only launches
+  // it and returns, so the harness's fire-and-forget teardown never interrupts the real work.
+  // `$COMMONWEALTH_CAPTURE_WORKER` is a test seam to substitute a stub worker; defaults to the
+  // sibling capture-worker.mjs.
+  const workerPath =
+    process.env.COMMONWEALTH_CAPTURE_WORKER ||
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "capture-worker.mjs");
+  await launchCaptureWorker(raw, { workerPath });
 }
 
 main().catch((err) => {

@@ -6,6 +6,7 @@ import {
   compactTranscript,
   deriveReceipt,
   endReceiptMessage,
+  launchCaptureWorker,
   parseCandidateArray,
   sessionEnd,
   sessionStart,
@@ -381,5 +382,52 @@ describe("compactTranscript (#84)", () => {
 
   it("returns empty for content that never parses (caller falls back to raw)", () => {
     expect(compactTranscript("not json at all\n{also not")).toBe("");
+  });
+});
+
+describe("launchCaptureWorker (#190 — detached so `/clear` teardown can't kill capture)", () => {
+  it("spawns a detached, unref'd worker with the hook JSON as a single argv element", async () => {
+    const fakeChild = { unref: vi.fn() };
+    const spawnFn = vi.fn(() => fakeChild);
+
+    const child = await launchCaptureWorker('{"cwd":"/w","reason":"clear"}', {
+      workerPath: "/plugin/hooks/capture-worker.mjs",
+      nodeBin: "/usr/bin/node",
+      spawnFn,
+    });
+
+    expect(child).toBe(fakeChild);
+    expect(fakeChild.unref).toHaveBeenCalledOnce();
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    const [cmd, argv, opts] = spawnFn.mock.calls[0] as [string, string[], Record<string, unknown>];
+    expect(cmd).toBe("/usr/bin/node");
+    // Transcript is NOT in argv (it's read from transcript_path by the worker) — only the tiny
+    // hook JSON is, as one element, so there is no E2BIG risk.
+    expect(argv).toEqual(["/plugin/hooks/capture-worker.mjs", '{"cwd":"/w","reason":"clear"}']);
+    // detached: true → own process group (setsid), immune to the old session's teardown signals.
+    expect(opts.detached).toBe(true);
+    expect(opts.stdio).toBe("ignore");
+  });
+
+  it("returns null and never spawns when no workerPath is given", async () => {
+    const spawnFn = vi.fn();
+    const child = await launchCaptureWorker("{}", { spawnFn });
+    expect(child).toBeNull();
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it("serializes a non-string input to JSON for the worker argv", async () => {
+    const spawnFn = vi.fn(() => ({ unref: vi.fn() }));
+    await launchCaptureWorker({ cwd: "/w", reason: "clear" }, { workerPath: "/w.mjs", spawnFn });
+    const argv = spawnFn.mock.calls[0][1] as string[];
+    expect(JSON.parse(argv[1])).toEqual({ cwd: "/w", reason: "clear" });
+  });
+
+  it("returns null instead of throwing when the spawn fails (a hook must never break)", async () => {
+    const spawnFn = vi.fn(() => {
+      throw new Error("EPERM");
+    });
+    const child = await launchCaptureWorker("{}", { workerPath: "/w.mjs", spawnFn });
+    expect(child).toBeNull();
   });
 });
