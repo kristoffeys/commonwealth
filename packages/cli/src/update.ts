@@ -235,14 +235,22 @@ export function defaultUpdateDeps(): UpdateDeps {
       const list = spawnSync("claude", ["plugin", "list"], { encoding: "utf8" });
       if (list.error) return { ran: false, ok: false, detail: "claude CLI not found" };
       if (list.status !== 0)
-        return { ran: false, ok: false, detail: `claude plugin list exited with code ${list.status}` };
+        return {
+          ran: false,
+          ok: false,
+          detail: `claude plugin list exited with code ${list.status}`,
+        };
       if (!(typeof list.stdout === "string" && list.stdout.includes(PLUGIN_ID)))
         return { ran: false, ok: false, detail: `${PLUGIN_ID} not installed` };
 
       const res = spawnSync("claude", ["plugin", "update", PLUGIN_ID], { stdio: "inherit" });
       if (res.error) return { ran: true, ok: false, detail: res.error.message };
       if (res.status !== 0)
-        return { ran: true, ok: false, detail: `claude plugin update exited with code ${res.status}` };
+        return {
+          ran: true,
+          ok: false,
+          detail: `claude plugin update exited with code ${res.status}`,
+        };
       return { ran: true, ok: true };
     },
     log: (m) => {

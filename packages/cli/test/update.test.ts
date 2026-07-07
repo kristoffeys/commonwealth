@@ -160,10 +160,16 @@ describe("runUpdate", () => {
 
   it("exits 1 when the plugin refresh runs and fails", async () => {
     const { deps, calls } = fakeUpdateDeps({
-      updatePlugin: () => ({ ran: true, ok: false, detail: "claude plugin update exited with code 1" }),
+      updatePlugin: () => ({
+        ran: true,
+        ok: false,
+        detail: "claude plugin update exited with code 1",
+      }),
     });
     expect(await runUpdate(deps)).toBe(1);
-    expect(calls.logs.join("\n")).toContain("plugin refresh failed (claude plugin update exited with code 1)");
+    expect(calls.logs.join("\n")).toContain(
+      "plugin refresh failed (claude plugin update exited with code 1)",
+    );
   });
 
   it("prints the plugin-update command (does not auto-run) for a workspace checkout", async () => {
