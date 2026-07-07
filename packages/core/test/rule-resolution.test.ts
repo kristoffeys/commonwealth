@@ -3,7 +3,16 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type Rule, resolveBrain, resolveBrainDir, resolveBrainMapping } from "../src/registry";
+import {
+  addRule,
+  loadRegistryFile,
+  removeRule,
+  resolveBrain,
+  resolveBrainDir,
+  resolveBrainMapping,
+  type Rule,
+  setDefaultBrain,
+} from "../src/registry";
 
 // Tests for the unified rule-based resolution (ADR-0024): match by git identity or path →
 // brain / denied / none. Identity tests create real git repos (with a fake origin) so
@@ -249,6 +258,54 @@ describe("resolveBrain — back-compat with legacy mappings (ADR-0011)", () => {
     });
 
     expect(await resolveBrain(repo, { registryPath })).toEqual({ kind: "brain", brain: erpBrain });
+  });
+});
+
+describe("rule writers: addRule / removeRule / setDefaultBrain (ADR-0024)", () => {
+  it("adds a rule, updates it in place by matcher, and resolves it end-to-end", async () => {
+    const repo = await gitRepo("erp", "git@github.com:weareantenna/erp.git");
+    const first = brainPath("first");
+    const second = brainPath("second");
+
+    expect(await addRule({ repo: "weareantenna/erp", brain: first }, { registryPath })).toEqual({
+      added: true,
+      updated: false,
+    });
+    expect(await resolveBrain(repo, { registryPath })).toEqual({ kind: "brain", brain: first });
+
+    // Same matcher, new outcome → updated in place (not a duplicate).
+    expect(await addRule({ repo: "weareantenna/erp", brain: second }, { registryPath })).toEqual({
+      added: false,
+      updated: true,
+    });
+    const reg = await loadRegistryFile({ registryPath });
+    expect(reg?.rules).toHaveLength(1);
+    expect(await resolveBrain(repo, { registryPath })).toEqual({ kind: "brain", brain: second });
+  });
+
+  it("adds a deny rule and a default brain, then a bare allow routes to the default", async () => {
+    const repo = await gitRepo("app", "git@github.com:weareantenna/app.git");
+    const antenna = brainPath("antenna");
+    await setDefaultBrain(antenna, { registryPath });
+    await addRule({ org: "weareantenna/*" }, { registryPath }); // bare allow → default
+
+    expect(await resolveBrain(repo, { registryPath })).toEqual({ kind: "brain", brain: antenna });
+
+    await addRule({ repo: "weareantenna/app", deny: true }, { registryPath }); // deny beats org allow
+    expect(await resolveBrain(repo, { registryPath })).toEqual({ kind: "denied" });
+  });
+
+  it("removeRule deletes by matcher and setDefaultBrain(null) clears the default", async () => {
+    const dir = await mkdir("work");
+    await addRule({ prefix: path.join(root, "work"), brain: brainPath("b") }, { registryPath });
+    expect(await removeRule({ prefix: path.join(root, "work") }, { registryPath })).toEqual({
+      removed: 1,
+    });
+    expect(await resolveBrainDir(dir, { registryPath })).toBeNull();
+
+    await setDefaultBrain(brainPath("d"), { registryPath });
+    await setDefaultBrain(null, { registryPath });
+    expect((await loadRegistryFile({ registryPath }))?.defaultBrain).toBeUndefined();
   });
 });
 

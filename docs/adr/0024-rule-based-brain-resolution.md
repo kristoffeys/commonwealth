@@ -111,7 +111,23 @@ brain`), so they can eventually live **in the brain, committed and shared** acro
 machine only, never synced; the default) vs `shared` — with local overriding shared. Only the
 repo→brain *intent* is shareable; the brain *path* stays per-machine (registry / clone-on-demand).
 
-### 6. Back-compat, no forced migration
+### 6. One per-user config file
+
+The two per-user, machine-local files — `~/.commonwealth/config.json` (scope allow/deny, ADR-0008)
+and `~/.commonwealth/registry.json` (routing, ADR-0011) — **merge into a single
+`~/.commonwealth/config.json`**. Since scope folds into rules (§3), this file simply *gains*
+`rules` / `defaultBrain`; `registry.json` is retired (still read for back-compat, then removed by
+`migrate`). One file now answers the whole "what happens when I work here, and where does it go?"
+question.
+
+The brain's own `<brain>/.commonwealth/config.json` (name, remotes, feature flags; ADR-0009) stays
+**separate**: it lives inside the brain and **syncs to the whole team**, whereas the per-user file
+is machine-local and never synced. Merging them would leak personal denies to teammates and cross
+the local-vs-shared boundary (§5). The two are disambiguated by location (`~/.commonwealth/…` vs
+`<brain>/.commonwealth/…`); brain identity remains keyed off `.commonwealth/schema-version`, not
+`config.json` (ADR-0011 §6), so a per-user `config.json` under `$HOME` is never mistaken for a brain.
+
+### 7. Back-compat, no forced migration
 
 The legacy `mappings: [{ prefix, brain, remote? }]` array is still read and folded in as `prefix`
 rules; the legacy `config.json` `{ allow, deny }` is read and folded in as allow/deny rules. Every

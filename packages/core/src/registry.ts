@@ -721,6 +721,114 @@ export async function setOrgBrain(
 }
 
 /**
+ * A rule's canonical matcher key — used to dedupe rules by "what they match" (ignoring their
+ * outcome). Two rules with the same key target the same repo/org/path, so a writer updates in
+ * place rather than appending a duplicate. Catch-all (`"*"` in any matcher) canonicalizes to
+ * `"*"`. `null` when the rule has no matcher. Case-insensitive for identity; prefixes expand.
+ */
+export function ruleMatcherKey(rule: Rule): string | null {
+  if (isCatchAll(rule)) return "*";
+  if (rule.repo) return `repo:${rule.repo.toLowerCase()}`;
+  if (rule.org) return `org:${rule.org.replace(/\/\*$/, "").toLowerCase()}`;
+  if (rule.prefix) return `prefix:${expand(rule.prefix)}`;
+  return null;
+}
+
+/** Normalize a rule for storage: expand path-ish fields to absolute; keep identity as written. */
+function normalizeRuleForStore(rule: Rule): Rule {
+  const out: Rule = {};
+  if (rule.repo) out.repo = rule.repo;
+  if (rule.org) out.org = rule.org;
+  if (rule.prefix) out.prefix = rule.prefix === "*" ? "*" : expand(rule.prefix);
+  if (rule.brain) out.brain = expand(rule.brain);
+  if (rule.deny) out.deny = true;
+  if (rule.remote) out.remote = rule.remote;
+  if (rule.origin) out.origin = rule.origin;
+  return out;
+}
+
+/**
+ * Add or update a rule in the unified ruleset (ADR-0024). Dedupe is by {@link ruleMatcherKey}: a
+ * rule with the same matcher has its outcome (brain / deny / remote) replaced in place; otherwise
+ * the rule is appended. Path-ish fields are expanded to absolute; identity matchers are kept as
+ * written (matching is case-insensitive). Same durability as {@link addRegistryMapping}: atomic
+ * write, refuse-to-clobber-corrupt. Throws if the rule has no matcher.
+ */
+export async function addRule(
+  rule: Rule,
+  opts: { registryPath?: string } = {},
+): Promise<{ added: boolean; updated: boolean }> {
+  const registryPath = opts.registryPath ?? defaultRegistryPath();
+  const key = ruleMatcherKey(rule);
+  if (!key) throw new Error("a rule needs a matcher: one of repo, org, or prefix");
+  const normalized = normalizeRuleForStore(rule);
+  let added = false;
+  let updated = false;
+  await persistRegistry(registryPath, (registry) => {
+    if (!registry.rules) registry.rules = [];
+    const idx = registry.rules.findIndex((r) => ruleMatcherKey(r) === key);
+    if (idx === -1) {
+      registry.rules.push(normalized);
+      added = true;
+    } else if (JSON.stringify(registry.rules[idx]) !== JSON.stringify(normalized)) {
+      registry.rules[idx] = normalized;
+      updated = true;
+    }
+  });
+  return { added, updated };
+}
+
+/**
+ * Remove every rule whose matcher equals `matcher`'s (by {@link ruleMatcherKey}). Returns the count
+ * removed (0 when none matched). `matcher` need only carry the matcher fields (repo/org/prefix).
+ * Atomic, refuse-to-clobber-corrupt.
+ */
+export async function removeRule(
+  matcher: Rule,
+  opts: { registryPath?: string } = {},
+): Promise<{ removed: number }> {
+  const registryPath = opts.registryPath ?? defaultRegistryPath();
+  const key = ruleMatcherKey(matcher);
+  if (!key) throw new Error("a matcher is required: one of repo, org, or prefix");
+  let removed = 0;
+  await persistRegistry(registryPath, (registry) => {
+    if (!registry.rules) return;
+    const before = registry.rules.length;
+    registry.rules = registry.rules.filter((r) => ruleMatcherKey(r) !== key);
+    removed = before - registry.rules.length;
+  });
+  return { removed };
+}
+
+/**
+ * Set (or clear) the registry's {@link Registry.defaultBrain} — the brain a bare-allow rule routes
+ * to (ADR-0024 §4). Pass a brain path (`~`-expanded) with an optional clone-on-demand `remote`, or
+ * `null` to clear it. Atomic, refuse-to-clobber-corrupt.
+ */
+export async function setDefaultBrain(
+  brain: string | null,
+  opts: { remote?: string; registryPath?: string } = {},
+): Promise<void> {
+  const registryPath = opts.registryPath ?? defaultRegistryPath();
+  await persistRegistry(registryPath, (registry) => {
+    if (brain === null) {
+      delete registry.defaultBrain;
+      return;
+    }
+    const rb: ResolvedBrain = { brain: expand(brain) };
+    if (opts.remote) rb.remote = opts.remote;
+    registry.defaultBrain = rb;
+  });
+}
+
+/** Read the full registry (rules, defaultBrain, legacy mappings, orgBrain); `null` if missing/corrupt. */
+export async function loadRegistryFile(
+  opts: { registryPath?: string } = {},
+): Promise<Registry | null> {
+  return loadRegistry(resolveRegistryPath(opts.registryPath));
+}
+
+/**
  * Drop a convenience symlink `<brainsDir>/<name> → <brainDir>` so a human can `ls`/`cd` their
  * brains. `name` is sanitized via `path.basename`; an empty/`.`/`..` name is rejected. If a
  * symlink already resolves to the target it is a no-op; a symlink pointing elsewhere is
