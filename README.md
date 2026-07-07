@@ -104,7 +104,7 @@ commonwealth sync start|stop|once         # control the background sync
 commonwealth health                       # freshness / trust score for the brain
 commonwealth graduate [--suggest]         # propose facts recurring across ≥2 brains to the org-brain
 commonwealth doctor [--fix]               # diagnose (and optionally fix) the setup
-commonwealth update                       # update the CLI to the latest release
+commonwealth update                       # update the CLI + refresh the Claude Code plugin (hooks + MCP)
 commonwealth --version                    # print the installed CLI version
 ```
 

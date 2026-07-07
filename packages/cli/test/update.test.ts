@@ -58,9 +58,13 @@ describe("detectInstallKind", () => {
 /** Build fake {@link UpdateDeps} that record calls; override per test. */
 function fakeUpdateDeps(overrides: Partial<UpdateDeps> = {}): {
   deps: UpdateDeps;
-  calls: { installs: Array<{ pm: string; spec: string }>; logs: string[] };
+  calls: { installs: Array<{ pm: string; spec: string }>; pluginUpdates: number; logs: string[] };
 } {
-  const calls = { installs: [] as Array<{ pm: string; spec: string }>, logs: [] as string[] };
+  const calls = {
+    installs: [] as Array<{ pm: string; spec: string }>,
+    pluginUpdates: 0,
+    logs: [] as string[],
+  };
   const deps: UpdateDeps = {
     currentVersion: () => "0.1.4",
     fetchLatest: async () => "0.2.0",
@@ -68,6 +72,10 @@ function fakeUpdateDeps(overrides: Partial<UpdateDeps> = {}): {
     install: (pm, spec) => {
       calls.installs.push({ pm, spec });
       return { ok: true };
+    },
+    updatePlugin: () => {
+      calls.pluginUpdates += 1;
+      return { ran: true, ok: true };
     },
     log: (m) => calls.logs.push(m),
     ...overrides,
@@ -122,6 +130,53 @@ describe("runUpdate", () => {
     });
     expect(await runUpdate(deps)).toBe(1);
     expect(calls.logs.join("\n")).toContain("install failed (npm exited with code 1)");
+    // A failed CLI install short-circuits — the plugin refresh is not attempted.
+    expect(calls.pluginUpdates).toBe(0);
+  });
+
+  it("also refreshes the plugin after a successful global CLI update", async () => {
+    const { deps, calls } = fakeUpdateDeps();
+    expect(await runUpdate(deps)).toBe(0);
+    expect(calls.installs).toEqual([{ pm: "npm", spec: `${CLI_PACKAGE}@0.2.0` }]);
+    expect(calls.pluginUpdates).toBe(1);
+    expect(calls.logs.join("\n")).toContain("refreshed the Claude Code plugin");
+    expect(calls.logs.join("\n")).toContain("restart Claude Code");
+  });
+
+  it("refreshes the plugin even when the CLI is already up to date (plugin can lag)", async () => {
+    const { deps, calls } = fakeUpdateDeps({ fetchLatest: async () => "0.1.4" });
+    expect(await runUpdate(deps)).toBe(0);
+    expect(calls.installs).toEqual([]);
+    expect(calls.pluginUpdates).toBe(1);
+  });
+
+  it("treats a plugin refresh skip (no claude / not installed) as non-fatal", async () => {
+    const { deps, calls } = fakeUpdateDeps({
+      updatePlugin: () => ({ ran: false, ok: false, detail: "claude CLI not found" }),
+    });
+    expect(await runUpdate(deps)).toBe(0);
+    expect(calls.logs.join("\n")).toContain("skipped plugin refresh (claude CLI not found)");
+  });
+
+  it("exits 1 when the plugin refresh runs and fails", async () => {
+    const { deps, calls } = fakeUpdateDeps({
+      updatePlugin: () => ({
+        ran: true,
+        ok: false,
+        detail: "claude plugin update exited with code 1",
+      }),
+    });
+    expect(await runUpdate(deps)).toBe(1);
+    expect(calls.logs.join("\n")).toContain(
+      "plugin refresh failed (claude plugin update exited with code 1)",
+    );
+  });
+
+  it("prints the plugin-update command (does not auto-run) for a workspace checkout", async () => {
+    const { deps, calls } = fakeUpdateDeps({ installKind: () => "workspace" });
+    expect(await runUpdate(deps)).toBe(0);
+    expect(calls.pluginUpdates).toBe(0);
+    expect(calls.logs.join("\n")).toContain("claude plugin update commonwealth@commonwealth");
   });
 });
 

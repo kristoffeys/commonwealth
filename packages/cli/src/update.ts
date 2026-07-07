@@ -97,6 +97,20 @@ export function detectInstallKind(moduleUrl = import.meta.url): InstallKind {
   return "npm-global";
 }
 
+/** The plugin id (plugin@marketplace) Claude Code knows the Commonwealth plugin by. */
+export const PLUGIN_ID = "commonwealth@commonwealth";
+
+/**
+ * Outcome of refreshing the Claude Code plugin (hooks + MCP server), a SECOND artifact that
+ * `commonwealth update` covers alongside the npm CLI. `ran: false` means we deliberately didn't
+ * run (no `claude` CLI, or the plugin isn't installed) — never an error for a CLI-only user.
+ */
+export interface PluginUpdateResult {
+  ran: boolean;
+  ok: boolean;
+  detail?: string;
+}
+
 /** The injected effects of {@link runUpdate}; wired for real in {@link defaultUpdateDeps}. */
 export interface UpdateDeps {
   /** The installed CLI version. */
@@ -107,15 +121,55 @@ export interface UpdateDeps {
   installKind(): InstallKind;
   /** Run the package-manager install for `spec`; ok=false carries a short reason. */
   install(pm: "npm" | "pnpm", spec: string): { ok: boolean; detail?: string };
+  /** Refresh the Claude Code plugin (hooks + MCP server) via `claude plugin update`. */
+  updatePlugin(): PluginUpdateResult;
   /** Progress/diagnostic sink (stderr in production). */
   log(m: string): void;
 }
 
 /**
- * `commonwealth update` — resolve the latest published version and update in place when the
- * install kind allows it, otherwise print the exact command that does.
+ * Refresh the Claude Code plugin (hooks + MCP server) — the second half of "update Commonwealth".
+ * The CLI (npm) and the plugin (Claude Code marketplace) are independent artifacts, so the plugin
+ * is refreshed regardless of whether the CLI itself needed updating: a user can have a current CLI
+ * but a stale installed plugin (exactly the drift that leaves capture running old hook code).
  *
- * @returns Exit code: 0 up-to-date/updated/guidance printed, 1 registry unreachable or install failed.
+ * For a `workspace`/`npx` process the plugin isn't durably managed by this install (a workspace
+ * plugin is copied from the local checkout, which must be rebuilt first), so we print the command
+ * instead of running it. For a global install we run `claude plugin update` best-effort. A skip
+ * (no `claude`, or plugin not installed) is fine and never fails the command; a genuine failure
+ * of the update itself returns 1 so the drift is visible.
+ *
+ * @returns Exit-code contribution: 0 unless the plugin update actually ran and failed.
+ */
+function refreshPlugin(deps: UpdateDeps, kind: InstallKind): number {
+  if (kind === "workspace" || kind === "npx") {
+    deps.log(
+      "update: also refresh the Claude Code plugin (hooks + MCP server), then restart Claude Code:\n" +
+        `  claude plugin update ${PLUGIN_ID}`,
+    );
+    return 0;
+  }
+  const res = deps.updatePlugin();
+  if (!res.ran) {
+    deps.log(`update: skipped plugin refresh${res.detail ? ` (${res.detail})` : ""}.`);
+    return 0;
+  }
+  if (!res.ok) {
+    deps.log(`update: plugin refresh failed${res.detail ? ` (${res.detail})` : ""}.`);
+    return 1;
+  }
+  deps.log("update: refreshed the Claude Code plugin — restart Claude Code to apply.");
+  return 0;
+}
+
+/**
+ * `commonwealth update` — resolve the latest published version and update in place when the
+ * install kind allows it, otherwise print the exact command that does. Then refresh the Claude
+ * Code plugin (hooks + MCP server) too, so one command covers both artifacts (see
+ * {@link refreshPlugin}).
+ *
+ * @returns Exit code: 0 up-to-date/updated/guidance printed, 1 registry unreachable, CLI install
+ *   failed, or the plugin refresh ran and failed.
  */
 export async function runUpdate(deps: UpdateDeps): Promise<number> {
   const current = deps.currentVersion();
@@ -124,26 +178,29 @@ export async function runUpdate(deps: UpdateDeps): Promise<number> {
     deps.log(`update: could not reach the npm registry (current: v${current}). Try again later.`);
     return 1;
   }
+
+  const kind = deps.installKind();
+
   if (!isNewer(latest, current)) {
     deps.log(`update: already up to date (v${current}; latest published is v${latest}).`);
-    return 0;
+    // The plugin can still be stale even when the CLI is current — refresh it anyway.
+    return refreshPlugin(deps, kind);
   }
 
   deps.log(`update: v${current} -> v${latest}`);
-  const kind = deps.installKind();
   switch (kind) {
     case "workspace":
       deps.log(
-        "update: running from a workspace checkout — update with:\n" +
+        "update: running from a workspace checkout — update the CLI with:\n" +
           "  git pull && pnpm install && pnpm build",
       );
-      return 0;
+      return refreshPlugin(deps, kind);
     case "npx":
       deps.log(
         "update: running via npx, which has no durable install to update. Pin the latest with\n" +
           `  npx ${CLI_PACKAGE}@latest <command>   — or install it: npm i -g ${CLI_PACKAGE}`,
       );
-      return 0;
+      return refreshPlugin(deps, kind);
     case "pnpm-global":
     case "npm-global": {
       const pm = kind === "pnpm-global" ? "pnpm" : "npm";
@@ -153,7 +210,7 @@ export async function runUpdate(deps: UpdateDeps): Promise<number> {
         return 1;
       }
       deps.log(`update: updated to v${latest}.`);
-      return 0;
+      return refreshPlugin(deps, kind);
     }
   }
 }
@@ -170,6 +227,31 @@ export function defaultUpdateDeps(): UpdateDeps {
       if (res.error) return { ok: false, detail: res.error.message };
       if (res.status !== 0) return { ok: false, detail: `${pm} exited with code ${res.status}` };
       return { ok: true };
+    },
+    updatePlugin: () => {
+      // One `plugin list` call doubles as the availability + installed-ness probe: a missing
+      // binary sets res.error (ENOENT), and a CLI-only user (plugin never installed) is a skip,
+      // not a failure. Only when the plugin IS installed do we run the update.
+      const list = spawnSync("claude", ["plugin", "list"], { encoding: "utf8" });
+      if (list.error) return { ran: false, ok: false, detail: "claude CLI not found" };
+      if (list.status !== 0)
+        return {
+          ran: false,
+          ok: false,
+          detail: `claude plugin list exited with code ${list.status}`,
+        };
+      if (!(typeof list.stdout === "string" && list.stdout.includes(PLUGIN_ID)))
+        return { ran: false, ok: false, detail: `${PLUGIN_ID} not installed` };
+
+      const res = spawnSync("claude", ["plugin", "update", PLUGIN_ID], { stdio: "inherit" });
+      if (res.error) return { ran: true, ok: false, detail: res.error.message };
+      if (res.status !== 0)
+        return {
+          ran: true,
+          ok: false,
+          detail: `claude plugin update exited with code ${res.status}`,
+        };
+      return { ran: true, ok: true };
     },
     log: (m) => {
       process.stderr.write(`${m}\n`);
