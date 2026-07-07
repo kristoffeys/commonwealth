@@ -11,19 +11,23 @@ function readJson(rel: string): unknown {
 }
 
 describe(".claude-plugin/plugin.json", () => {
-  it("is valid JSON naming the plugin 'commonwealth' with mcpServers + hooks as file refs", () => {
+  it("is valid JSON naming the plugin 'commonwealth' with mcpServers as a file ref", () => {
     const manifest = readJson(".claude-plugin/plugin.json") as Record<string, unknown>;
     expect(manifest.name).toBe("commonwealth");
     expect(typeof manifest.version).toBe("string");
 
-    // Claude Code loads mcpServers/hooks as STRING paths to files at the plugin root (an inline
+    // Claude Code loads mcpServers as a STRING path to a file at the plugin root (an inline
     // mcpServers object is NOT picked up — it silently registers zero MCP servers).
     expect(typeof manifest.mcpServers).toBe("string");
     const mcpRel = manifest.mcpServers as string;
     expect(existsSync(path.join(pluginRoot, mcpRel))).toBe(true);
 
-    expect(typeof manifest.hooks).toBe("string");
-    expect(manifest.hooks as string).toContain("hooks/hooks.json");
+    // The manifest MUST NOT declare `hooks`: Claude Code auto-loads the standard
+    // `hooks/hooks.json`, so naming it here double-registers it and fails hook loading with
+    // "Duplicate hooks file detected". `manifest.hooks` may only name ADDITIONAL, non-standard
+    // hook files — which we don't have.
+    expect(manifest.hooks).toBeUndefined();
+    expect(existsSync(path.join(pluginRoot, "hooks/hooks.json"))).toBe(true);
   });
 
   it("the referenced .mcp.json runs the published MCP server via npx (#62)", () => {
