@@ -285,7 +285,7 @@ async function readRegistryFile(registryPath: string): Promise<RegistryLoad> {
 /**
  * Parse the registry file into a normalized {@link Registry}; null on missing OR invalid. Used by
  * {@link resolveBrainDir}, which must never throw on a bad file — a corrupt registry simply
- * resolves no mappings (resolution falls through to env). Writers use {@link readRegistryFile}
+ * resolves no rules (resolution falls through to env). Writers use {@link readRegistryFile}
  * directly so they can refuse to clobber a corrupt file (#78).
  */
 async function loadRegistry(registryPath: string): Promise<Registry | null> {
@@ -302,9 +302,8 @@ async function loadRegistry(registryPath: string): Promise<Registry | null> {
  *    dangling marker falls through to the registry instead of hijacking resolution (#68).
  * 2. Walk up: a directory that is itself a brain (`.commonwealth/schema-version`) resolves to
  *    itself.
- * 3. The user registry file (`opts.registryPath` ?? `$COMMONWEALTH_REGISTRY` ?? sibling of
- *    `$COMMONWEALTH_CONFIG` ?? `~/.commonwealth/registry.json`): the first `prefix` (tilde-expanded,
- *    resolved) that `startDir` is under → its `brain` (tilde-expanded).
+ * 3. The per-user config file (`opts.registryPath` ?? `$COMMONWEALTH_REGISTRY` ?? `$COMMONWEALTH_CONFIG`
+ *    ?? `~/.commonwealth/config.json`): the most-specific matching rule → its `brain` (tilde-expanded).
  * 4. `opts.env` ?? `process.env.COMMONWEALTH_BRAIN_DIR`, if set.
  * 5. `null`.
  *
@@ -425,7 +424,7 @@ function matchRules(
  *
  * 1. `.commonwealth/brain` marker (nearest valid ancestor) — human override.
  * 2. A directory that is itself a brain (`.commonwealth/schema-version`).
- * 3. The unified ruleset ({@link Registry.rules} + folded legacy `mappings`) — most-specific
+ * 3. The unified ruleset ({@link Registry.rules}) — most-specific
  *    match wins, deny breaks ties; a bare allow routes to `defaultBrain`.
  * 4. `COMMONWEALTH_BRAIN_DIR` env fallback.
  * 5. `none`.
@@ -506,10 +505,10 @@ export async function setBrainMarker(projectDir: string, brainPath: string): Pro
 }
 
 /**
- * The default user registry path (public wrapper over the internal resolver): honors
- * `$COMMONWEALTH_REGISTRY`, then a `registry.json` sibling of `$COMMONWEALTH_CONFIG`, then
- * `~/.commonwealth/registry.json`. This is where onboarding writes the project→brain map
- * (resolution layer 3, the default source of truth).
+ * The default per-user config path (public wrapper over the internal resolver): honors
+ * `$COMMONWEALTH_REGISTRY`, then `$COMMONWEALTH_CONFIG`, then `~/.commonwealth/config.json`.
+ * This is where onboarding writes the routing rules (resolution layer 3, the default source of
+ * truth).
  */
 export function defaultRegistryPath(): string {
   return resolveRegistryPath();
@@ -608,8 +607,8 @@ export async function getOrgBrain(
 /**
  * Designate `brain` as this user's org-brain (ADR-0023, #167). `brain` is `~`-expanded and resolved
  * to an absolute path; an optional `remote` records where to clone it from on demand (ADR-0019).
- * Idempotent overwrite of any prior pointer. Same safety as {@link addRegistryMapping}: refuses to
- * clobber a corrupt registry, persists atomically. Preserves existing `mappings`.
+ * Idempotent overwrite of any prior pointer. Same safety as {@link addRule}: refuses to
+ * clobber a corrupt registry, persists atomically. Preserves existing `rules`.
  */
 export async function setOrgBrain(
   brain: string,
@@ -654,8 +653,8 @@ function normalizeRuleForStore(rule: Rule): Rule {
  * Add or update a rule in the unified ruleset (ADR-0024). Dedupe is by {@link ruleMatcherKey}: a
  * rule with the same matcher has its outcome (brain / deny / remote) replaced in place; otherwise
  * the rule is appended. Path-ish fields are expanded to absolute; identity matchers are kept as
- * written (matching is case-insensitive). Same durability as {@link addRegistryMapping}: atomic
- * write, refuse-to-clobber-corrupt. Throws if the rule has no matcher.
+ * written (matching is case-insensitive). Durable: atomic write, refuse-to-clobber-corrupt. Throws
+ * if the rule has no matcher.
  */
 export async function addRule(
   rule: Rule,

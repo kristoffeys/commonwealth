@@ -66,3 +66,9 @@ see reliably. That is exactly the shape per-repo routing needs.
 
 Supersedes nothing (it corrects an implementation detail of the distribution approach; ADR-0006
 and the distribution doc already named the plugin as the delivery vehicle).
+
+## Addendum (2026-07-07)
+
+The `--no-mcp` backward-compatible alias mentioned above was removed in the dead-code /
+backward-compat cleanup; `--no-plugin` is now the only gate for the step. The decision itself
+stands — this note only records that the transitional alias is gone.

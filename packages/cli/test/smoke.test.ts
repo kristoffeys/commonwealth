@@ -60,7 +60,7 @@ describe("built commonwealth binary", () => {
 
       const res = spawnSync(
         "node",
-        [distEntry, "init", "--yes", "--no-mcp", "--no-daemon", "--no-build", "--no-seed"],
+        [distEntry, "init", "--yes", "--no-plugin", "--no-daemon", "--no-build", "--no-seed"],
         {
           cwd: project,
           stdio: "pipe",

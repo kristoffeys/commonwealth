@@ -3,7 +3,7 @@ import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { defaultBrainConfig } from "./config.js";
-import { KIND_DIR, type NoteKind, SCHEMA_VERSION } from "./schema.js";
+import { KIND_DIR, SCHEMA_VERSION } from "./schema.js";
 
 const pexec = promisify(execFile);
 
@@ -200,4 +200,3 @@ export async function initBrain(dir: string, opts: InitBrainOptions = {}): Promi
 
 // Re-export for consumers that want the canonical folder list without touching schema.
 export const BRAIN_KIND_DIRS: readonly string[] = KIND_DIRS;
-export type { NoteKind };

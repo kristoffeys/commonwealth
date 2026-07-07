@@ -135,14 +135,6 @@ describe("runOnboard", () => {
     expect(result.plugin).toBe("skipped");
   });
 
-  it("--no-mcp (alias): also skips installPlugin", async () => {
-    const deps = makeDeps();
-    const result = await runOnboard("/repo", { yes: true, mcp: false }, deps);
-
-    expect(deps.installPlugin).not.toHaveBeenCalled();
-    expect(result.plugin).toBe("skipped");
-  });
-
   it("--no-daemon: skips startDaemon, runs the rest", async () => {
     const deps = makeDeps();
     const result = await runOnboard("/repo", { yes: true, daemon: false }, deps);

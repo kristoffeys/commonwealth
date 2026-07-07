@@ -4,7 +4,7 @@ import type { Prompter } from "./prompt.js";
 import { findGitRepos } from "./discover.js";
 
 /**
- * Flags that shape a full `commonwealth init` orchestration. The step gates (`seed`, `mcp`,
+ * Flags that shape a full `commonwealth init` orchestration. The step gates (`seed`, `plugin`,
  * `daemon`, `build`, `scope`) default to `true` when omitted; pass `false` to skip that step. This
  * is a type alias (not an interface) so it stays free of empty-interface lint noise.
  */
@@ -20,11 +20,9 @@ export type OnboardOptions = {
   /**
    * Install the Commonwealth plugin (global MCP + session hooks) via the repo marketplace.
    * Default: true. The plugin resolves the brain per repo dynamically, so no brain dir is
-   * pinned. `mcp` is a backward-compatible alias for this gate.
+   * pinned.
    */
   plugin?: boolean;
-  /** Backward-compatible alias for {@link OnboardOptions.plugin}. */
-  mcp?: boolean;
   /** Start the sync daemon for the brain. Default: true. */
   daemon?: boolean;
   /** Build/bundle the workspace if dist artifacts are missing. Default: true. */
@@ -152,9 +150,8 @@ export async function runOnboard(
   const doScope = opts.scope !== false;
   const doAutoAdr = opts.autoAdr === true;
   const doRemote = typeof opts.remote === "string" && opts.remote.trim().length > 0;
-  // Install the plugin unless explicitly disabled. `plugin` is the canonical gate; `mcp` is a
-  // backward-compatible alias, so either being `false` disables the step.
-  const doPlugin = opts.plugin !== false && opts.mcp !== false;
+  // Install the plugin unless explicitly disabled.
+  const doPlugin = opts.plugin !== false;
   const doDaemon = opts.daemon !== false;
 
   // Default the sync/scope target to the INVOCATION dir, not the git root — `findRepoRoot`

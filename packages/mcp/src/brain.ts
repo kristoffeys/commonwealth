@@ -7,10 +7,10 @@ import { resolveBrainDir as resolveBrainDirFromRegistry } from "@cmnwlth/core";
  * Precedence:
  *  1. `COMMONWEALTH_BRAIN_DIR` — an explicit override still wins (the plugin/daemon may set
  *     it to pin a session's brain; see docs/03-distribution.md §3). We honor it here, up
- *     front, so it takes precedence over the registry mappings.
+ *     front, so it takes precedence over the registry rules.
  *  2. `@cmnwlth/core`'s registry resolver against the process cwd — so the MCP tools
  *     (search/read/remember) hit the correct per-repo brain via the registry (marker →
- *     ancestor brain → user registry; see ADR-0011). This already resolves a directory that
+ *     ancestor brain → user config rules; see ADR-0024). This already resolves a directory that
  *     is *itself* a brain to itself, so the "cd'd into a brain" case is covered here.
  *  3. `null` — nothing maps. We deliberately do NOT fall back to the cwd: silently adopting
  *     whatever directory Claude Code happens to launch in turns any unmapped repo into a

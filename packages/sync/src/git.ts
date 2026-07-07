@@ -52,31 +52,11 @@ export function openRepo(dir: string): SimpleGit {
   });
 }
 
-/** True if the working tree has staged, unstaged, or untracked changes. */
-export async function hasChanges(dir: string): Promise<boolean> {
-  const status = await openRepo(dir).status();
-  return !status.isClean();
-}
-
-/**
- * Stage everything and commit — but only if there is something to commit. Returns true
- * if a commit was actually created, false when the tree was already clean (so callers
- * can report whether local work landed without probing git themselves).
- */
-export async function commitAll(dir: string, message: string): Promise<boolean> {
-  const git = openRepo(dir);
-  await git.add(["-A"]);
-  const status = await git.status();
-  if (status.isClean()) return false;
-  await git.commit(message);
-  return true;
-}
-
 /**
  * Repo-relative paths that are currently staged (`git diff --cached --name-only`).
  * Used by the pre-commit secret scrub to know which files a commit is about to include.
  */
-export async function stagedFiles(dir: string): Promise<string[]> {
+async function stagedFiles(dir: string): Promise<string[]> {
   // `-z`: NUL-delimited and never quoted/escaped, so non-ASCII paths (and paths with spaces)
   // come through verbatim and the secret scrub sees every staged note file (#99).
   const out = await openRepo(dir).diff(["--cached", "--name-only", "-z"]);
@@ -84,7 +64,7 @@ export async function stagedFiles(dir: string): Promise<string[]> {
 }
 
 /** Remove `files` from the index (`git reset -q -- <files>`), leaving the working tree. */
-export async function unstage(dir: string, files: string[]): Promise<void> {
+async function unstage(dir: string, files: string[]): Promise<void> {
   if (files.length === 0) return;
   await openRepo(dir).raw(["reset", "-q", "--", ...files]);
 }
@@ -139,11 +119,6 @@ export async function scrubStagedSecrets(dir: string): Promise<string[]> {
   }
   await unstage(dir, secretsBlocked);
   return secretsBlocked;
-}
-
-/** The current branch name, or null if detached / no commits yet. */
-export async function currentBranch(dir: string): Promise<string | null> {
-  return (await openRepo(dir).status()).current;
 }
 
 /** True if the repo has an `origin` remote configured. */

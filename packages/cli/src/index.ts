@@ -106,7 +106,7 @@ function printUsage(): void {
       "  commonwealth init      [flags]                 onboard: build, create/join brain, plugin, daemon",
       "  commonwealth add       [<folder>...] [--brain <dir>] [--remote <url>]",
       "                                                 wire folder(s) to an existing brain (allowlist +",
-      "                                                 registry mapping + brains/ symlink) in one go",
+      "                                                 routing rule + brains/ symlink) in one go",
       "  commonwealth org-brain <set <dir> [--remote <url>] | show>   designate/show the org-brain (graduation target)",
       "  commonwealth reseed    [<repo>...] [--all]     mine repo(s) into the mapped brain and capture",
       "  commonwealth config    <list | get <k> | set <k> <v>>   read/set the brain's shared config",
@@ -136,7 +136,7 @@ function printUsage(): void {
       "            [--no-scope] [--no-seed] [--no-plugin] [--no-daemon] [--no-build]",
       "",
       "`init` is a single idempotent command: it builds the workspace (if needed), creates or",
-      "joins the brain, syncs one or more folders into it (allowlist + a global-registry mapping",
+      "joins the brain, syncs one or more folders into it (allowlist + a global routing rule",
       "with a ~/.commonwealth/brains/<name> symlink), seeds it from one or more repos, installs",
       "the Commonwealth plugin (global MCP + session hooks), and starts the sync daemon. Run in a",
       "terminal without --yes for an interactive wizard that scans for and lets you multi-select",
@@ -152,7 +152,7 @@ function printUsage(): void {
       "  --seed-repo <dir,...>  Repos to seed from now (default: the --sync folders)",
       "  --no-scope             Skip adding folders to the capture allowlist",
       "  --no-seed       Create the brain but skip gathering/staging seed candidates",
-      "  --no-plugin     Skip installing the Commonwealth plugin (alias: --no-mcp)",
+      "  --no-plugin     Skip installing the Commonwealth plugin",
       "  --no-daemon     Skip starting the sync daemon",
       "  --no-build      Skip the workspace build even if dist artifacts are missing",
       "",
@@ -166,7 +166,7 @@ function printUsage(): void {
  * Diagnostics go to stderr; there is no stdout data contract for `init`. Unknown commands and
  * `--help` print usage.
  *
- * `parseArgs` has no native boolean negation, so `--no-seed`/`--no-mcp`/`--no-daemon`/`--no-build`
+ * `parseArgs` has no native boolean negation, so `--no-seed`/`--no-plugin`/`--no-daemon`/`--no-build`
  * are stripped from argv here and turned into `false` gates before parsing the rest.
  *
  * @param argv Arguments after `node <script>` (i.e. `process.argv.slice(2)`).
@@ -339,7 +339,7 @@ async function cmdEmit(rest: string[]): Promise<number> {
 /**
  * `commonwealth add [<folder>...] [--brain <dir>] [--remote <url>]` — wire folders to an
  * existing brain without the full `init` orchestrator (#157): per folder, capture-allowlist +
- * global-registry mapping + `~/.commonwealth/brains/<name>` symlink. With no folders, wires the
+ * global routing rule + `~/.commonwealth/brains/<name>` symlink. With no folders, wires the
  * cwd; with no `--brain`, uses the brain the cwd already resolves to.
  */
 async function cmdAdd(rest: string[]): Promise<number> {
@@ -376,18 +376,10 @@ async function cmdInit(rest: string[]): Promise<number> {
   }
 
   // parseArgs has no native negation; consume --no-* flags first and derive the gates.
-  // `--no-plugin` is the canonical gate; `--no-mcp` is a backward-compatible alias.
-  const negations = [
-    "--no-scope",
-    "--no-seed",
-    "--no-plugin",
-    "--no-mcp",
-    "--no-daemon",
-    "--no-build",
-  ];
+  const negations = ["--no-scope", "--no-seed", "--no-plugin", "--no-daemon", "--no-build"];
   const scope = !rest.includes("--no-scope");
   const seed = !rest.includes("--no-seed");
-  const plugin = !rest.includes("--no-plugin") && !rest.includes("--no-mcp");
+  const plugin = !rest.includes("--no-plugin");
   const daemon = !rest.includes("--no-daemon");
   const build = !rest.includes("--no-build");
   const positional = rest.filter((a) => !negations.includes(a));
