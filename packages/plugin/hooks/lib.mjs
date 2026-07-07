@@ -80,6 +80,24 @@ async function resolveSessionBrain(inputCwd, deps) {
 }
 
 /**
+ * True when `cwd` is a synthetic launcher directory, not a real project — e.g. Orca's rate-limit
+ * PTY runs sessions from `~/Library/Application Support/orca/rate-limit-pty-cwd`. Such a directory
+ * never maps to a brain and the fallbacks in {@link candidateCwds} can't recover the real project
+ * (the rate-limit PTY runs with `$CLAUDE_PROJECT_DIR` unset). So a "no brain mapped — add it to
+ * your registry" receipt is not just noise but WRONG advice: the real project IS mapped; this PTY
+ * simply isn't run from it. SessionEnd skips these silently instead of nagging every rate-limit
+ * cycle (#180). Keyed off the `-pty-cwd` basename Orca uses for these synthetic working dirs.
+ *
+ * @param {string} cwd
+ * @returns {boolean}
+ */
+function isSyntheticLauncherCwd(cwd) {
+  if (typeof cwd !== "string" || cwd.length === 0) return false;
+  const base = path.basename(cwd);
+  return base.endsWith("-pty-cwd");
+}
+
+/**
  * SessionStart: resolve the brain for the session's cwd, honor the per-user scope gate,
  * and return the markdown context string to inject. Returns "" (inject nothing) when there
  * is no brain for this cwd or the cwd is out of scope — the two gates that make an
@@ -124,9 +142,15 @@ export async function sessionEnd(input, deps) {
     return { skipped: true, reason: "no-cwd" };
 
   const resolved = await resolveSessionBrain(inputCwd, deps);
-  // No brain for the hook cwd or any fallback. Anchor the receipt to the hook cwd so the next
-  // SessionStart there can explain the silence.
-  if (!resolved) return await finishEnd(deps, inputCwd, { skipped: true, reason: "no-brain" });
+  if (!resolved) {
+    // A synthetic launcher cwd (e.g. Orca's rate-limit PTY) never maps to a brain and isn't a
+    // real work session. Skip SILENTLY — a "map it in your registry" receipt would be wrong
+    // advice and would re-nag every rate-limit cycle (#180). No receipt, so nothing is surfaced.
+    if (isSyntheticLauncherCwd(inputCwd)) return { skipped: true, reason: "synthetic-cwd" };
+    // No brain for the hook cwd or any fallback. Anchor the receipt to the hook cwd so the next
+    // SessionStart there can explain the silence.
+    return await finishEnd(deps, inputCwd, { skipped: true, reason: "no-brain" });
+  }
   const { cwd, brain } = resolved;
 
   if (!(await deps.isInScope(cwd)))
