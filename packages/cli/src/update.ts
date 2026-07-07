@@ -3,6 +3,7 @@ import { existsSync, promises as fs, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { defaultServiceDeps, restartIfInstalled } from "./service.js";
 
 /**
  * `commonwealth --version` / `commonwealth update` + the update-available notice (#161).
@@ -123,6 +124,8 @@ export interface UpdateDeps {
   install(pm: "npm" | "pnpm", spec: string): { ok: boolean; detail?: string };
   /** Refresh the Claude Code plugin (hooks + MCP server) via `claude plugin update`. */
   updatePlugin(): PluginUpdateResult;
+  /** Restart the background sync service if installed (so the new binary loads); returns whether it did. */
+  restartService(): Promise<boolean>;
   /** Progress/diagnostic sink (stderr in production). */
   log(m: string): void;
 }
@@ -210,7 +213,11 @@ export async function runUpdate(deps: UpdateDeps): Promise<number> {
         return 1;
       }
       deps.log(`update: updated to v${latest}.`);
-      return refreshPlugin(deps, kind);
+      const pluginCode = refreshPlugin(deps, kind);
+      if (await deps.restartService()) {
+        deps.log("update: restarted the background sync service to load the new binary.");
+      }
+      return pluginCode;
     }
   }
 }
@@ -253,6 +260,7 @@ export function defaultUpdateDeps(): UpdateDeps {
         };
       return { ran: true, ok: true };
     },
+    restartService: () => restartIfInstalled(defaultServiceDeps()),
     log: (m) => {
       process.stderr.write(`${m}\n`);
     },
