@@ -2,7 +2,7 @@
   "mcpServers": {
     "commonwealth": {
       "command": "npx",
-      "args": ["-y", "@cmnwlth/mcp@0.1.6"]
+      "args": ["-y", "@cmnwlth/mcp@0.1.7"]
     }
   }
 }
