@@ -3,8 +3,8 @@ import * as core from "@cmnwlth/core";
 /**
  * `commonwealth registry` (ADR-0024) — manage the unified brain-resolution ruleset: match a
  * working directory by git identity (`repo`/`org`) or path (`prefix`), and route it to a brain,
- * deny it, or fall through to the default brain. Superseding the old `prefix → brain` mappings
- * (ADR-0011) and the separate scope allow/deny (ADR-0008), which are still read for back-compat.
+ * deny it, or fall through to the default brain. Lives alongside the scope allow/deny (ADR-0008)
+ * in the same per-user `config.json`.
  *
  *   commonwealth registry show
  *   commonwealth registry route <matcher> <brain> [--remote <url>]

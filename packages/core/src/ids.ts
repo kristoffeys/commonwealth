@@ -48,7 +48,7 @@ export function sourceSegment(source: string | undefined): string {
 /**
  * Repo-relative path for a note. With a project `source` the note lives under a per-project
  * subtree (`<project>/<kind>/<id>.md`, ADR-0015); without one it stays at the kind root
- * (`<kind>/<id>.md`) — which is also the back-compat location for pre-provenance notes.
+ * (`<kind>/<id>.md`).
  */
 export function pathForNote(kind: NoteKind, id: string, source?: string): string {
   const seg = sourceSegment(source);
