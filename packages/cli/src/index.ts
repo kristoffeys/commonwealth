@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { defaultAddDeps, runAdd } from "./add.js";
 import { cmdOrgBrain } from "./org-brain.js";
 import { cmdRegistry } from "./registry.js";
+import { cmdService } from "./service.js";
 import {
   cliVersion,
   defaultUpdateDeps,
@@ -67,6 +68,18 @@ export {
   parseMatcher,
   cmdRegistry,
 } from "./registry.js";
+export {
+  runService,
+  defaultServiceDeps,
+  parseServiceArgs,
+  launchdPlist,
+  systemdUnit,
+  schtasksCreateArgs,
+  restart as restartService,
+  type ServiceDeps,
+  type ServiceOptions,
+  type ServicePlatform,
+} from "./service.js";
 export type { OrgBrainOptions, OrgBrainDeps } from "./org-brain.js";
 export {
   cliVersion,
@@ -109,6 +122,7 @@ function printUsage(): void {
       "  commonwealth promote   <id...> | --all         approve staged notes into canon",
       "  commonwealth reject    <id...>                 discard staged notes",
       "  commonwealth registry  <show | route | allow | deny | remove | default>  brain-resolution rules",
+      "  commonwealth service   <install | uninstall | status | restart>  run sync as a background service",
       "  commonwealth scope     <show | allow <p> | deny <p> | check>   per-user capture scope",
       "  commonwealth recall    <query>                 search the brain",
       "  commonwealth ask       <question>              cited retrieval for a question (agent synthesizes)",
@@ -185,6 +199,8 @@ export async function run(argv: string[]): Promise<number> {
       return cmdOrgBrain(rest);
     case "registry":
       return cmdRegistry(rest);
+    case "service":
+      return cmdService(rest);
     case "update":
       return runUpdate(defaultUpdateDeps());
     case "reseed":

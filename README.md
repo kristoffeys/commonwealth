@@ -101,7 +101,8 @@ commonwealth reseed [<repo>] [--all]      # mine repo(s) into the brain again
 commonwealth pending                      # notes awaiting review
 commonwealth promote <id...> | --all      # approve staged notes into canon
 commonwealth reject <id...>               # discard staged notes
-commonwealth sync start|stop|once         # control the background sync
+commonwealth sync start|stop|once         # control the background sync (foreground)
+commonwealth service <install|uninstall|status|restart>  # run sync as an OS background service
 commonwealth health                       # freshness / trust score for the brain
 commonwealth graduate [--suggest]         # propose facts recurring across ≥2 brains to the org-brain
 commonwealth doctor [--fix]               # diagnose (and optionally fix) the setup
@@ -202,6 +203,32 @@ commonwealth add ~/work/new-project      # allowlist + brain mapping + symlink, 
 ```
 
 which wires it to the brain your current directory resolves to (or pass `--brain <dir>`).
+
+## Run sync in the background (a service)
+
+`commonwealth sync start` runs the daemon in the **foreground** (it holds the terminal). To keep a
+brain syncing across logout and reboot, install it as a **user-level service** that auto-restarts
+on crash:
+
+```bash
+cd <a wired folder>            # or pass --dir <brain>
+commonwealth service install   # generate + load the service, syncing that brain
+commonwealth service status    # is it loaded / active?
+commonwealth service restart   # reload (e.g. after picking up a new binary)
+commonwealth service uninstall # unload + remove it
+```
+
+Per OS, `install` generates and loads a user-level unit — no root, nothing system-wide:
+
+| OS      | Mechanism                                                             | Auto-restart          |
+| ------- | -------------------------------------------------------------------- | --------------------- |
+| macOS   | a LaunchAgent plist in `~/Library/LaunchAgents/be.commonwealth.sync.plist` | `KeepAlive` (on crash) |
+| Linux   | a `systemd --user` unit `~/.config/systemd/user/commonwealth-sync.service` (with `enable-linger` so it runs while logged out) | `Restart=always` |
+| Windows | a Scheduled Task `CommonwealthSync`, at logon                        | restart-on-failure    |
+
+`commonwealth update` **restarts an installed service automatically** so the freshly updated binary
+is loaded — you don't have to remember to. Logs go to `~/Library/Logs/commonwealth-sync.log`
+(macOS) or the systemd journal (`journalctl --user -u commonwealth-sync`).
 
 ## Configuration
 

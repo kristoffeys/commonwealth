@@ -58,11 +58,17 @@ describe("detectInstallKind", () => {
 /** Build fake {@link UpdateDeps} that record calls; override per test. */
 function fakeUpdateDeps(overrides: Partial<UpdateDeps> = {}): {
   deps: UpdateDeps;
-  calls: { installs: Array<{ pm: string; spec: string }>; pluginUpdates: number; logs: string[] };
+  calls: {
+    installs: Array<{ pm: string; spec: string }>;
+    pluginUpdates: number;
+    serviceRestarts: number;
+    logs: string[];
+  };
 } {
   const calls = {
     installs: [] as Array<{ pm: string; spec: string }>,
     pluginUpdates: 0,
+    serviceRestarts: 0,
     logs: [] as string[],
   };
   const deps: UpdateDeps = {
@@ -76,6 +82,10 @@ function fakeUpdateDeps(overrides: Partial<UpdateDeps> = {}): {
     updatePlugin: () => {
       calls.pluginUpdates += 1;
       return { ran: true, ok: true };
+    },
+    restartService: async () => {
+      calls.serviceRestarts += 1;
+      return false;
     },
     log: (m) => calls.logs.push(m),
     ...overrides,
@@ -95,6 +105,12 @@ describe("runUpdate", () => {
     const { deps, calls } = fakeUpdateDeps({ installKind: () => "pnpm-global" });
     expect(await runUpdate(deps)).toBe(0);
     expect(calls.installs).toEqual([{ pm: "pnpm", spec: `${CLI_PACKAGE}@0.2.0` }]);
+  });
+
+  it("restarts the sync service after a successful global update (#185)", async () => {
+    const { deps, calls } = fakeUpdateDeps({ restartService: async () => true });
+    expect(await runUpdate(deps)).toBe(0);
+    expect(calls.logs.join("\n")).toContain("restarted the background sync service");
   });
 
   it("is a no-op when already up to date", async () => {
