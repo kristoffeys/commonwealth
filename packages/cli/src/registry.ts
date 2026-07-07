@@ -59,7 +59,7 @@ export function parseMatcher(token: string | undefined): core.Rule | null {
   if (value.length === 0) return null;
   if (kind === "repo") return { repo: value };
   if (kind === "org") return { org: value };
-  if (kind === "path" || kind === "prefix") return { prefix: value };
+  if (kind === "path") return { prefix: value };
   return null;
 }
 
