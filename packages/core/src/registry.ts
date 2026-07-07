@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveProjectSource } from "./source.js";
+import { repoIdentity, resolveProjectSource } from "./source.js";
 
 /**
  * The brain registry (issue #14): resolve which brain repo a given working directory maps
@@ -25,20 +25,6 @@ const MARKER_REL = path.join(".commonwealth", "brain");
  * brain-only scaffold artifact, so it disambiguates cleanly (ADR-0011).
  */
 const BRAIN_IDENTITY_REL = path.join(".commonwealth", "schema-version");
-
-/** One prefix → brain mapping entry in the user registry file. */
-export interface RegistryMapping {
-  /** A path prefix (tilde-allowed); a `cwd` under it maps to {@link brain}. */
-  prefix: string;
-  /** The brain directory (tilde-allowed) to use for cwds under {@link prefix}. */
-  brain: string;
-  /**
-   * Optional git remote the brain can be cloned from when {@link brain} is missing locally
-   * (ADR-0019 clone-on-demand). Absent for mappings written before ADR-0019 — those never
-   * clone-on-demand (the pre-existing "brain must already exist" behavior).
-   */
-  remote?: string;
-}
 
 /** A resolved brain: its local directory plus the remote it clones from, when one is known. */
 export interface ResolvedBrain {
@@ -93,12 +79,11 @@ export interface Rule {
 export type BrainResolution =
   { kind: "brain"; brain: string; remote?: string } | { kind: "denied" } | { kind: "none" };
 
-/** Shape of the user registry JSON file (`~/.commonwealth/registry.json`). */
+/** Shape of the per-user config JSON file (`~/.commonwealth/config.json`). */
 export interface Registry {
   /**
    * The unified ruleset (ADR-0024): match by git identity or path → brain / deny / default.
-   * Preferred going forward. Optional (absent on legacy files); when present it is evaluated
-   * alongside {@link mappings} (each legacy mapping folds in as an equivalent `prefix` rule).
+   * The single brain-wiring source of truth.
    */
   rules?: Rule[];
   /**
@@ -107,11 +92,6 @@ export interface Registry {
    * turns on capture-everywhere (that is an explicit `*` rule). ADR-0024 §4.
    */
   defaultBrain?: ResolvedBrain;
-  /**
-   * Legacy `prefix → brain` mappings (ADR-0011, superseded by ADR-0024). Still read and folded
-   * into resolution as `prefix` rules so every existing install keeps working with zero migration.
-   */
-  mappings: RegistryMapping[];
   /**
    * The org-brain for this user: the shared brain that cross-brain knowledge graduates *up* to
    * (ADR-0023, #167). A deliberately *local per-machine* pointer — locating the org-brain must not
@@ -187,17 +167,16 @@ async function isDir(dir: string): Promise<boolean> {
 }
 
 /**
- * Resolve the user registry path. Order: explicit `registryPath` → `$COMMONWEALTH_REGISTRY`
- * (test override) → a `registry.json` sibling of `$COMMONWEALTH_CONFIG` (so tests that redirect
- * config also redirect the registry) → `~/.commonwealth/registry.json`.
+ * Resolve the single per-user config file (ADR-0024 §6): everything — routing `rules`,
+ * `defaultBrain`, `orgBrain` — lives in one `~/.commonwealth/config.json` (the same file curate
+ * reads its scope from). Order: explicit `registryPath` → `$COMMONWEALTH_REGISTRY` (deprecated
+ * test alias) → `$COMMONWEALTH_CONFIG` (the config file itself) → `~/.commonwealth/config.json`.
  */
 function resolveRegistryPath(explicit?: string): string {
   if (explicit) return explicit;
   if (process.env.COMMONWEALTH_REGISTRY) return process.env.COMMONWEALTH_REGISTRY;
-  if (process.env.COMMONWEALTH_CONFIG) {
-    return path.join(path.dirname(process.env.COMMONWEALTH_CONFIG), "registry.json");
-  }
-  return path.join(os.homedir(), ".commonwealth", "registry.json");
+  if (process.env.COMMONWEALTH_CONFIG) return process.env.COMMONWEALTH_CONFIG;
+  return path.join(os.homedir(), ".commonwealth", "config.json");
 }
 
 /**
@@ -205,7 +184,9 @@ function resolveRegistryPath(explicit?: string): string {
  * start empty) apart from "file present but unparseable" (must NOT be clobbered — #78).
  */
 type RegistryLoad =
-  { status: "ok"; registry: Registry } | { status: "missing" } | { status: "corrupt"; raw: string };
+  | { status: "ok"; registry: Registry; rawObj: Record<string, unknown> }
+  | { status: "missing" }
+  | { status: "corrupt"; raw: string };
 
 /**
  * Validate one raw rule (ADR-0024). Returns a clean {@link Rule} or null. A rule must have at
@@ -265,25 +246,7 @@ async function readRegistryFile(registryPath: string): Promise<RegistryLoad> {
     return { status: "corrupt", raw };
   }
   const obj = (typeof parsed === "object" && parsed !== null ? parsed : {}) as Partial<Registry>;
-  const mappings = Array.isArray(obj.mappings) ? obj.mappings : [];
-  const clean: RegistryMapping[] = [];
-  for (const m of mappings) {
-    if (
-      m &&
-      typeof m === "object" &&
-      typeof (m as RegistryMapping).prefix === "string" &&
-      typeof (m as RegistryMapping).brain === "string"
-    ) {
-      const entry: RegistryMapping = {
-        prefix: (m as RegistryMapping).prefix,
-        brain: (m as RegistryMapping).brain,
-      };
-      const remote = (m as RegistryMapping).remote;
-      if (typeof remote === "string" && remote.length > 0) entry.remote = remote;
-      clean.push(entry);
-    }
-  }
-  const registry: Registry = { mappings: clean };
+  const registry: Registry = {};
 
   // Parse the unified ruleset (ADR-0024) with the same defensive discipline: skip any malformed
   // rule rather than throwing, so a partial hand-edit degrades to "fewer rules", never a crash.
@@ -314,7 +277,9 @@ async function readRegistryFile(registryPath: string): Promise<RegistryLoad> {
     if (typeof rawOrg.remote === "string" && rawOrg.remote.length > 0) org.remote = rawOrg.remote;
     registry.orgBrain = org;
   }
-  return { status: "ok", registry };
+  // Return the raw object too, so writers can round-trip keys they don't own (e.g. the scope
+  // `allow`/`deny` that curate writes into the SAME config.json). ADR-0024 §6.
+  return { status: "ok", registry, rawObj: obj as Record<string, unknown> };
 }
 
 /**
@@ -453,21 +418,6 @@ function matchRules(
 }
 
 /**
- * Fold legacy `prefix → brain` mappings (ADR-0011) into `prefix` rules and concatenate them after
- * the explicit {@link Registry.rules}. Legacy mappings always carry a brain, so they become
- * allow-with-brain rules at the prefix tier — reproducing the old longest-prefix-wins behavior via
- * the shared length tiebreak.
- */
-function combinedRules(registry: Registry): Rule[] {
-  const legacy: Rule[] = registry.mappings.map((m) => ({
-    prefix: m.prefix,
-    brain: m.brain,
-    ...(m.remote ? { remote: m.remote } : {}),
-  }));
-  return [...(registry.rules ?? []), ...legacy];
-}
-
-/**
  * Resolve a working directory against the full model (ADR-0024), returning the three-way
  * {@link BrainResolution} — `brain` (in scope, routed), `denied` (an explicit deny rule; out of
  * scope), or `none` (nothing configured here). This is the scope-aware entry point the hooks
@@ -509,17 +459,15 @@ export async function resolveBrain(
     if (await isFile(path.join(dir, BRAIN_IDENTITY_REL))) return { kind: "brain", brain: dir };
   }
 
-  // 3) The unified ruleset (explicit rules + folded legacy mappings).
+  // 3) The unified ruleset.
   const registry = await loadRegistry(registryPath);
-  if (registry) {
-    const rules = combinedRules(registry);
-    if (rules.length > 0) {
-      // Resolve git identity once, only if an identity rule could use it (path-only stays cheap).
-      const needsSlug = rules.some((r) => (r.repo && r.repo !== "*") || (r.org && r.org !== "*"));
-      const slug = needsSlug ? await resolveProjectSource(start) : null;
-      const result = matchRules(start, slug, rules, registry.defaultBrain ?? null);
-      if (result) return result;
-    }
+  const rules = registry?.rules ?? [];
+  if (rules.length > 0) {
+    // Resolve git identity once, only if an identity rule could use it (path-only stays cheap).
+    const needsSlug = rules.some((r) => (r.repo && r.repo !== "*") || (r.org && r.org !== "*"));
+    const slug = needsSlug ? await resolveProjectSource(start) : null;
+    const result = matchRules(start, slug, rules, registry?.defaultBrain ?? null);
+    if (result) return result;
   }
 
   // 4) Env fallback.
@@ -576,71 +524,6 @@ export function defaultBrainsDir(): string {
 }
 
 /**
- * Add (or update) a `prefix → brain` mapping in the user registry, the default brain-wiring
- * source of truth (resolution layer 3). Both `prefix` and `brain` are `~`-expanded and
- * resolved to absolute paths; dedupe is by expanded prefix:
- *
- * - no mapping with this prefix → push `{ prefix, brain }` (`added: true`);
- * - a mapping with this prefix but a DIFFERENT brain → update it (`updated: true`);
- * - an identical mapping → no-op (`{ added: false, updated: false }`).
- *
- * Idempotent. Creates the registry's directory if missing and persists pretty (2-space) JSON
- * atomically (tmp file + rename) so a crash mid-write cannot corrupt it. A present-but-corrupt
- * registry is NOT clobbered: it is backed up to `registry.json.corrupt-<ts>` and a clear error is
- * thrown, so a transient/partial-write corruption never silently wipes every other project's
- * brain wiring (#78). A missing file is treated as an empty registry (the normal first-run case).
- */
-export async function addRegistryMapping(
-  prefix: string,
-  brain: string,
-  opts: string | { remote?: string; registryPath?: string } = {},
-): Promise<{ added: boolean; updated: boolean }> {
-  // Back-compat: a string third arg is the registry path (its long-standing signature).
-  const registryPath =
-    typeof opts === "string" ? opts : (opts.registryPath ?? defaultRegistryPath());
-  const remote = typeof opts === "string" ? undefined : opts.remote;
-  const absPrefix = expand(prefix);
-  const absBrain = expand(brain);
-
-  const load = await readRegistryFile(registryPath);
-  if (load.status === "corrupt") {
-    // Preserve the unparseable file rather than overwrite it, then refuse loudly. Wiring state
-    // is user data; "never silently overwrite" (ADR-0003) applies here as much as to notes.
-    const backup = `${registryPath}.corrupt-${Date.now()}`;
-    await fs.rename(registryPath, backup).catch(() => fs.writeFile(backup, load.raw, "utf8"));
-    throw new Error(
-      `Refusing to overwrite a corrupt registry at ${registryPath} (backed up to ${backup}). ` +
-        `Fix or remove it, then retry.`,
-    );
-  }
-  const registry: Registry = load.status === "ok" ? load.registry : { mappings: [] };
-  const existing = registry.mappings.find((m) => expand(m.prefix) === absPrefix);
-
-  let added = false;
-  let updated = false;
-  if (!existing) {
-    registry.mappings.push({ prefix: absPrefix, brain: absBrain, ...(remote ? { remote } : {}) });
-    added = true;
-  } else {
-    const brainChanged = expand(existing.brain) !== absBrain;
-    // Only overwrite an existing remote when a new one is given; never clear it implicitly.
-    const remoteChanged = remote !== undefined && existing.remote !== remote;
-    if (!brainChanged && !remoteChanged) return { added, updated };
-    existing.prefix = absPrefix;
-    existing.brain = absBrain;
-    if (remote !== undefined) existing.remote = remote;
-    updated = true;
-  }
-
-  await fs.mkdir(path.dirname(registryPath), { recursive: true });
-  // Atomic write: a crash mid-write leaves the old registry intact rather than a partial file.
-  const tmp = `${registryPath}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
-  await fs.rename(tmp, registryPath);
-  return { added, updated };
-}
-
-/**
  * Load, guard-against-corrupt, mutate, and atomically persist the registry. Centralizes the
  * "never silently overwrite a corrupt registry" discipline (#78) shared by every writer: a
  * present-but-unparseable file is backed up to `registry.json.corrupt-<ts>` and a clear error is
@@ -661,11 +544,21 @@ async function persistRegistry(
         `Fix or remove it, then retry.`,
     );
   }
-  const registry: Registry = load.status === "ok" ? load.registry : { mappings: [] };
+  const registry: Registry = load.status === "ok" ? load.registry : {};
   mutate(registry);
+  // Merge our managed keys back onto the raw object so keys we don't own — notably the scope
+  // `allow`/`deny` that curate writes into the SAME config.json (ADR-0024 §6) — survive the write.
+  const out: Record<string, unknown> = load.status === "ok" ? { ...load.rawObj } : {};
+  const sync = (key: keyof Registry) => {
+    if (registry[key] === undefined) delete out[key];
+    else out[key] = registry[key];
+  };
+  sync("rules");
+  sync("defaultBrain");
+  sync("orgBrain");
   await fs.mkdir(path.dirname(registryPath), { recursive: true });
   const tmp = `${registryPath}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
+  await fs.writeFile(tmp, `${JSON.stringify(out, null, 2)}\n`, "utf8");
   await fs.rename(tmp, registryPath);
 }
 
@@ -682,8 +575,14 @@ export async function listWiredBrainDirs(opts: { registryPath?: string } = {}): 
   const orgDir = registry.orgBrain ? expand(registry.orgBrain.brain) : null;
   const seen = new Set<string>();
   const dirs: string[] = [];
-  for (const mapping of registry.mappings) {
-    const dir = expand(mapping.brain);
+  // Every brain a rule routes to, plus the default brain a bare allow uses. Deny rules (no brain)
+  // contribute nothing; the org-brain (graduation target) is excluded.
+  const brains = [
+    ...(registry.rules ?? []).map((r) => r.brain).filter((b): b is string => typeof b === "string"),
+    ...(registry.defaultBrain ? [registry.defaultBrain.brain] : []),
+  ];
+  for (const b of brains) {
+    const dir = expand(b);
     if (dir === orgDir || seen.has(dir)) continue;
     seen.add(dir);
     dirs.push(dir);
@@ -825,11 +724,30 @@ export async function setDefaultBrain(
   });
 }
 
-/** Read the full registry (rules, defaultBrain, legacy mappings, orgBrain); `null` if missing/corrupt. */
+/** Read the full per-user config (rules, defaultBrain, orgBrain); `null` if missing/corrupt. */
 export async function loadRegistryFile(
   opts: { registryPath?: string } = {},
 ): Promise<Registry | null> {
   return loadRegistry(resolveRegistryPath(opts.registryPath));
+}
+
+/**
+ * Wire a folder to a brain (ADR-0024): write an **identity** rule (`repo:<owner/repo>`) when the
+ * folder is a git repo with an `origin` — so the mapping follows that repo across worktrees, clones,
+ * and machines — else a **path** rule (`prefix:<folder>`). This is the write half of the
+ * onboarding/`commonwealth add` flow. Returns the add result plus the rule that was written.
+ */
+export async function wireFolder(
+  folder: string,
+  brain: string,
+  opts: { remote?: string; registryPath?: string } = {},
+): Promise<{ added: boolean; updated: boolean; rule: Rule }> {
+  const slug = await repoIdentity(folder);
+  const rule: Rule = slug
+    ? { repo: slug, brain, ...(opts.remote ? { remote: opts.remote } : {}) }
+    : { prefix: folder, brain, ...(opts.remote ? { remote: opts.remote } : {}) };
+  const res = await addRule(rule, { registryPath: opts.registryPath });
+  return { ...res, rule };
 }
 
 /**

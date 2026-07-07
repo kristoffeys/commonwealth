@@ -52,7 +52,7 @@ describe("resolveBrainDir (mcp)", () => {
     await fs.mkdir(project, { recursive: true });
     await fs.writeFile(
       process.env.COMMONWEALTH_REGISTRY as string,
-      JSON.stringify({ mappings: [{ prefix: path.join(tmp, "work"), brain }] }),
+      JSON.stringify({ rules: [{ prefix: path.join(tmp, "work"), brain }] }),
       "utf8",
     );
 

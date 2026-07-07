@@ -129,9 +129,10 @@ export function defaultInitDeps(opts: DefaultInitDepsOptions = {}): InitDeps {
     resolveBrain: (cwd) => core.resolveBrainDir(cwd),
     createBrain: (dir, name) => core.initBrain(dir, { name }),
     registerBrain: async (repoDir, brainDir, remote) => {
-      // ADR-0011: the global registry is the source of truth; no per-project marker.
+      // ADR-0024: the per-user config's ruleset is the source of truth; wireFolder writes an
+      // identity (`repo:`) rule when the folder has a git origin, else a `path:` rule.
       // ADR-0019: record the remote so a missing brain can clone-on-demand.
-      await core.addRegistryMapping(repoDir, brainDir, { remote });
+      await core.wireFolder(repoDir, brainDir, { remote });
       await core.linkBrain(path.basename(brainDir), brainDir);
     },
     stage,
@@ -433,7 +434,7 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
     remote?: string,
   ): Promise<{ mapped: boolean; linked: boolean; skipped?: string }> => {
     try {
-      const map = await core.addRegistryMapping(folder, brainDir, { remote });
+      const map = await core.wireFolder(folder, brainDir, { remote });
       const link = await core.linkBrain(path.basename(brainDir), brainDir);
       return { mapped: map.added || map.updated, linked: link.linked, skipped: link.skipped };
     } catch (err) {

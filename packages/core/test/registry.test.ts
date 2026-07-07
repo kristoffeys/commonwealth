@@ -3,12 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  addRegistryMapping,
+  addRule,
   linkBrain,
   resolveBrainDir,
   resolveBrainMapping,
   setBrainMarker,
 } from "../src/registry";
+
+// Resolution + writer plumbing for the unified ruleset (ADR-0024). Rule *precedence* (repo/org/
+// path/deny/default, longest-prefix, deny-on-tie) is covered in rule-resolution.test.ts; this file
+// covers the other resolution layers (marker, self-is-brain, env), the file I/O (addRule format,
+// corrupt-file safety, clone-on-demand remote), and linkBrain.
 
 let root: string;
 
@@ -39,7 +44,7 @@ async function makeBrain(dir: string): Promise<string> {
   return dir;
 }
 
-describe("resolveBrainDir", () => {
+describe("resolveBrainDir — non-rule layers (marker, self-is-brain, env)", () => {
   it("reads a .commonwealth/brain marker file, walking up and expanding relative to the marker", async () => {
     const project = await mkdir("proj");
     const nested = await mkdir("proj", "src", "deep");
@@ -52,16 +57,14 @@ describe("resolveBrainDir", () => {
     expect(await resolveBrainDir(nested)).toBe(brain);
   });
 
-  it("skips a dangling marker (missing target) and falls through to the registry (#68)", async () => {
+  it("skips a dangling marker (missing target) and falls through to a rule (#68)", async () => {
     const project = await mkdir("proj");
-    const registryPath = path.join(root, "registry.json");
+    const registryPath = path.join(root, "config.json");
     const realBrain = await makeBrain(await mkdir("real-brain"));
-    // A marker pointing at a brain that does not exist (moved/removed, or stale onboarding).
-    await setBrainMarker(project, path.join(root, "ghost-brain"));
-    // A registry mapping that DOES resolve.
-    await addRegistryMapping(project, realBrain, registryPath);
+    await setBrainMarker(project, path.join(root, "ghost-brain")); // dangling
+    await addRule({ prefix: project, brain: realBrain }, { registryPath }); // a rule that resolves
 
-    // The dead marker must not hijack resolution — the registry mapping wins.
+    // The dead marker must not hijack resolution — the rule wins.
     expect(await resolveBrainDir(project, { registryPath })).toBe(realBrain);
   });
 
@@ -84,9 +87,9 @@ describe("resolveBrainDir", () => {
   });
 
   it("does NOT treat a dir with only `.commonwealth/config.json` (scope config) as a brain", async () => {
-    // Regression: the per-user scope config lives at `~/.commonwealth/config.json`; a dir
-    // that merely has that file (no schema-version) must not resolve as a brain, or the home
-    // dir would shadow the registry. A registry mapping must still win.
+    // Regression: the per-user config lives at `~/.commonwealth/config.json`; a dir that merely
+    // has that file (no schema-version) must not resolve as a brain, or the home dir would shadow
+    // resolution. A rule must still win.
     const pseudo = await mkdir("has-scope-config");
     await fs.mkdir(path.join(pseudo, ".commonwealth"), { recursive: true });
     await fs.writeFile(
@@ -94,10 +97,10 @@ describe("resolveBrainDir", () => {
       JSON.stringify({ allow: [], deny: [] }),
       "utf8",
     );
-    const registryPath = path.join(root, "registry.json");
+    const registryPath = path.join(root, "config.json");
     const brain = await makeBrain(await mkdir("real-brain"));
-    await addRegistryMapping(pseudo, brain, registryPath);
-    // Layer 2 skips `pseudo` (no schema-version) → layer 3 registry resolves the real brain.
+    await addRule({ prefix: pseudo, brain }, { registryPath });
+    // Layer 2 skips `pseudo` (no schema-version) → the rule resolves the real brain.
     expect(await resolveBrainDir(pseudo, { registryPath })).toBe(brain);
   });
 
@@ -109,30 +112,39 @@ describe("resolveBrainDir", () => {
     expect(await resolveBrainDir(brain)).toBe(other);
   });
 
-  it("maps via the user registry file, honoring $COMMONWEALTH_REGISTRY", async () => {
-    const registryPath = path.join(root, "registry.json");
+  it("reads rules from the config file named by $COMMONWEALTH_REGISTRY", async () => {
+    const registryPath = path.join(root, "config.json");
     const brain = await makeBrain(await mkdir("mapped-brain"));
     const workRoot = await mkdir("work");
     const cwd = await mkdir("work", "clientX", "app");
     await fs.writeFile(
       registryPath,
-      JSON.stringify({ mappings: [{ prefix: workRoot, brain }] }),
+      JSON.stringify({ rules: [{ prefix: workRoot, brain }] }),
       "utf8",
     );
     process.env.COMMONWEALTH_REGISTRY = registryPath;
     expect(await resolveBrainDir(cwd)).toBe(brain);
   });
 
-  it("expands ~ in registry prefix and brain", async () => {
-    const registryPath = path.join(root, "registry.json");
-    // Use the home dir itself as an in-scope prefix; brain can be anywhere.
-    const brain = await makeBrain(await mkdir("home-brain"));
+  it("reads the config file named by $COMMONWEALTH_CONFIG (the file itself)", async () => {
+    const configPath = path.join(root, "cfg", "config.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    const brain = await makeBrain(await mkdir("cfg-brain"));
+    const workRoot = await mkdir("cfgwork");
+    const cwd = await mkdir("cfgwork", "app");
     await fs.writeFile(
-      registryPath,
-      JSON.stringify({ mappings: [{ prefix: "~", brain }] }),
+      configPath,
+      JSON.stringify({ rules: [{ prefix: workRoot, brain }] }),
       "utf8",
     );
-    process.env.COMMONWEALTH_REGISTRY = registryPath;
+    process.env.COMMONWEALTH_CONFIG = configPath;
+    expect(await resolveBrainDir(cwd)).toBe(brain);
+  });
+
+  it("expands ~ in a rule's prefix and brain", async () => {
+    const registryPath = path.join(root, "config.json");
+    const brain = await makeBrain(await mkdir("home-brain"));
+    await fs.writeFile(registryPath, JSON.stringify({ rules: [{ prefix: "~", brain }] }), "utf8");
     const underHome = path.join(os.homedir(), "some", "project");
     expect(await resolveBrainDir(underHome, { registryPath })).toBe(brain);
   });
@@ -141,102 +153,162 @@ describe("resolveBrainDir", () => {
     const brain = path.join(root, "env-brain");
     const cwd = await mkdir("loose", "project");
     expect(await resolveBrainDir(cwd, { env: brain })).toBe(brain);
-    // Also via process.env.
     process.env.COMMONWEALTH_BRAIN_DIR = brain;
     expect(await resolveBrainDir(cwd)).toBe(brain);
   });
 
-  it("returns null when no marker, brain, mapping, or env is present", async () => {
+  it("returns null when no marker, brain, rule, or env is present", async () => {
     const cwd = await mkdir("orphan", "project");
     expect(await resolveBrainDir(cwd)).toBeNull();
   });
 
-  it("is prefix-boundary safe: /work does not match /workshop", async () => {
-    const registryPath = path.join(root, "registry.json");
-    const brain = await makeBrain(await mkdir("b"));
-    const workRoot = await mkdir("work");
-    const workshop = await mkdir("workshop", "proj");
-    await fs.writeFile(
-      registryPath,
-      JSON.stringify({ mappings: [{ prefix: workRoot, brain }] }),
-      "utf8",
-    );
-    // A sibling that merely shares a prefix string is not "under" the mapping prefix,
-    // and (no marker/brain/env) resolves to null.
-    expect(await resolveBrainDir(workshop, { registryPath })).toBeNull();
-  });
-
-  it("honors a registry.json sibling of $COMMONWEALTH_CONFIG", async () => {
-    const configDir = await mkdir("cfg");
-    const registryPath = path.join(configDir, "registry.json");
-    const brain = await makeBrain(await mkdir("cfg-brain"));
-    const workRoot = await mkdir("cfgwork");
-    const cwd = await mkdir("cfgwork", "app");
-    await fs.writeFile(
-      registryPath,
-      JSON.stringify({ mappings: [{ prefix: workRoot, brain }] }),
-      "utf8",
-    );
-    process.env.COMMONWEALTH_CONFIG = path.join(configDir, "config.json");
-    expect(await resolveBrainDir(cwd)).toBe(brain);
+  it("a marker (layer 1) wins over a rule (layer 3)", async () => {
+    const registryPath = path.join(root, "config.json");
+    const markerBrain = await makeBrain(await mkdir("marker-brain"));
+    const ruleBrain = await makeBrain(await mkdir("rule-brain"));
+    const prefix = await mkdir("pw");
+    const cwd = await mkdir("pw", "app");
+    await addRule({ prefix, brain: ruleBrain }, { registryPath });
+    await setBrainMarker(cwd, markerBrain);
+    expect(await resolveBrainDir(cwd, { registryPath })).toBe(markerBrain);
   });
 });
 
-describe("addRegistryMapping", () => {
-  it("writes a new mapping as valid, absolute JSON", async () => {
-    const registryPath = path.join(root, "sub", "registry.json");
+describe("addRule — file format & idempotence", () => {
+  it("writes a new rule as valid, absolute JSON under `rules`", async () => {
+    const registryPath = path.join(root, "sub", "config.json");
     const brain = await makeBrain(await mkdir("m-brain"));
     const prefix = await mkdir("m-work");
 
-    const res = await addRegistryMapping(prefix, brain, registryPath);
+    const res = await addRule({ prefix, brain }, { registryPath });
     expect(res).toEqual({ added: true, updated: false });
 
     const parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
-      mappings: { prefix: string; brain: string }[];
+      rules: { prefix: string; brain: string }[];
     };
-    expect(parsed.mappings).toEqual([{ prefix, brain }]);
-    expect(path.isAbsolute(parsed.mappings[0].prefix)).toBe(true);
-    expect(path.isAbsolute(parsed.mappings[0].brain)).toBe(true);
+    expect(parsed.rules).toEqual([{ prefix, brain }]);
+    expect(path.isAbsolute(parsed.rules[0].prefix)).toBe(true);
+    expect(path.isAbsolute(parsed.rules[0].brain)).toBe(true);
   });
 
-  it("is a no-op when the same prefix+brain is added again", async () => {
-    const registryPath = path.join(root, "registry.json");
+  it("is a no-op when the same rule is added again", async () => {
+    const registryPath = path.join(root, "config.json");
     const brain = await makeBrain(await mkdir("m-brain"));
     const prefix = await mkdir("m-work");
 
-    await addRegistryMapping(prefix, brain, registryPath);
-    const second = await addRegistryMapping(prefix, brain, registryPath);
-    expect(second).toEqual({ added: false, updated: false });
-
-    const parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as { mappings: unknown[] };
-    expect(parsed.mappings).toHaveLength(1);
+    await addRule({ prefix, brain }, { registryPath });
+    expect(await addRule({ prefix, brain }, { registryPath })).toEqual({
+      added: false,
+      updated: false,
+    });
+    const parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as { rules: unknown[] };
+    expect(parsed.rules).toHaveLength(1);
   });
 
-  it("updates the brain when the same prefix maps somewhere new", async () => {
-    const registryPath = path.join(root, "registry.json");
+  it("updates the brain in place when the same matcher routes somewhere new", async () => {
+    const registryPath = path.join(root, "config.json");
     const brainA = await makeBrain(await mkdir("brain-a"));
     const brainB = await makeBrain(await mkdir("brain-b"));
     const prefix = await mkdir("m-work");
 
-    await addRegistryMapping(prefix, brainA, registryPath);
-    const res = await addRegistryMapping(prefix, brainB, registryPath);
-    expect(res).toEqual({ added: false, updated: true });
-
+    await addRule({ prefix, brain: brainA }, { registryPath });
+    expect(await addRule({ prefix, brain: brainB }, { registryPath })).toEqual({
+      added: false,
+      updated: true,
+    });
     const parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
-      mappings: { prefix: string; brain: string }[];
+      rules: { prefix: string; brain: string }[];
     };
-    expect(parsed.mappings).toEqual([{ prefix, brain: brainB }]);
+    expect(parsed.rules).toEqual([{ prefix, brain: brainB }]);
   });
 
-  it("round-trips: a cwd under a written prefix resolves via resolveBrainDir", async () => {
-    const registryPath = path.join(root, "registry.json");
+  it("round-trips: a cwd under a written prefix rule resolves via resolveBrainDir", async () => {
+    const registryPath = path.join(root, "config.json");
     const brain = await makeBrain(await mkdir("rt-brain"));
     const prefix = await mkdir("rt-work");
     const cwd = await mkdir("rt-work", "client", "app");
-
-    await addRegistryMapping(prefix, brain, registryPath);
-    // No marker/self-brain shadows it; resolve strictly via the registry mapping.
+    await addRule({ prefix, brain }, { registryPath });
     expect(await resolveBrainDir(cwd, { registryPath })).toBe(brain);
+  });
+});
+
+describe("addRule — corrupt-file safety (#78)", () => {
+  it("refuses to clobber a corrupt config, backs it up, and preserves the original", async () => {
+    const registryPath = path.join(root, "config.json");
+    const corrupt = '{ "rules": [ { "prefix": "/a", "brain": "/b" }';
+    await fs.writeFile(registryPath, corrupt, "utf8");
+
+    await expect(
+      addRule({ prefix: "/new", brain: "/new-brain" }, { registryPath }),
+    ).rejects.toThrow(/corrupt/);
+
+    const files = await fs.readdir(root);
+    const backup = files.find((f) => f.startsWith("config.json.corrupt-"));
+    expect(backup).toBeTruthy();
+    expect(await fs.readFile(path.join(root, backup!), "utf8")).toBe(corrupt);
+  });
+
+  it("treats a missing config as empty and creates it (normal first run)", async () => {
+    const registryPath = path.join(root, "sub", "config.json");
+    const res = await addRule({ prefix: "/proj", brain: "/brain" }, { registryPath });
+    expect(res.added).toBe(true);
+    const written = JSON.parse(await fs.readFile(registryPath, "utf8"));
+    expect(written.rules).toHaveLength(1);
+  });
+
+  it("preserves existing rules when adding a new one", async () => {
+    const registryPath = path.join(root, "config.json");
+    await addRule({ prefix: "/one", brain: "/brain-one" }, { registryPath });
+    await addRule({ prefix: "/two", brain: "/brain-two" }, { registryPath });
+    const written = JSON.parse(await fs.readFile(registryPath, "utf8"));
+    expect(written.rules).toHaveLength(2);
+  });
+
+  it("preserves unrelated keys (scope allow/deny) sharing the same config.json (ADR-0024 §6)", async () => {
+    // core (rules) and curate (scope allow/deny) write the SAME file — neither may clobber the other.
+    const registryPath = path.join(root, "config.json");
+    await fs.writeFile(
+      registryPath,
+      JSON.stringify({ allow: ["/work"], deny: ["/work/secret"] }),
+      "utf8",
+    );
+    await addRule({ prefix: "/work", brain: "/brain" }, { registryPath });
+    const written = JSON.parse(await fs.readFile(registryPath, "utf8"));
+    expect(written.allow).toEqual(["/work"]); // scope keys survive the rule write
+    expect(written.deny).toEqual(["/work/secret"]);
+    expect(written.rules).toHaveLength(1);
+  });
+});
+
+describe("rule remote — clone-on-demand wiring (ADR-0019)", () => {
+  it("round-trips a remote through addRule + resolveBrainMapping", async () => {
+    const registryPath = path.join(root, "config.json");
+    const project = await mkdir("proj");
+    const brain = await mkdir("brain");
+    await addRule(
+      { prefix: project, brain, remote: "git@example.com:org/brain.git" },
+      { registryPath },
+    );
+
+    const m = await resolveBrainMapping(project, { registryPath });
+    expect(m?.brain).toBe(brain);
+    expect(m?.remote).toBe("git@example.com:org/brain.git");
+    expect(await resolveBrainDir(project, { registryPath })).toBe(brain);
+  });
+
+  it("updates the remote on an existing rule", async () => {
+    const registryPath = path.join(root, "config.json");
+    const project = await mkdir("proj");
+    const brain = await mkdir("brain");
+    await addRule({ prefix: project, brain }, { registryPath });
+    const res = await addRule(
+      { prefix: project, brain, remote: "https://example.com/y.git" },
+      { registryPath },
+    );
+    expect(res.updated).toBe(true);
+    expect((await resolveBrainMapping(project, { registryPath }))?.remote).toBe(
+      "https://example.com/y.git",
+    );
   });
 });
 
@@ -274,7 +346,6 @@ describe("linkBrain", () => {
     const res = await linkBrain("taken", brain, brainsDir);
     expect(res.linked).toBe(false);
     expect(res.skipped).toBe("exists (not a symlink)");
-    // The real file is untouched.
     expect(await fs.readFile(realFile, "utf8")).toBe("keep me\n");
     const stat = await fs.lstat(realFile);
     expect(stat.isSymbolicLink()).toBe(false);
@@ -291,7 +362,6 @@ describe("linkBrain", () => {
   });
 
   it("returns skipped (never throws) when the brains dir cannot be created", async () => {
-    // A regular file sits where brainsDir's parent should be → mkdir throws ENOTDIR.
     const parentFile = path.join(root, "not-a-dir");
     await fs.writeFile(parentFile, "x\n", "utf8");
     const brainsDir = path.join(parentFile, "brains");
@@ -299,116 +369,5 @@ describe("linkBrain", () => {
     const res = await linkBrain("guard", brain, brainsDir);
     expect(res.linked).toBe(false);
     expect(res.skipped).toBeTruthy();
-  });
-});
-
-describe("addRegistryMapping — corrupt-file safety (#78)", () => {
-  it("refuses to clobber a corrupt registry, backs it up, and preserves the original", async () => {
-    const registryPath = path.join(root, "registry.json");
-    // A partial/corrupt write: invalid JSON that still holds real wiring bytes.
-    const corrupt = '{ "mappings": [ { "prefix": "/a", "brain": "/b" }';
-    await fs.writeFile(registryPath, corrupt, "utf8");
-
-    await expect(addRegistryMapping("/new", "/new-brain", registryPath)).rejects.toThrow(/corrupt/);
-
-    // The corrupt file is not silently replaced with a one-entry registry.
-    const files = await fs.readdir(root);
-    const backup = files.find((f) => f.startsWith("registry.json.corrupt-"));
-    expect(backup).toBeTruthy();
-    // The original bytes survive (in the backup, since we rename it aside).
-    expect(await fs.readFile(path.join(root, backup!), "utf8")).toBe(corrupt);
-  });
-
-  it("treats a missing registry as empty and creates it (normal first run)", async () => {
-    const registryPath = path.join(root, "sub", "registry.json");
-    const res = await addRegistryMapping("/proj", "/brain", registryPath);
-    expect(res.added).toBe(true);
-    const written = JSON.parse(await fs.readFile(registryPath, "utf8"));
-    expect(written.mappings).toHaveLength(1);
-  });
-
-  it("preserves existing mappings when adding a new one", async () => {
-    const registryPath = path.join(root, "registry.json");
-    await addRegistryMapping("/one", "/brain-one", registryPath);
-    await addRegistryMapping("/two", "/brain-two", registryPath);
-    const written = JSON.parse(await fs.readFile(registryPath, "utf8"));
-    expect(written.mappings).toHaveLength(2);
-  });
-});
-
-describe("registry longest-prefix wins (#103)", () => {
-  it("a more-specific prefix wins over a broader one added earlier", async () => {
-    const registryPath = path.join(root, "registry.json");
-    const broadBrain = await makeBrain(await mkdir("broad-brain"));
-    const narrowBrain = await makeBrain(await mkdir("narrow-brain"));
-    const broad = await mkdir("work");
-    const narrow = await mkdir("work", "app");
-    const cwd = await mkdir("work", "app", "src");
-
-    // Broad mapping added FIRST; narrow (more specific) SECOND — order must not decide.
-    await addRegistryMapping(broad, broadBrain, registryPath);
-    await addRegistryMapping(narrow, narrowBrain, registryPath);
-
-    expect(await resolveBrainDir(cwd, { registryPath })).toBe(narrowBrain);
-    // A cwd under only the broad prefix still resolves to the broad brain.
-    expect(await resolveBrainDir(await mkdir("work", "other"), { registryPath })).toBe(broadBrain);
-  });
-});
-
-describe("resolution precedence", () => {
-  it("a marker (layer 1) wins over a registry mapping (layer 3)", async () => {
-    const registryPath = path.join(root, "registry.json");
-    const markerBrain = await makeBrain(await mkdir("marker-brain"));
-    const registryBrain = await makeBrain(await mkdir("registry-brain"));
-    const prefix = await mkdir("pw");
-    const cwd = await mkdir("pw", "app");
-
-    await addRegistryMapping(prefix, registryBrain, registryPath);
-    await setBrainMarker(cwd, markerBrain);
-
-    expect(await resolveBrainDir(cwd, { registryPath })).toBe(markerBrain);
-  });
-});
-
-describe("registry remote — clone-on-demand wiring (ADR-0019)", () => {
-  it("round-trips a remote through addRegistryMapping + resolveBrainMapping", async () => {
-    const registryPath = path.join(root, "reg.json");
-    const project = await mkdir("proj");
-    const brain = await mkdir("brain");
-    await addRegistryMapping(project, brain, {
-      remote: "git@example.com:org/brain.git",
-      registryPath,
-    });
-    process.env.COMMONWEALTH_REGISTRY = registryPath;
-
-    const m = await resolveBrainMapping(project);
-    expect(m?.brain).toBe(brain);
-    expect(m?.remote).toBe("git@example.com:org/brain.git");
-    // resolveBrainDir still returns just the path (unchanged contract).
-    expect(await resolveBrainDir(project)).toBe(brain);
-  });
-
-  it("updates the remote on an existing mapping without touching the brain", async () => {
-    const registryPath = path.join(root, "reg.json");
-    const project = await mkdir("proj");
-    const brain = await mkdir("brain");
-    await addRegistryMapping(project, brain, { registryPath });
-    const res = await addRegistryMapping(project, brain, {
-      remote: "https://example.com/y.git",
-      registryPath,
-    });
-    expect(res.updated).toBe(true);
-    process.env.COMMONWEALTH_REGISTRY = registryPath;
-    expect((await resolveBrainMapping(project))?.remote).toBe("https://example.com/y.git");
-  });
-
-  it("keeps the legacy string third arg (registryPath) working", async () => {
-    const registryPath = path.join(root, "reg.json");
-    const project = await mkdir("proj");
-    const brain = await mkdir("brain");
-    await addRegistryMapping(project, brain, registryPath); // legacy positional form
-    process.env.COMMONWEALTH_REGISTRY = registryPath;
-    expect(await resolveBrainDir(project)).toBe(brain);
-    expect((await resolveBrainMapping(project))?.remote).toBeUndefined();
   });
 });

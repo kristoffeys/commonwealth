@@ -112,7 +112,7 @@ describe("runRegistry", () => {
 
   it("deny builds a deny rule; allow leaves a bare matcher", async () => {
     const { deps, calls } = fakeDeps({
-      load: async () => ({ mappings: [], defaultBrain: { brain: "/d" } }) as Registry,
+      load: async () => ({ defaultBrain: { brain: "/d" } }) as Registry,
     });
     await runRegistry({ action: "deny", matcher: { repo: "o/s" } }, deps);
     await runRegistry({ action: "allow", matcher: { org: "o/*" } }, deps);
@@ -138,11 +138,10 @@ describe("runRegistry", () => {
     expect(calls.removed).toEqual([{ prefix: "/x" }]);
   });
 
-  it("show prints default brain, rules, and legacy mappings", async () => {
+  it("show prints the default brain and rules", async () => {
     const registry: Registry = {
       defaultBrain: { brain: "/brains/antenna" },
       rules: [{ org: "weareantenna/*" }, { repo: "weareantenna/secret", deny: true }],
-      mappings: [{ prefix: "/legacy", brain: "/brains/legacy" }],
     };
     const { deps, calls } = fakeDeps({ load: async () => registry });
     const code = await runRegistry({ action: "show" }, deps);
@@ -151,6 +150,5 @@ describe("runRegistry", () => {
     expect(text).toContain("default brain: /brains/antenna");
     expect(text).toContain("org:weareantenna/*");
     expect(text).toContain("DENY");
-    expect(text).toContain("legacy mappings");
   });
 });

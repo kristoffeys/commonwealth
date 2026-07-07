@@ -158,7 +158,7 @@ export function defaultAddDeps(): AddDeps {
     },
     registerBrain: async (folder, brainDir, remote) => {
       try {
-        const map = await core.addRegistryMapping(folder, brainDir, { remote });
+        const map = await core.wireFolder(folder, brainDir, { remote });
         const link = await core.linkBrain(path.basename(brainDir), brainDir);
         return {
           added: map.added,

@@ -161,7 +161,7 @@ commonwealth registry allow  'org:weareantenna/*'    # all repos of an org → t
 commonwealth registry route  repo:weareantenna/erp ~/brains/erp   # one repo → a different brain
 commonwealth registry deny   repo:weareantenna/secrets           # never capture this repo
 commonwealth registry route  'path:~/scratch' ~/brains/scratch   # a path (non-repo dirs, monorepos)
-commonwealth registry show                           # list rules, the default brain, legacy mappings
+commonwealth registry show                           # list rules and the default brain
 commonwealth registry remove repo:weareantenna/erp   # drop a rule
 ```
 
@@ -178,7 +178,7 @@ A **matcher** is one of:
 
 Because `repo`/`org` match on git identity, a rule **follows a repo across every worktree, clone, and machine** — one `org:weareantenna/*` line covers all of Antenna's repos and all their branch worktrees, which path prefixes never could. Quote matchers containing `*` so your shell doesn't expand them.
 
-> Legacy `prefix → brain` mappings (from older `commonwealth add` runs) keep working — they're read as `path:` rules. `commonwealth registry show` lists them.
+> `commonwealth add <folder>` writes a rule for you: a `repo:` rule when the folder is a git repo with an `origin` (so it follows that repo everywhere), otherwise a `path:` rule.
 
 ### Keep personal projects out (scope)
 
@@ -207,11 +207,12 @@ which wires it to the brain your current directory resolves to (or pass `--brain
 
 Commonwealth keeps a few small files, deliberately separate:
 
-| File                                | Scope        | Synced? | Holds                                                  |
-| ----------------------------------- | ------------ | ------- | ------------------------------------------------------ |
-| `~/.commonwealth/config.json`       | per-user     | no      | the folder **scope** allow/deny                        |
-| `~/.commonwealth/registry.json`     | per-user     | no      | **brain routing**: which directory maps to which brain |
-| `<brain>/.commonwealth/config.json` | in the brain | yes     | brain **name**, remotes, and **feature flags**         |
+| File                                | Scope        | Synced? | Holds                                                                      |
+| ----------------------------------- | ------------ | ------- | ------------------------------------------------------------------------- |
+| `~/.commonwealth/config.json`       | per-user     | no      | your **brain-resolution rules** + default brain, and the **scope** allow/deny |
+| `<brain>/.commonwealth/config.json` | in the brain | yes     | brain **name**, remotes, and **feature flags** (team-shared)              |
+
+Two files, disambiguated by location: the per-user one under `~/.commonwealth/` is machine-local and never synced (your rules and personal denies stay yours); the one inside a brain syncs to the whole team.
 
 Team-wide **feature flags** live in the brain config and are toggled with the CLI:
 

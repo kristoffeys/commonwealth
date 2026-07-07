@@ -48,15 +48,39 @@ export async function loadUserConfig(configPath = defaultConfigPath()): Promise<
 }
 
 /**
- * Persist the user config as pretty JSON with a trailing newline, creating the parent
- * directory (`mkdir -p`) if needed.
+ * Persist the scope `allow`/`deny` into the per-user config, **preserving any other keys** already
+ * in the file — notably the brain-resolution `rules` / `defaultBrain` / `orgBrain` that
+ * `@cmnwlth/core` writes into the SAME `~/.commonwealth/config.json` (ADR-0024 §6). Without this
+ * merge, a scope write would clobber the routing rules and vice versa. Refuses to overwrite a
+ * present-but-corrupt file (its bytes may be real wiring state); a missing file starts fresh.
  */
 export async function saveUserConfig(
   config: UserConfig,
   configPath = defaultConfigPath(),
 ): Promise<void> {
+  let existing: Record<string, unknown> = {};
+  let raw: string | null = null;
+  try {
+    raw = await fs.readFile(configPath, "utf8");
+  } catch {
+    raw = null; // missing → start fresh
+  }
+  if (raw !== null) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") existing = parsed as Record<string, unknown>;
+    } catch {
+      const backup = `${configPath}.corrupt-${Date.now()}`;
+      await fs.rename(configPath, backup).catch(() => fs.writeFile(backup, raw as string, "utf8"));
+      throw new Error(
+        `Refusing to overwrite a corrupt config at ${configPath} (backed up to ${backup}). ` +
+          `Fix or remove it, then retry.`,
+      );
+    }
+  }
+  const merged = { ...existing, allow: config.allow, deny: config.deny };
   await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  await fs.writeFile(configPath, `${JSON.stringify(merged, null, 2)}\n`, "utf8");
 }
 
 /** Expand a leading `~` to the user's home directory, then resolve to an absolute path. */
