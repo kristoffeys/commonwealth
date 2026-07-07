@@ -18,12 +18,14 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 | [0008](0008-curation-locality.md)             | Curation locality: staging is per-user local, canon syncs    | Accepted |
 | [0009](0009-brain-config-feature-flags.md)    | Brain-level config & feature flags (incl. optional auto-ADR) | Accepted |
 | [0010](0010-secret-scanning.md)               | Secret scanning: built-in regex default, gitleaks optional   | Accepted |
-| [0011](0011-brain-wiring-global-registry.md)  | Brain wiring: global user registry is the default source     | Accepted |
+| [0011](0011-brain-wiring-global-registry.md)  | Brain wiring: global user registry is the default source     | Superseded by [0024](0024-rule-based-brain-resolution.md) |
 | [0012](0012-mcp-distribution-via-plugin.md)   | MCP distribution via the plugin at user scope                | Accepted |
 | [0019](0019-access-model-clone-on-demand.md)  | Access model: git permissions are the ACL; clone on demand   | Accepted |
 | [0020](0020-ask-the-brain-agent-synthesis.md) | Ask the brain: the host agent synthesizes; cited retrieval    | Accepted |
 | [0021](0021-embeddings-semantic-dedup.md)     | Embeddings: opt-in local-first semantic dedup; vectors in index | Accepted |
 | [0022](0022-decisions-captured-by-default.md) | Decisions captured by default: autoAdr on + `/decide` command   | Accepted |
+| [0023](0023-org-brain-graduation.md)          | Org-brain graduation: cross-brain recurrence → org-brain, opt-in | Accepted |
+| [0024](0024-rule-based-brain-resolution.md)   | Rule-based brain resolution: match by git identity or path      | Accepted |
 
 ## Process
 
