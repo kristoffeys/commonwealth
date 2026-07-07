@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -85,6 +86,63 @@ describe("realResolveBrainDir (inlined registry — no bare @cmnwlth/core import
 
     // config.json at `homeish` no longer hijacks; the registry mapping resolves.
     expect(await realResolveBrainDir(project)).toBe(brain);
+  });
+});
+
+describe("realResolveBrainDir — unified ruleset in the hook (ADR-0024)", () => {
+  /** Write the registry file the inlined resolver reads (COMMONWEALTH_REGISTRY). */
+  async function writeRegistry(obj: unknown): Promise<void> {
+    await fs.writeFile(process.env.COMMONWEALTH_REGISTRY as string, JSON.stringify(obj));
+  }
+  /** A git repo under tmp with an optional `origin`, so the hook's git-identity path is exercised. */
+  function gitRepo(name: string, origin?: string): string {
+    const repo = path.join(tmp, name);
+    execFileSync("git", ["init", "-q", repo]);
+    if (origin) execFileSync("git", ["-C", repo, "remote", "add", "origin", origin]);
+    return repo;
+  }
+
+  it("routes a git repo by org rule to the default brain", async () => {
+    const repo = gitRepo("foo", "git@github.com:weareantenna/foo.git");
+    const antenna = path.join(tmp, "antenna-brain");
+    await writeRegistry({ rules: [{ org: "weareantenna/*" }], defaultBrain: antenna });
+    expect(await realResolveBrainDir(repo)).toBe(antenna);
+  });
+
+  it("follows a repo across sibling worktree paths — neither is registered by prefix (#182)", async () => {
+    const wtA = gitRepo("app-a", "git@github.com:weareantenna/app.git");
+    const wtB = gitRepo("app-b", "git@github.com:weareantenna/app.git");
+    const antenna = path.join(tmp, "antenna-brain");
+    await writeRegistry({ rules: [{ org: "weareantenna/*" }], defaultBrain: antenna });
+    expect(await realResolveBrainDir(wtA)).toBe(antenna);
+    expect(await realResolveBrainDir(wtB)).toBe(antenna);
+  });
+
+  it("a most-specific repo rule overrides the org default", async () => {
+    const repo = gitRepo("erp", "git@github.com:weareantenna/erp.git");
+    const antenna = path.join(tmp, "antenna-brain");
+    const erp = path.join(tmp, "erp-brain");
+    await writeRegistry({
+      rules: [{ org: "weareantenna/*" }, { repo: "weareantenna/erp", brain: erp }],
+      defaultBrain: antenna,
+    });
+    expect(await realResolveBrainDir(repo)).toBe(erp);
+  });
+
+  it("a deny rule yields null and does NOT fall through to the env brain", async () => {
+    const work = path.join(tmp, "work");
+    await fs.mkdir(work, { recursive: true });
+    process.env.COMMONWEALTH_BRAIN_DIR = path.join(tmp, "env-brain");
+    await writeRegistry({ rules: [{ prefix: work, deny: true }] });
+    expect(await realResolveBrainDir(work)).toBeNull();
+  });
+
+  it("routes an unmatched dir via a catch-all * rule", async () => {
+    const anywhere = path.join(tmp, "random");
+    await fs.mkdir(anywhere, { recursive: true });
+    const antenna = path.join(tmp, "antenna-brain");
+    await writeRegistry({ rules: [{ prefix: "*" }], defaultBrain: antenna });
+    expect(await realResolveBrainDir(anywhere)).toBe(antenna);
   });
 });
 

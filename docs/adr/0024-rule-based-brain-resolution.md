@@ -143,10 +143,12 @@ command rewrites legacy files into the rule schema when the user opts in.
 - **Org-level wiring in one line** (`weareantenna/* → brain`), covering present and future repos.
 - **One model, one file, one mental picture**: match → brain | deny | default. The `config.json`
   scope layer is retired (kept readable for back-compat, then deprecated).
-- **Identity resolution shells out to `git`** (or reads `.git/config`) per resolution. The hooks
-  run this on every SessionStart/SessionEnd and **inline** a mirror of the resolver, so the
-  implementation reads `.git/config` directly (no subprocess) and caches per cwd. Path-only and
-  no-remote repos degrade gracefully (fall back to path rules / basename), never throwing.
+- **Identity resolution uses a single lazy `git config` call** (only when an identity rule is
+  present, so path-only registries never invoke git). Both core (`resolveProjectSource`) and the
+  **inlined** hook mirror use `git` rather than hand-parsing `.git/config`, because git resolves the
+  worktree `.git`-file → `commondir` → shared `origin` chain transparently — which is exactly the
+  worktree case this ADR exists to fix. Path-only and no-remote repos degrade gracefully (fall back
+  to path rules / basename), never throwing.
 - **Deterministic precedence** across two match axes via a fixed specificity tier + deny-on-tie,
   documented so the behavior is predictable.
 

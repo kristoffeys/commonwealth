@@ -93,6 +93,7 @@ rest — every command resolves the right brain from the current directory autom
 
 ```bash
 commonwealth add <folder> [--brain <dir>] # wire another folder to the brain, in one go
+commonwealth registry <show|route|allow|deny|remove|default>  # brain-resolution rules (see below)
 commonwealth status                       # review queue + sync-daemon state
 commonwealth recall <query>               # search the brain
 commonwealth ask <question>               # a cited answer, synthesized from the brain
@@ -149,6 +150,35 @@ A note is only ever considered when it carries `graduate: true`, and even then i
 across **≥2 distinct brains** to be proposed. Candidates are **staged for manual review** in the
 org-brain (with `sources:` back-links to where they came from) — never auto-promoted across the
 trust boundary, regardless of any brain's `autoPromote`. See [ADR-0023](docs/adr/0023-org-brain-graduation.md).
+
+### Route projects to brains (rules)
+
+Which brain a directory reads and writes is decided by an ordered **ruleset** ([ADR-0024](docs/adr/0024-rule-based-brain-resolution.md)). A rule matches by **git identity** or **path**, and routes to a brain, denies capture, or falls through to a default brain:
+
+```bash
+commonwealth registry default ~/brains/antenna       # the brain bare "allow" rules route to
+commonwealth registry allow  'org:weareantenna/*'    # all repos of an org → the default brain
+commonwealth registry route  repo:weareantenna/erp ~/brains/erp   # one repo → a different brain
+commonwealth registry deny   repo:weareantenna/secrets           # never capture this repo
+commonwealth registry route  'path:~/scratch' ~/brains/scratch   # a path (non-repo dirs, monorepos)
+commonwealth registry show                           # list rules, the default brain, legacy mappings
+commonwealth registry remove repo:weareantenna/erp   # drop a rule
+```
+
+A **matcher** is one of:
+
+| Matcher              | Matches                                             | Example                       |
+| -------------------- | -------------------------------------------------- | ----------------------------- |
+| `repo:<owner/repo>`  | an exact repo (by its git `origin`)                | `repo:weareantenna/erp`       |
+| `org:<owner>`        | every repo of an owner                             | `org:weareantenna` (or `…/*`) |
+| `path:<dir>`         | a path prefix — for non-repo dirs & monorepo subtrees | `path:~/scratch`          |
+| `*`                  | everything (the catch-all)                         | `commonwealth registry allow '*'` |
+
+**Precedence** (most specific wins): `repo` > `org` > `path` (longest) > `*`. A **deny** wins on a tie. A bare **allow** (no brain) routes to the `default` brain; an unmatched directory captures nothing.
+
+Because `repo`/`org` match on git identity, a rule **follows a repo across every worktree, clone, and machine** — one `org:weareantenna/*` line covers all of Antenna's repos and all their branch worktrees, which path prefixes never could. Quote matchers containing `*` so your shell doesn't expand them.
+
+> Legacy `prefix → brain` mappings (from older `commonwealth add` runs) keep working — they're read as `path:` rules. `commonwealth registry show` lists them.
 
 ### Keep personal projects out (scope)
 
