@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Registry, Rule } from "@cmnwlth/core";
-import {
-  parseMatcher,
-  parseRegistryArgs,
-  type RegistryDeps,
-  runRegistry,
-} from "../src/index.js";
+import { parseMatcher, parseRegistryArgs, type RegistryDeps, runRegistry } from "../src/index.js";
 
 // `commonwealth registry` (ADR-0024): manage the unified brain-resolution ruleset.
 
@@ -116,7 +111,9 @@ describe("runRegistry", () => {
   });
 
   it("deny builds a deny rule; allow leaves a bare matcher", async () => {
-    const { deps, calls } = fakeDeps({ load: async () => ({ mappings: [], defaultBrain: { brain: "/d" } }) as Registry });
+    const { deps, calls } = fakeDeps({
+      load: async () => ({ mappings: [], defaultBrain: { brain: "/d" } }) as Registry,
+    });
     await runRegistry({ action: "deny", matcher: { repo: "o/s" } }, deps);
     await runRegistry({ action: "allow", matcher: { org: "o/*" } }, deps);
     expect(calls.added).toEqual([{ repo: "o/s", deny: true }, { org: "o/*" }]);

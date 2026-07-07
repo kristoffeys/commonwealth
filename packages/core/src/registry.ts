@@ -91,9 +91,7 @@ export interface Rule {
  * scope, `none` = nothing configured here.
  */
 export type BrainResolution =
-  | { kind: "brain"; brain: string; remote?: string }
-  | { kind: "denied" }
-  | { kind: "none" };
+  { kind: "brain"; brain: string; remote?: string } | { kind: "denied" } | { kind: "none" };
 
 /** Shape of the user registry JSON file (`~/.commonwealth/registry.json`). */
 export interface Registry {
@@ -371,7 +369,11 @@ function isCatchAll(rule: Rule): boolean {
  * identity ({@link resolveProjectSource}); null when the cwd isn't a repo (only path/catch-all
  * rules can then match). Pure.
  */
-function scoreRule(rule: Rule, start: string, slug: string | null): { tier: number; len: number } | null {
+function scoreRule(
+  rule: Rule,
+  start: string,
+  slug: string | null,
+): { tier: number; len: number } | null {
   if (isCatchAll(rule)) return { tier: TIER_STAR, len: 0 };
   let tier = 0;
   let len = 0;
@@ -432,7 +434,11 @@ function matchRules(
   const { rule } = best;
   if (rule.deny) return { kind: "denied" };
   if (rule.brain) {
-    return { kind: "brain", brain: expand(rule.brain), ...(rule.remote ? { remote: rule.remote } : {}) };
+    return {
+      kind: "brain",
+      brain: expand(rule.brain),
+      ...(rule.remote ? { remote: rule.remote } : {}),
+    };
   }
   // Bare allow → route to the default brain, if any. With none configured this is a matched-but-
   // undestined rule: resolve to `none` (a no-op) rather than silently falling back to the env brain.
@@ -509,9 +515,7 @@ export async function resolveBrain(
     const rules = combinedRules(registry);
     if (rules.length > 0) {
       // Resolve git identity once, only if an identity rule could use it (path-only stays cheap).
-      const needsSlug = rules.some(
-        (r) => (r.repo && r.repo !== "*") || (r.org && r.org !== "*"),
-      );
+      const needsSlug = rules.some((r) => (r.repo && r.repo !== "*") || (r.org && r.org !== "*"));
       const slug = needsSlug ? await resolveProjectSource(start) : null;
       const result = matchRules(start, slug, rules, registry.defaultBrain ?? null);
       if (result) return result;

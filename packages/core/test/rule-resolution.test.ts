@@ -160,11 +160,17 @@ describe("resolveBrain — path, catch-all, default brain", () => {
     const fallback = brainPath("fallback");
     const acme = brainPath("acme");
     await writeRegistry({
-      rules: [{ prefix: "*", brain: fallback }, { prefix: path.join(root, "work"), brain: acme }],
+      rules: [
+        { prefix: "*", brain: fallback },
+        { prefix: path.join(root, "work"), brain: acme },
+      ],
     });
 
     expect(await resolveBrain(inside, { registryPath })).toEqual({ kind: "brain", brain: acme });
-    expect(await resolveBrain(outside, { registryPath })).toEqual({ kind: "brain", brain: fallback });
+    expect(await resolveBrain(outside, { registryPath })).toEqual({
+      kind: "brain",
+      brain: fallback,
+    });
   });
 
   it("a bare catch-all * routes to the default brain", async () => {
@@ -172,7 +178,10 @@ describe("resolveBrain — path, catch-all, default brain", () => {
     const antenna = brainPath("antenna");
     await writeRegistry({ rules: [{ prefix: "*" }], defaultBrain: antenna });
 
-    expect(await resolveBrain(anywhere, { registryPath })).toEqual({ kind: "brain", brain: antenna });
+    expect(await resolveBrain(anywhere, { registryPath })).toEqual({
+      kind: "brain",
+      brain: antenna,
+    });
   });
 
   it("a matched bare allow with no default brain resolves to none (never captures nowhere)", async () => {
@@ -186,7 +195,10 @@ describe("resolveBrain — path, catch-all, default brain", () => {
     const dir = await mkdir("work");
     const prefix = path.join(root, "work");
     await writeRegistry({
-      rules: [{ prefix, brain: brainPath("x") }, { prefix, deny: true }],
+      rules: [
+        { prefix, brain: brainPath("x") },
+        { prefix, deny: true },
+      ],
     });
 
     expect(await resolveBrain(dir, { registryPath })).toEqual({ kind: "denied" });
@@ -208,7 +220,9 @@ describe("resolveBrain — env fallback vs matched rules", () => {
     const dir = await mkdir("work");
     await writeRegistry({ rules: [{ prefix: path.join(root, "work"), deny: true }] });
 
-    expect(await resolveBrain(dir, { registryPath, env: "/env/brain" })).toEqual({ kind: "denied" });
+    expect(await resolveBrain(dir, { registryPath, env: "/env/brain" })).toEqual({
+      kind: "denied",
+    });
   });
 
   it("a matched bare allow without a default does not fall through to the env brain", async () => {

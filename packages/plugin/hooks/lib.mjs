@@ -663,10 +663,7 @@ async function loadRegistryData(registryPath) {
   const mappings = Array.isArray(parsed.mappings)
     ? parsed.mappings.filter(
         (m) =>
-          m &&
-          typeof m === "object" &&
-          typeof m.prefix === "string" &&
-          typeof m.brain === "string",
+          m && typeof m === "object" && typeof m.prefix === "string" && typeof m.brain === "string",
       )
     : [];
   const rules = Array.isArray(parsed.rules)
