@@ -1,7 +1,7 @@
 {
   "name": "@cmnwlth/plugin",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "The Commonwealth Claude Code plugin: MCP server registration, lifecycle hooks, brain registry, and /commonwealth commands",
   "license": "Apache-2.0",
   "type": "module",
