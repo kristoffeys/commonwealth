@@ -192,7 +192,7 @@ export function endReceiptMessage(result) {
   if (!result || typeof result !== "object") return null;
   if (result.skipped) {
     if (result.reason === "no-brain") {
-      return "🧠 Commonwealth: the last session ended in a directory with no team brain mapped, so nothing was captured. Map one in ~/.commonwealth/registry.json (or run `commonwealth init`) to capture here.";
+      return "🧠 Commonwealth: the last session ended in a directory with no team brain mapped, so nothing was captured. Add a rule with `commonwealth registry` (or run `commonwealth add`) to capture here.";
     }
     if (result.reason === "out-of-scope") {
       return "🧠 Commonwealth: the last session's directory is outside your Commonwealth capture scope, so nothing was captured.";
@@ -631,10 +631,8 @@ async function isDir(dir) {
 
 function resolveRegistryPath() {
   if (process.env.COMMONWEALTH_REGISTRY) return process.env.COMMONWEALTH_REGISTRY;
-  if (process.env.COMMONWEALTH_CONFIG) {
-    return path.join(path.dirname(process.env.COMMONWEALTH_CONFIG), "registry.json");
-  }
-  return path.join(os.homedir(), ".commonwealth", "registry.json");
+  if (process.env.COMMONWEALTH_CONFIG) return process.env.COMMONWEALTH_CONFIG;
+  return path.join(os.homedir(), ".commonwealth", "config.json");
 }
 
 /** Parse a `defaultBrain`/brain-pointer field: bare string or `{ brain, remote }`; null otherwise. */
@@ -647,8 +645,8 @@ function parseBrainField(raw) {
 }
 
 /**
- * Load the registry's rules, defaultBrain, and legacy mappings (ADR-0024). Null on missing/corrupt.
- * Mirror of core's registry parsing (kept in sync with packages/core/src/registry.ts).
+ * Load the config's rules + defaultBrain (ADR-0024). Null on missing/corrupt. Mirror of core's
+ * registry parsing (kept in sync with packages/core/src/registry.ts).
  */
 async function loadRegistryData(registryPath) {
   const raw = await readFileOrNull(registryPath);
@@ -660,16 +658,10 @@ async function loadRegistryData(registryPath) {
     return null;
   }
   if (!parsed || typeof parsed !== "object") return null;
-  const mappings = Array.isArray(parsed.mappings)
-    ? parsed.mappings.filter(
-        (m) =>
-          m && typeof m === "object" && typeof m.prefix === "string" && typeof m.brain === "string",
-      )
-    : [];
   const rules = Array.isArray(parsed.rules)
     ? parsed.rules.filter((r) => r && typeof r === "object" && (r.repo || r.org || r.prefix))
     : [];
-  return { mappings, rules, defaultBrain: parseBrainField(parsed.defaultBrain) };
+  return { rules, defaultBrain: parseBrainField(parsed.defaultBrain) };
 }
 
 /** Reduce a git remote URL to `owner/repo` (mirror of core's slugFromRemote, ADR-0015). */
@@ -773,22 +765,12 @@ function matchRulesJs(start, slug, rules, defaultBrain) {
   return { matched: true, brain: null };
 }
 
-/** Legacy mappings folded in as prefix rules, appended after explicit rules (ADR-0024 §7). */
-function combinedRulesJs(reg) {
-  const legacy = reg.mappings.map((m) => ({
-    prefix: m.prefix,
-    brain: m.brain,
-    ...(m.remote ? { remote: m.remote } : {}),
-  }));
-  return [...reg.rules, ...legacy];
-}
-
 /**
  * Resolve the brain for `startDir`: (1) nearest valid `.commonwealth/brain` marker (#68) →
- * (2) nearest ancestor that is itself a brain (#74) → (3) the unified ruleset (ADR-0024: rules +
- * folded legacy mappings; most-specific wins, deny → no capture) → (4) `$COMMONWEALTH_BRAIN_DIR`
- * → (5) null. Returns null for a denied cwd so the hook skips capture there. Mirror of core's
- * `resolveBrain`; never throws. Exported for tests so the real resolution path is covered.
+ * (2) nearest ancestor that is itself a brain (#74) → (3) the unified ruleset (ADR-0024:
+ * most-specific wins, deny → no capture) → (4) `$COMMONWEALTH_BRAIN_DIR` → (5) null. Returns null
+ * for a denied cwd so the hook skips capture there. Mirror of core's `resolveBrain`; never throws.
+ * Exported for tests so the real resolution path is covered.
  */
 export async function realResolveBrainDir(startDir) {
   if (typeof startDir !== "string" || startDir.length === 0) return null;
@@ -812,7 +794,7 @@ export async function realResolveBrainDir(startDir) {
 
   const reg = await loadRegistryData(resolveRegistryPath());
   if (reg) {
-    const rules = combinedRulesJs(reg);
+    const rules = reg.rules;
     if (rules.length > 0) {
       // Resolve git identity once, and only when an identity rule could use it (path-only is cheap).
       const needsSlug = rules.some((r) => (r.repo && r.repo !== "*") || (r.org && r.org !== "*"));

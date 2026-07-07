@@ -81,10 +81,10 @@ describe("realResolveBrainDir (inlined registry — no bare @cmnwlth/core import
     await initBrain(brain); // a real brain (has schema-version)
     await fs.writeFile(
       process.env.COMMONWEALTH_REGISTRY as string,
-      JSON.stringify({ mappings: [{ prefix: path.join(homeish, "projects"), brain }] }),
+      JSON.stringify({ rules: [{ prefix: path.join(homeish, "projects"), brain }] }),
     );
 
-    // config.json at `homeish` no longer hijacks; the registry mapping resolves.
+    // config.json at `homeish` no longer hijacks; the rule resolves.
     expect(await realResolveBrainDir(project)).toBe(brain);
   });
 });

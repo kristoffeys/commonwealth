@@ -25,6 +25,20 @@ export async function resolveProjectSource(cwd: string): Promise<string | null> 
   return path.basename(start);
 }
 
+/**
+ * The repo's identity slug (`owner/repo` from its git `origin`) — but ONLY when there is a real
+ * git origin; `null` otherwise (no repo, or a repo without an origin). Unlike
+ * {@link resolveProjectSource}, this never falls back to a basename, so callers can decide between
+ * an identity (`repo:`) rule and a path (`prefix:`) rule when wiring a folder (ADR-0024).
+ */
+export async function repoIdentity(cwd: string): Promise<string | null> {
+  if (typeof cwd !== "string" || cwd.length === 0) return null;
+  const root = findGitRoot(path.resolve(cwd));
+  if (!root) return null;
+  const remote = await originUrl(root);
+  return remote ? slugFromRemote(remote) : null;
+}
+
 /** Nearest ancestor of `startDir` (inclusive) containing a `.git`, or null if none. */
 function findGitRoot(startDir: string): string | null {
   let dir = path.resolve(startDir);

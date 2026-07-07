@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { addRegistryMapping, getOrgBrain, listWiredBrainDirs, setOrgBrain } from "../src/registry";
+import { addRule, getOrgBrain, listWiredBrainDirs, setOrgBrain } from "../src/registry";
 
 // Org-brain designation + brain enumeration (#167, ADR-0023). These back org-brain graduation
 // (#110): listWiredBrainDirs supplies the project brains to scan; get/setOrgBrain locate the
@@ -35,10 +35,10 @@ async function writeRegistry(contents: unknown | string): Promise<string> {
 describe("listWiredBrainDirs", () => {
   it("returns wired brain dirs, deduped by absolute path", async () => {
     const registryPath = await writeRegistry({
-      mappings: [
+      rules: [
         { prefix: "/work/a", brain: "/brains/a" },
         { prefix: "/work/b", brain: "/brains/b" },
-        // Same brain wired under a second prefix (two checkouts of one repo) → counted once.
+        // Same brain wired under a second rule (two checkouts of one repo) → counted once.
         { prefix: "/work/a-clone", brain: "/brains/a" },
       ],
     });
@@ -48,7 +48,7 @@ describe("listWiredBrainDirs", () => {
 
   it("excludes the designated org-brain from the project-brain list", async () => {
     const registryPath = await writeRegistry({
-      mappings: [
+      rules: [
         { prefix: "/work/a", brain: "/brains/a" },
         { prefix: "/work/org", brain: "/brains/org" },
       ],
@@ -92,28 +92,28 @@ describe("get/setOrgBrain", () => {
 
   it("returns null when no org-brain is designated", async () => {
     const registryPath = await writeRegistry({
-      mappings: [{ prefix: "/work", brain: "/brains/a" }],
+      rules: [{ prefix: "/work", brain: "/brains/a" }],
     });
     expect(await getOrgBrain({ registryPath })).toBeNull();
   });
 
-  it("preserves existing mappings when designating the org-brain", async () => {
+  it("preserves existing rules when designating the org-brain", async () => {
     const registryPath = await writeRegistry({
-      mappings: [{ prefix: "/work/a", brain: "/brains/a" }],
+      rules: [{ prefix: "/work/a", brain: "/brains/a" }],
     });
     await setOrgBrain("/brains/org", { registryPath });
     const parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
-      mappings: unknown[];
+      rules: unknown[];
       orgBrain: { brain: string };
     };
-    expect(parsed.mappings).toHaveLength(1);
+    expect(parsed.rules).toHaveLength(1);
     expect(parsed.orgBrain.brain).toBe(path.resolve("/brains/org"));
   });
 
-  it("survives a later addRegistryMapping write (both writers share one file)", async () => {
-    const registryPath = path.join(root, "registry.json");
+  it("survives a later addRule write (both writers share one file)", async () => {
+    const registryPath = path.join(root, "config.json");
     await setOrgBrain("/brains/org", { registryPath });
-    await addRegistryMapping("/work/a", "/brains/a", { registryPath });
+    await addRule({ prefix: "/work/a", brain: "/brains/a" }, { registryPath });
     const org = await getOrgBrain({ registryPath });
     expect(org?.brain).toBe(path.resolve("/brains/org"));
     expect(await listWiredBrainDirs({ registryPath })).toEqual([path.resolve("/brains/a")]);

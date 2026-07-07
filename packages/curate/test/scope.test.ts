@@ -74,7 +74,29 @@ describe("addAllow", () => {
   });
 });
 
-describe("config IO", () => {
+describe("config IO — preserving co-tenant keys (ADR-0024 §6)", () => {
+  it("addAllow preserves brain-resolution `rules`/`defaultBrain` in the shared config.json", async () => {
+    // core writes rules into the SAME file; a scope write must not clobber them.
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ rules: [{ org: "weareantenna/*" }], defaultBrain: { brain: "/b" } }),
+      "utf8",
+    );
+    await addAllow("~/work", configPath);
+    const written = JSON.parse(await fs.readFile(configPath, "utf8"));
+    expect(written.rules).toEqual([{ org: "weareantenna/*" }]);
+    expect(written.defaultBrain).toEqual({ brain: "/b" });
+    expect(written.allow).toEqual([path.join(os.homedir(), "work")]);
+  });
+
+  it("refuses to clobber a corrupt config, backing it up", async () => {
+    await fs.writeFile(configPath, "{ not json ]", "utf8");
+    await expect(addAllow("~/work", configPath)).rejects.toThrow(/corrupt/i);
+    const dir = path.dirname(configPath);
+    const files = await fs.readdir(dir);
+    expect(files.some((f) => f.startsWith(`${path.basename(configPath)}.corrupt-`))).toBe(true);
+  });
+
   it("returns empty arrays for a missing file without throwing", async () => {
     const config = await loadUserConfig(configPath);
     expect(config).toEqual({ allow: [], deny: [] });

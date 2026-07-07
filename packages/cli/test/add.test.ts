@@ -177,9 +177,9 @@ describe("defaultAddDeps (real IO)", () => {
     expect(config.allow).toContain(project);
 
     const registry = JSON.parse(await fs.readFile(path.join(root, "registry.json"), "utf8")) as {
-      mappings: Array<{ prefix: string; brain: string }>;
+      rules: Array<{ prefix: string; brain: string }>;
     };
-    expect(registry.mappings).toEqual([{ prefix: project, brain }]);
+    expect(registry.rules).toEqual([{ prefix: project, brain }]);
 
     // The convenience symlink lands next to the registry file.
     const link = path.join(root, "brains", "brain");
@@ -203,9 +203,9 @@ describe("defaultAddDeps (real IO)", () => {
     expect(code).toBe(0);
 
     const registry = JSON.parse(await fs.readFile(path.join(root, "registry.json"), "utf8")) as {
-      mappings: Array<{ prefix: string; brain: string; remote?: string }>;
+      rules: Array<{ prefix: string; brain: string; remote?: string }>;
     };
-    expect(registry.mappings).toContainEqual({
+    expect(registry.rules).toContainEqual({
       prefix: second,
       brain,
       remote: "git@example:team.git",

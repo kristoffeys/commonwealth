@@ -32,12 +32,8 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-/** Write a registry file with the given rules / defaultBrain / legacy mappings. */
-async function writeRegistry(reg: {
-  rules?: Rule[];
-  defaultBrain?: unknown;
-  mappings?: unknown[];
-}): Promise<void> {
+/** Write a config file with the given rules / defaultBrain. */
+async function writeRegistry(reg: { rules?: Rule[]; defaultBrain?: unknown }): Promise<void> {
   await fs.writeFile(registryPath, JSON.stringify(reg), "utf8");
 }
 
@@ -233,26 +229,12 @@ describe("resolveBrain — env fallback vs matched rules", () => {
   });
 });
 
-describe("resolveBrain — back-compat with legacy mappings (ADR-0011)", () => {
-  it("resolves a legacy prefix→brain mapping, longest prefix winning", async () => {
-    const deep = await mkdir("work", "acme", "app");
-    const broad = brainPath("broad");
-    const narrow = brainPath("narrow");
-    await writeRegistry({
-      mappings: [
-        { prefix: path.join(root, "work"), brain: broad },
-        { prefix: path.join(root, "work", "acme"), brain: narrow },
-      ],
-    });
-
-    expect(await resolveBrain(deep, { registryPath })).toEqual({ kind: "brain", brain: narrow });
-  });
-
-  it("carries a legacy mapping's remote through (clone-on-demand, ADR-0019)", async () => {
+describe("resolveBrain — a rule carries a clone-on-demand remote (ADR-0019)", () => {
+  it("carries a prefix rule's remote through", async () => {
     const dir = await mkdir("work");
     const brain = brainPath("b");
     await writeRegistry({
-      mappings: [{ prefix: path.join(root, "work"), brain, remote: "git@github.com:o/b.git" }],
+      rules: [{ prefix: path.join(root, "work"), brain, remote: "git@github.com:o/b.git" }],
     });
 
     expect(await resolveBrain(dir, { registryPath })).toEqual({
@@ -260,18 +242,6 @@ describe("resolveBrain — back-compat with legacy mappings (ADR-0011)", () => {
       brain,
       remote: "git@github.com:o/b.git",
     });
-  });
-
-  it("evaluates new rules and legacy mappings together (a repo rule beats a broad legacy prefix)", async () => {
-    const repo = await gitRepo("erp", "git@github.com:weareantenna/erp.git");
-    const legacyBrain = brainPath("legacy");
-    const erpBrain = brainPath("erp");
-    await writeRegistry({
-      rules: [{ repo: "weareantenna/erp", brain: erpBrain }],
-      mappings: [{ prefix: root, brain: legacyBrain }],
-    });
-
-    expect(await resolveBrain(repo, { registryPath })).toEqual({ kind: "brain", brain: erpBrain });
   });
 });
 

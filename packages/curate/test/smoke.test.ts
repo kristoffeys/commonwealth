@@ -94,7 +94,7 @@ describe("built binary", () => {
     const registry = path.join(root, "registry.json");
     await fs.writeFile(
       registry,
-      JSON.stringify({ mappings: [{ prefix: path.join(root, "work"), brain }] }),
+      JSON.stringify({ rules: [{ prefix: path.join(root, "work"), brain }] }),
     );
     // Override the registry; ensure no explicit brain env leaks in from the outer process.
     const env = { ...process.env, COMMONWEALTH_REGISTRY: registry };
@@ -131,7 +131,7 @@ describe("built binary", () => {
     await fs.writeFile(
       registry,
       JSON.stringify({
-        mappings: [{ prefix: path.join(root, "work"), brain: path.join(root, "brain") }],
+        rules: [{ prefix: path.join(root, "work"), brain: path.join(root, "brain") }],
       }),
     );
     const env = {

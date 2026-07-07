@@ -144,10 +144,6 @@ export async function runRegistry(opts: RegistryOptions, deps: RegistryDeps): Pr
     const rules = reg.rules ?? [];
     deps.out(rules.length ? `rules (${rules.length}):` : "rules: none");
     for (const r of rules) deps.out(formatRule(r));
-    if (reg.mappings.length) {
-      deps.out(`legacy mappings (${reg.mappings.length}, ADR-0011 — folded in as path rules):`);
-      for (const m of reg.mappings) deps.out(`  path:${m.prefix.padEnd(27)} → ${m.brain}`);
-    }
     return 0;
   }
 

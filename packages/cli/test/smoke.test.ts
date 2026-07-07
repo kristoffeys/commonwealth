@@ -183,9 +183,9 @@ describe("built commonwealth binary", () => {
       };
       expect(cfg.allow).toContain(project);
       const reg = JSON.parse(await fs.readFile(path.join(scratch, "reg.json"), "utf8")) as {
-        mappings: Array<{ prefix: string; brain: string }>;
+        rules: Array<{ prefix?: string; repo?: string; brain: string }>;
       };
-      expect(reg.mappings).toEqual([{ prefix: project, brain }]);
+      expect(reg.rules).toEqual([{ prefix: project, brain }]);
     } finally {
       await fs.rm(scratch, { recursive: true, force: true });
     }
