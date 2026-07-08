@@ -18,8 +18,8 @@ import {
  */
 function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
   return {
-    resolveBrainDir: vi.fn(async () => "/brains/acme"),
-    isInScope: vi.fn(async () => true),
+    // ADR-0024 §3: one pass is both routing and scope — `brain` in scope, `denied` out of scope.
+    resolveBrain: vi.fn(async () => ({ kind: "brain", brain: "/brains/acme" })),
     getContext: vi.fn(async () => "## Relevant from the team brain\n- **X** (memory) — hi"),
     extractCandidates: vi.fn(async () => [{ kind: "memory", title: "T", body: "B" }]),
     capture: vi.fn(async (_brain: string, _cwd: string, candidates: unknown[]) => ({
@@ -37,20 +37,19 @@ describe("sessionStart", () => {
     const deps = makeDeps();
     const out = await sessionStart({ cwd: "/work/acme/app" }, deps);
     expect(out).toContain("Relevant from the team brain");
-    expect(deps.resolveBrainDir).toHaveBeenCalledWith("/work/acme/app");
+    expect(deps.resolveBrain).toHaveBeenCalledWith("/work/acme/app");
     expect(deps.getContext).toHaveBeenCalledWith("/brains/acme", "/work/acme/app");
   });
 
-  it('returns "" and never injects when there is no brain for the cwd', async () => {
-    const deps = makeDeps({ resolveBrainDir: vi.fn(async () => null) });
+  it('returns "" and never injects when nothing is configured for the cwd (none)', async () => {
+    const deps = makeDeps({ resolveBrain: vi.fn(async () => ({ kind: "none" })) });
     const out = await sessionStart({ cwd: "/loose/project" }, deps);
     expect(out).toBe("");
-    expect(deps.isInScope).not.toHaveBeenCalled();
     expect(deps.getContext).not.toHaveBeenCalled();
   });
 
-  it('returns "" and never injects when the cwd is out of scope (scope gate)', async () => {
-    const deps = makeDeps({ isInScope: vi.fn(async () => false) });
+  it('returns "" and never injects when the cwd is out of scope (denied — the scope gate)', async () => {
+    const deps = makeDeps({ resolveBrain: vi.fn(async () => ({ kind: "denied" })) });
     const out = await sessionStart({ cwd: "/personal/secret" }, deps);
     expect(out).toBe("");
     expect(deps.getContext).not.toHaveBeenCalled();
@@ -60,7 +59,7 @@ describe("sessionStart", () => {
     const deps = makeDeps();
     const out = await sessionStart({}, deps);
     expect(out).toBe("");
-    expect(deps.resolveBrainDir).not.toHaveBeenCalled();
+    expect(deps.resolveBrain).not.toHaveBeenCalled();
   });
 
   it("falls back to $CLAUDE_PROJECT_DIR when the hook cwd maps to no brain (#174)", async () => {
@@ -68,15 +67,15 @@ describe("sessionStart", () => {
     process.env.CLAUDE_PROJECT_DIR = "/work/acme/app";
     try {
       const deps = makeDeps({
-        resolveBrainDir: vi.fn(async (cwd: string) =>
-          cwd === "/work/acme/app" ? "/brains/acme" : null,
+        resolveBrain: vi.fn(async (cwd: string) =>
+          cwd === "/work/acme/app" ? { kind: "brain", brain: "/brains/acme" } : { kind: "none" },
         ),
       });
       // Orca's rate-limit PTY hands the hook a synthetic cwd that isn't in the registry.
       const out = await sessionStart({ cwd: "/synthetic/rate-limit-pty-cwd" }, deps);
       expect(out).toContain("Relevant from the team brain");
-      // Scope + context are evaluated against the recovered project dir, not the synthetic cwd.
-      expect(deps.isInScope).toHaveBeenCalledWith("/work/acme/app");
+      // Resolution + context are evaluated against the recovered project dir, not the synthetic cwd.
+      expect(deps.resolveBrain).toHaveBeenCalledWith("/work/acme/app");
       expect(deps.getContext).toHaveBeenCalledWith("/brains/acme", "/work/acme/app");
     } finally {
       if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
@@ -99,11 +98,10 @@ describe("sessionEnd", () => {
     expect(result).toEqual({ captured: 1, staged: [{ kind: "memory", title: "T", body: "B" }] });
   });
 
-  it("skips (no brain) and NEVER extracts or captures, but leaves a receipt (#96)", async () => {
-    const deps = makeDeps({ resolveBrainDir: vi.fn(async () => null) });
+  it("skips (no brain — none) and NEVER extracts or captures, but leaves a receipt (#96)", async () => {
+    const deps = makeDeps({ resolveBrain: vi.fn(async () => ({ kind: "none" })) });
     const result = await sessionEnd({ cwd: "/x", transcript_path: "/tmp/t.jsonl" }, deps);
     expect(result).toEqual({ skipped: true, reason: "no-brain" });
-    expect(deps.isInScope).not.toHaveBeenCalled();
     expect(deps.extractCandidates).not.toHaveBeenCalled();
     expect(deps.capture).not.toHaveBeenCalled();
     // A receipt for THIS cwd is saved so the next SessionStart can explain the silence.
@@ -112,8 +110,8 @@ describe("sessionEnd", () => {
     );
   });
 
-  it("skips (out of scope) and NEVER extracts or captures — the scope gate — but leaves a receipt", async () => {
-    const deps = makeDeps({ isInScope: vi.fn(async () => false) });
+  it("skips (out of scope — denied) and NEVER extracts or captures, but leaves a receipt", async () => {
+    const deps = makeDeps({ resolveBrain: vi.fn(async () => ({ kind: "denied" })) });
     const result = await sessionEnd(
       { cwd: "/personal/secret", transcript_path: "/tmp/t.jsonl" },
       deps,
@@ -165,8 +163,8 @@ describe("sessionEnd", () => {
     process.env.CLAUDE_PROJECT_DIR = "/work/acme/app";
     try {
       const deps = makeDeps({
-        resolveBrainDir: vi.fn(async (cwd: string) =>
-          cwd === "/work/acme/app" ? "/brains/acme" : null,
+        resolveBrain: vi.fn(async (cwd: string) =>
+          cwd === "/work/acme/app" ? { kind: "brain", brain: "/brains/acme" } : { kind: "none" },
         ),
       });
       const result = await sessionEnd(
@@ -191,7 +189,7 @@ describe("sessionEnd", () => {
     const prev = process.env.CLAUDE_PROJECT_DIR;
     delete process.env.CLAUDE_PROJECT_DIR;
     try {
-      const deps = makeDeps({ resolveBrainDir: vi.fn(async () => null) });
+      const deps = makeDeps({ resolveBrain: vi.fn(async () => ({ kind: "none" })) });
       const result = await sessionEnd(
         {
           cwd: "/Users/x/Library/Application Support/orca/rate-limit-pty-cwd",
@@ -217,8 +215,8 @@ describe("sessionEnd", () => {
     process.env.CLAUDE_PROJECT_DIR = "/work/acme/app";
     try {
       const deps = makeDeps({
-        resolveBrainDir: vi.fn(async (cwd: string) =>
-          cwd === "/work/acme/app" ? "/brains/acme" : null,
+        resolveBrain: vi.fn(async (cwd: string) =>
+          cwd === "/work/acme/app" ? { kind: "brain", brain: "/brains/acme" } : { kind: "none" },
         ),
       });
       const result = await sessionEnd(

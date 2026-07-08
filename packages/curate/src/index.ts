@@ -8,6 +8,7 @@ import {
   type NewNoteInput,
   NOTE_KINDS,
   type NoteKind,
+  resolveBrain,
   resolveBrainDir,
   resolveProjectSource,
   setFeature,
@@ -19,7 +20,7 @@ import { formatContext } from "./context.js";
 import { curate } from "./curate.js";
 import { selectRelevant } from "./relevance.js";
 import { approve, approveAll, listPending, reject } from "./review.js";
-import { addAllow, addDeny, isInScope, loadUserConfig } from "./scope.js";
+import { addAllow, addDeny, loadUserConfig } from "./scope.js";
 
 /**
  * Resolve the brain directory for a `cwd`, or `null` when none is configured (#69). Order:
@@ -36,6 +37,41 @@ async function resolveDir(
   const env = process.env.COMMONWEALTH_BRAIN_DIR;
   if (env && env.length > 0) return path.resolve(env);
   return resolveBrainDir(cwd);
+}
+
+/** An explicit destination brain (`--dir` → `$COMMONWEALTH_BRAIN_DIR`), or null when neither is set. */
+function explicitBrain(explicit: string | undefined): string | null {
+  if (explicit && explicit.length > 0) return path.resolve(explicit);
+  const env = process.env.COMMONWEALTH_BRAIN_DIR;
+  return env && env.length > 0 ? path.resolve(env) : null;
+}
+
+/**
+ * Resolve the brain for a *session* `cwd`, applying the ADR-0024 scope gate in a single pass — the
+ * unification that retires `isInScope`. `resolveBrain` folds the scope `allow`/`deny` into its
+ * ruleset and answers three ways, and that answer IS the scope gate: `denied` (an explicit deny —
+ * out of scope), `none` (nothing configured here — out of scope), or `brain` (in scope, routed).
+ * Only an **in-scope** cwd captures; an explicit `--dir`/`$COMMONWEALTH_BRAIN_DIR` then overrides
+ * the *destination* (as it always did — env even reinstates scope via `resolveBrain`'s own env
+ * fallback, which is how the hooks pass the already-resolved brain through). `force` is the
+ * deliberate-import escape hatch: it bypasses the gate entirely but still needs a destination.
+ * Returns the brain to use, or a skip + reason that maps onto the hooks' "out-of-scope"/"no-brain".
+ */
+async function resolveScopedBrain(
+  explicit: string | undefined,
+  cwd: string,
+  opts: { force?: boolean } = {},
+): Promise<{ brain: string } | { skip: "out-of-scope" | "no-brain" }> {
+  const resolution = await resolveBrain(cwd);
+  if (opts.force) {
+    // Deliberate import: skip the gate, but a destination is still required.
+    const dest = explicitBrain(explicit) ?? (resolution.kind === "brain" ? resolution.brain : null);
+    return dest ? { brain: dest } : { skip: "no-brain" };
+  }
+  // The resolution is the gate. An explicit brain only redirects an already-in-scope capture.
+  if (resolution.kind === "denied") return { skip: "out-of-scope" };
+  if (resolution.kind === "none") return { skip: "no-brain" };
+  return { brain: explicitBrain(explicit) ?? resolution.brain };
 }
 
 /** Message + exit when a brain-requiring command finds no brain for `cwd` (#69). */
@@ -184,18 +220,16 @@ async function cmdContext(explicitDir: string | undefined, args: string[]): Prom
   });
 
   const cwd = typeof values.cwd === "string" ? values.cwd : process.cwd();
-  const config = await loadUserConfig();
-  if (!isInScope(cwd, config)) {
-    console.error(`[commonwealth-curate] ${cwd} is out of scope; injecting nothing`);
-    return;
-  }
 
-  // Resolve the brain from the session cwd via the registry (#69); no brain → inject nothing.
-  const dir = await resolveDir(explicitDir ?? values.dir, cwd);
-  if (dir === null) {
-    console.error(`[commonwealth-curate] no brain for ${cwd}; injecting nothing`);
+  // One pass resolves scope AND brain (ADR-0024 §3): out-of-scope (`denied`) or nowhere-configured
+  // (`none`) both inject nothing, with a reason on stderr; a routed brain is used directly.
+  const resolved = await resolveScopedBrain(explicitDir ?? values.dir, cwd);
+  if ("skip" in resolved) {
+    const why = resolved.skip === "out-of-scope" ? "is out of scope" : "has no brain";
+    console.error(`[commonwealth-curate] ${cwd} ${why}; injecting nothing`);
     return;
   }
+  const dir = resolved.brain;
 
   const limit = values.limit !== undefined ? Number.parseInt(values.limit, 10) : undefined;
   const notes = await selectRelevant(dir, {
@@ -245,20 +279,18 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
   });
 
   const cwd = typeof values.cwd === "string" ? values.cwd : process.cwd();
-  if (!values.force) {
-    const config = await loadUserConfig();
-    if (!isInScope(cwd, config)) {
-      console.error(`[commonwealth-curate] ${cwd} is out of scope; capturing nothing`);
-      return;
-    }
-  }
 
-  // Resolve the brain from the session cwd via the registry (#69); no brain → capture nothing.
-  const dir = await resolveDir(explicitDir ?? values.dir, cwd);
-  if (dir === null) {
-    console.error(`[commonwealth-curate] no brain for ${cwd}; capturing nothing`);
+  // One pass resolves scope AND brain (ADR-0024 §3). `--force` is the deliberate-import escape
+  // hatch: it bypasses the out-of-scope `denied` gate but still needs a brain to write to.
+  const resolved = await resolveScopedBrain(explicitDir ?? values.dir, cwd, {
+    force: values.force === true,
+  });
+  if ("skip" in resolved) {
+    const why = resolved.skip === "out-of-scope" ? "is out of scope" : "has no brain";
+    console.error(`[commonwealth-curate] ${cwd} ${why}; capturing nothing`);
     return;
   }
+  const dir = resolved.brain;
 
   const raw =
     typeof values.from === "string" ? await fs.readFile(values.from, "utf8") : await readStdin();
@@ -305,8 +337,10 @@ async function cmdScope(args: string[]): Promise<void> {
         allowPositionals: false,
       });
       const cwd = typeof values.cwd === "string" ? values.cwd : process.cwd();
-      const config = await loadUserConfig();
-      console.log(isInScope(cwd, config) ? "in-scope" : "out-of-scope");
+      // Scope IS resolution now (ADR-0024 §3): in scope ⟺ the cwd resolves to a brain. A `denied`
+      // rule or a `none` (nothing configured) is out of scope.
+      const resolution = await resolveBrain(cwd);
+      console.log(resolution.kind === "brain" ? "in-scope" : "out-of-scope");
       return;
     }
     case "allow": {

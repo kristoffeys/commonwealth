@@ -99,6 +99,20 @@ export interface Registry {
    * {@link setOrgBrain} (`commonwealth org-brain set`).
    */
   orgBrain?: ResolvedBrain;
+  /**
+   * Legacy scope allowlist (ADR-0008), kept **readable as sugar** (ADR-0024 §3/§7): each entry is
+   * folded into resolution as a bare-allow `prefix` rule so existing configs keep working with zero
+   * migration. New wiring uses {@link rules} directly (the allow semantic is "matches a routing
+   * rule"). Never written by core writers — the scope CLI owns this key.
+   */
+  allow?: string[];
+  /**
+   * Legacy scope denylist (ADR-0008), kept **readable as sugar** (ADR-0024 §3/§7): each entry is
+   * folded into resolution as a `prefix` **deny** rule, so a personal `deny ~/finances` still yields
+   * `denied` — the single out-of-scope signal now that {@link resolveBrain} *is* the scope gate and
+   * `isInScope` is retired. Never written by core writers — the scope CLI owns this key.
+   */
+  deny?: string[];
 }
 
 /** Options for {@link resolveBrainDir}; all optional (env + registry path overrides). */
@@ -277,6 +291,15 @@ async function readRegistryFile(registryPath: string): Promise<RegistryLoad> {
     if (typeof rawOrg.remote === "string" && rawOrg.remote.length > 0) org.remote = rawOrg.remote;
     registry.orgBrain = org;
   }
+  // Legacy scope allow/deny (ADR-0008), read as sugar and folded into resolution (ADR-0024 §3/§7).
+  // Kept as authored strings (tilde-expanded lazily at match time); only non-empty string entries
+  // survive. These keys are owned by the scope CLI, never written by core writers.
+  const strList = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((e): e is string => typeof e === "string" && e.length > 0) : [];
+  const allow = strList((obj as Registry).allow);
+  if (allow.length > 0) registry.allow = allow;
+  const deny = strList((obj as Registry).deny);
+  if (deny.length > 0) registry.deny = deny;
   // Return the raw object too, so writers can round-trip keys they don't own (e.g. the scope
   // `allow`/`deny` that curate writes into the SAME config.json). ADR-0024 §6.
   return { status: "ok", registry, rawObj: obj as Record<string, unknown> };
@@ -314,6 +337,21 @@ export async function resolveBrainDir(
   opts: ResolveBrainOptions = {},
 ): Promise<string | null> {
   return (await resolveBrainMapping(startDir, opts))?.brain ?? null;
+}
+
+/**
+ * Fold the legacy scope `allow`/`deny` lists (ADR-0008) into synthetic `prefix` rules so the single
+ * {@link resolveBrain} pass IS the scope gate (ADR-0024 §3, retiring `isInScope`). A `deny` entry
+ * becomes a `prefix` **deny** rule (→ `denied`); an `allow` entry becomes a bare-allow `prefix` rule
+ * (→ the default brain, else `none`). They are **appended after** the authored {@link Registry.rules}
+ * so an authored rule wins any exact-specificity tie (it is seen first) — a real `brain` route is
+ * never shadowed by legacy sugar. Path expansion happens later in {@link scoreRule}.
+ */
+function scopeSugarRules(registry: Registry): Rule[] {
+  const out: Rule[] = [];
+  for (const d of registry.deny ?? []) out.push({ prefix: d, deny: true });
+  for (const a of registry.allow ?? []) out.push({ prefix: a });
+  return out;
 }
 
 /** Specificity tiers for rule matching (higher wins). Ties break by length, then deny-wins. */
@@ -424,8 +462,9 @@ function matchRules(
  *
  * 1. `.commonwealth/brain` marker (nearest valid ancestor) — human override.
  * 2. A directory that is itself a brain (`.commonwealth/schema-version`).
- * 3. The unified ruleset ({@link Registry.rules}) — most-specific
- *    match wins, deny breaks ties; a bare allow routes to `defaultBrain`.
+ * 3. The unified ruleset ({@link Registry.rules}) — plus the legacy scope `allow`/`deny` folded in
+ *    as sugar (ADR-0024 §3/§7) — most-specific match wins, deny breaks ties; a bare allow routes to
+ *    `defaultBrain`. This pass is the scope gate: `denied` = out of scope, `none` = nothing here.
  * 4. `COMMONWEALTH_BRAIN_DIR` env fallback.
  * 5. `none`.
  *
@@ -458,9 +497,10 @@ export async function resolveBrain(
     if (await isFile(path.join(dir, BRAIN_IDENTITY_REL))) return { kind: "brain", brain: dir };
   }
 
-  // 3) The unified ruleset.
+  // 3) The unified ruleset, plus the legacy scope allow/deny folded in as sugar (ADR-0024 §3/§7):
+  //    this single pass IS the scope gate now that `isInScope` is retired.
   const registry = await loadRegistry(registryPath);
-  const rules = registry?.rules ?? [];
+  const rules = registry ? [...(registry.rules ?? []), ...scopeSugarRules(registry)] : [];
   if (rules.length > 0) {
     // Resolve git identity once, only if an identity rule could use it (path-only stays cheap).
     const needsSlug = rules.some((r) => (r.repo && r.repo !== "*") || (r.org && r.org !== "*"));

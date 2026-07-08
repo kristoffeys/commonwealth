@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // The REAL production wiring — not the injected fakes the other tests use. These guard the
 // two silent-failure bugs the M4b verifier caught: an unresolvable core import and a broken
 // `capture --from -` invocation.
-import { realDeps, realResolveBrainDir } from "../hooks/lib.mjs";
+import { realDeps, realResolveBrain, realResolveBrainDir } from "../hooks/lib.mjs";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const curateEntry = path.join(repoRoot, "packages", "curate", "dist", "index.js");
@@ -143,6 +143,37 @@ describe("realResolveBrainDir — unified ruleset in the hook (ADR-0024)", () =>
     const antenna = path.join(tmp, "antenna-brain");
     await writeRegistry({ rules: [{ prefix: "*" }], defaultBrain: antenna });
     expect(await realResolveBrainDir(anywhere)).toBe(antenna);
+  });
+});
+
+describe("realResolveBrain — three-way scope result + folded allow/deny (ADR-0024 §3, retiring isInScope)", () => {
+  async function writeRegistry(obj: unknown): Promise<void> {
+    await fs.writeFile(process.env.COMMONWEALTH_REGISTRY as string, JSON.stringify(obj));
+  }
+
+  it("returns { kind: 'denied' } for a deny rule — the scope gate the hook now reads directly", async () => {
+    const work = path.join(tmp, "work");
+    await fs.mkdir(work, { recursive: true });
+    await writeRegistry({ rules: [{ prefix: work, deny: true }] });
+    expect(await realResolveBrain(work)).toEqual({ kind: "denied" });
+  });
+
+  it("folds a legacy `deny` entry into a deny rule → denied (personal privacy stays out of the brain)", async () => {
+    const secret = path.join(tmp, "finances");
+    await fs.mkdir(secret, { recursive: true });
+    await writeRegistry({ deny: [secret] });
+    expect(await realResolveBrain(secret)).toEqual({ kind: "denied" });
+  });
+
+  it("returns { kind: 'none' } when nothing is configured, and { kind: 'brain' } when routed", async () => {
+    const loose = path.join(tmp, "loose");
+    const work = path.join(tmp, "work2");
+    const brain = path.join(tmp, "b");
+    await fs.mkdir(loose, { recursive: true });
+    await fs.mkdir(work, { recursive: true });
+    await writeRegistry({ rules: [{ prefix: work, brain }] });
+    expect(await realResolveBrain(loose)).toEqual({ kind: "none" });
+    expect(await realResolveBrain(work)).toEqual({ kind: "brain", brain });
   });
 });
 

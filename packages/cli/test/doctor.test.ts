@@ -13,21 +13,17 @@ describe("commonwealth doctor — diagnose()", () => {
   let tmp: string;
   let brain: string;
   let cwd: string;
-  let scopeConfigPath: string;
 
   beforeEach(async () => {
     tmp = await fs.mkdtemp(path.join(os.tmpdir(), "cw-doctor-"));
     brain = path.join(tmp, "brain");
     cwd = path.join(tmp, "project");
-    scopeConfigPath = path.join(tmp, "scope.json");
     await fs.mkdir(path.join(brain, "acme", "memory"), { recursive: true });
     await fs.mkdir(cwd, { recursive: true });
     // A note (for index-freshness), then an index db written AFTER it so the index is "current".
     await fs.writeFile(path.join(brain, "acme", "memory", "n1.md"), "---\nid: x\n---\nbody\n");
     await fs.mkdir(path.join(brain, "index"), { recursive: true });
     await fs.writeFile(path.join(brain, "index", "commonwealth.db"), "db");
-    // Empty scope config → everything is in scope.
-    await fs.writeFile(scopeConfigPath, JSON.stringify({ allow: [], deny: [] }));
   });
 
   afterEach(async () => {
@@ -38,8 +34,8 @@ describe("commonwealth doctor — diagnose()", () => {
   function healthyEnv(overrides: Partial<DoctorEnv> = {}): DoctorEnv {
     return {
       cwd,
-      scopeConfigPath,
       resolveBrain: () => Promise.resolve(brain),
+      resolveScope: () => Promise.resolve("brain"),
       pluginInstalled: () => true,
       pidAlive: () => true,
       gitState: () => ({ kind: "tracked", behind: 0 }),
@@ -142,15 +138,20 @@ describe("commonwealth doctor — diagnose()", () => {
     expect(check(report, "index").detail).toContain("older than the newest note");
   });
 
-  it("warns when the cwd is out of capture scope", async () => {
-    await fs.writeFile(
-      scopeConfigPath,
-      JSON.stringify({ allow: [path.join(tmp, "elsewhere")], deny: [] }),
-    );
-    const report = await diagnose(healthyEnv());
+  it("warns when the cwd maps to no rule (out of scope, none)", async () => {
+    const report = await diagnose(healthyEnv({ resolveScope: () => Promise.resolve("none") }));
     const scope = check(report, "scope");
     expect(scope.status).toBe("warn");
-    expect(scope.fix).toContain("commonwealth scope allow");
+    expect(scope.detail).toContain("no rule maps it");
+    expect(scope.fix).toContain("commonwealth add");
+  });
+
+  it("warns when the cwd is explicitly denied (out of scope, deny rule)", async () => {
+    const report = await diagnose(healthyEnv({ resolveScope: () => Promise.resolve("denied") }));
+    const scope = check(report, "scope");
+    expect(scope.status).toBe("warn");
+    expect(scope.detail).toContain("deny rule");
+    expect(scope.fix).toContain("commonwealth registry");
   });
 
   it("presents the plugin link as inferred (skip) when claude is absent", async () => {

@@ -8,8 +8,11 @@
 // it must not use TypeScript syntax. Tests import it directly.
 //
 // Contract for `deps` (all async unless noted):
-//   resolveBrainDir(cwd)               -> string | null   (which brain maps to this cwd)
-//   isInScope(cwd)                     -> boolean          (per-user scope gate, ADR-0008)
+//   resolveBrain(cwd)                  -> { kind, brain? }  (ADR-0024 §3: the ONE pass that is both
+//                                                            routing AND scope — `brain` in scope +
+//                                                            routed, `denied` out of scope, `none`
+//                                                            nothing here. Retires the old split of
+//                                                            resolveBrainDir + isInScope.)
 //   getContext(brain, cwd)             -> string           (markdown to inject; "" for none)
 //   extractCandidates(transcriptPath)  -> NewNoteInput[]   (learnings/decisions from a session)
 //   capture(brain, cwd, candidates)    -> { captured, ... }(stage candidates via the review queue)
@@ -63,20 +66,30 @@ function candidateCwds(inputCwd) {
 }
 
 /**
- * Resolve the session's working directory to a brain, trying each {@link candidateCwds} entry in
- * order and returning the first that maps to a brain (along with that directory). Returns null
- * when none of the candidates map to a brain.
+ * Resolve the session's working directory in ONE pass that is both routing and scope (ADR-0024 §3),
+ * trying each {@link candidateCwds} entry in order:
+ *  - the first candidate that resolves to a `brain` wins (in scope + routed) → `{ kind: "brain", cwd, brain }`;
+ *  - else, if any candidate was an explicit `denied` (a deny rule — the privacy gate), report that
+ *    → `{ kind: "denied", cwd }` (so SessionEnd surfaces an out-of-scope receipt, not "no brain");
+ *  - else nothing was configured for any candidate → `{ kind: "none" }`.
+ *
+ * A brain-mapped fallback still wins over an earlier denied candidate (matching the pre-ADR-0024
+ * behavior where a denied cwd fell through to `$CLAUDE_PROJECT_DIR` / `process.cwd()`).
  *
  * @param {string} inputCwd  The hook-supplied cwd (already validated as a non-empty string).
  * @param {object} deps      See the contract at the top of this file.
- * @returns {Promise<{cwd: string, brain: string} | null>}
+ * @returns {Promise<{kind: "brain", cwd: string, brain: string} | {kind: "denied", cwd: string} | {kind: "none"}>}
  */
 async function resolveSessionBrain(inputCwd, deps) {
+  let denied = null;
   for (const cwd of candidateCwds(inputCwd)) {
-    const brain = await deps.resolveBrainDir(cwd);
-    if (brain) return { cwd, brain };
+    const r = await deps.resolveBrain(cwd);
+    if (r && r.kind === "brain" && typeof r.brain === "string" && r.brain.length > 0) {
+      return { kind: "brain", cwd, brain: r.brain };
+    }
+    if (r && r.kind === "denied" && !denied) denied = { kind: "denied", cwd };
   }
-  return null;
+  return denied ?? { kind: "none" };
 }
 
 /**
@@ -113,13 +126,12 @@ export async function sessionStart(input, deps) {
   const inputCwd = input?.cwd;
   if (typeof inputCwd !== "string" || inputCwd.length === 0) return "";
 
+  // One pass decides both scope and brain: only a routed `brain` (in scope) injects anything;
+  // `denied` (out of scope) and `none` (nothing here) both inject nothing.
   const resolved = await resolveSessionBrain(inputCwd, deps);
-  if (!resolved) return "";
-  const { cwd, brain } = resolved;
+  if (resolved.kind !== "brain") return "";
 
-  if (!(await deps.isInScope(cwd))) return "";
-
-  const context = await deps.getContext(brain, cwd);
+  const context = await deps.getContext(resolved.brain, resolved.cwd);
   return typeof context === "string" ? context : "";
 }
 
@@ -142,7 +154,12 @@ export async function sessionEnd(input, deps) {
     return { skipped: true, reason: "no-cwd" };
 
   const resolved = await resolveSessionBrain(inputCwd, deps);
-  if (!resolved) {
+  if (resolved.kind === "denied") {
+    // An explicit deny rule matched (the privacy gate) — out of scope. Anchor the receipt to the
+    // denied cwd so the next SessionStart there explains the silence.
+    return await finishEnd(deps, resolved.cwd, { skipped: true, reason: "out-of-scope" });
+  }
+  if (resolved.kind !== "brain") {
     // A synthetic launcher cwd (e.g. Orca's rate-limit PTY) never maps to a brain and isn't a
     // real work session. Skip SILENTLY — a "map it in your registry" receipt would be wrong
     // advice and would re-nag every rate-limit cycle (#180). No receipt, so nothing is surfaced.
@@ -152,9 +169,6 @@ export async function sessionEnd(input, deps) {
     return await finishEnd(deps, inputCwd, { skipped: true, reason: "no-brain" });
   }
   const { cwd, brain } = resolved;
-
-  if (!(await deps.isInScope(cwd)))
-    return await finishEnd(deps, cwd, { skipped: true, reason: "out-of-scope" });
 
   const candidates = await deps.extractCandidates(input.transcript_path);
   if (!Array.isArray(candidates) || candidates.length === 0)
@@ -448,9 +462,9 @@ async function run(cmd, args, { input, cwd, env, timeoutMs } = {}) {
 /**
  * Build the production `deps` for the hooks.
  *
- * - `resolveBrainDir` comes from `@cmnwlth/core`'s brain registry (issue #14).
- * - `isInScope` shells out to the published `commonwealth-curate` (`scope check`) via npx, so
- *   the plugin honors ADR-0008 exactly as the CLI does without importing curate internals.
+ * - `resolveBrain` mirrors `@cmnwlth/core`'s unified resolver (ADR-0024): one pass that is both
+ *   routing AND scope — `brain` (in scope), `denied` (out of scope), or `none`. This retires the
+ *   old split of `resolveBrainDir` + a separate `scope check` shell-out (one fewer npx per session).
  * - `getContext` / `capture` run the published `commonwealth-curate` (`context` / `capture`) via
  *   npx with `COMMONWEALTH_BRAIN_DIR` set — reusing curate.s relevance selection, dedupe, and gates.
  * - `extractCandidates` shells out to `claude -p` with {@link EXTRACTION_PROMPT} and parses
@@ -476,16 +490,6 @@ export function realDeps(overrides = {}) {
     curateEntry
       ? run(nodeBin, [curateEntry, ...args], runOpts)
       : run("npx", ["-y", curatePackage, ...args], runOpts);
-
-  /** Read + parse the user config indirectly via `scope check`. */
-  async function isInScope(cwd) {
-    const res = await runCurate(["scope", "check", "--cwd", cwd]);
-    // `scope check` prints "in-scope" / "out-of-scope" to stdout. Be conservative: if the
-    // binary is missing or errors, treat the session as out of scope (do nothing) rather
-    // than risk capturing/injecting where the user didn't opt in.
-    if (res.code !== 0) return false;
-    return res.stdout.trim() === "in-scope";
-  }
 
   async function getContext(brain, cwd) {
     const res = await runCurate(["context", "--cwd", cwd], {
@@ -601,8 +605,7 @@ export function realDeps(overrides = {}) {
   }
 
   return {
-    resolveBrainDir: realResolveBrainDir,
-    isInScope,
+    resolveBrain: realResolveBrain,
     getContext,
     capture,
     extractCandidates,
@@ -686,8 +689,11 @@ function parseBrainField(raw) {
 }
 
 /**
- * Load the config's rules + defaultBrain (ADR-0024). Null on missing/corrupt. Mirror of core's
- * registry parsing (kept in sync with packages/core/src/registry.ts).
+ * Load the config's rules + defaultBrain (ADR-0024), with the legacy scope `allow`/`deny` folded in
+ * as sugar `prefix` rules (a `deny` entry → deny rule; an `allow` entry → bare-allow rule) so this
+ * single pass IS the scope gate (ADR-0024 §3, retiring `isInScope`). Sugar rules are appended AFTER
+ * the authored rules so an authored `brain` route wins any exact-specificity tie. Null on
+ * missing/corrupt. Mirror of core's registry parsing (kept in sync with packages/core/src/registry.ts).
  */
 async function loadRegistryData(registryPath) {
   const raw = await readFileOrNull(registryPath);
@@ -702,6 +708,10 @@ async function loadRegistryData(registryPath) {
   const rules = Array.isArray(parsed.rules)
     ? parsed.rules.filter((r) => r && typeof r === "object" && (r.repo || r.org || r.prefix))
     : [];
+  const strList = (v) =>
+    Array.isArray(v) ? v.filter((e) => typeof e === "string" && e.length > 0) : [];
+  for (const d of strList(parsed.deny)) rules.push({ prefix: d, deny: true });
+  for (const a of strList(parsed.allow)) rules.push({ prefix: a });
   return { rules, defaultBrain: parseBrainField(parsed.defaultBrain) };
 }
 
@@ -779,10 +789,11 @@ function scoreRule(rule, start, slug) {
 }
 
 /**
- * Evaluate the ruleset for `(start, slug)`. Returns `{ matched, brain }`: `matched:false` = no rule
- * matched (caller falls through to env); `matched:true` with a `brain` path = routed; `matched:true,
- * brain:null` = a deny, or a bare allow with no default brain — a matched no-op that STOPS
- * resolution (never falls through to the env brain). Most-specific wins; deny breaks ties.
+ * Evaluate the ruleset for `(start, slug)`, returning the three-way outcome (mirror of core's
+ * `matchRules`): `null` = no rule matched (caller falls through to env); `{ kind: "denied" }` = a
+ * deny rule won; `{ kind: "brain", brain }` = routed (its brain, else the default brain);
+ * `{ kind: "none" }` = a bare allow won with no default brain (a matched no-op that STOPS resolution,
+ * never falling through to the env brain). Most-specific wins; deny breaks ties.
  */
 function matchRulesJs(start, slug, rules, defaultBrain) {
   let best = null;
@@ -798,23 +809,24 @@ function matchRulesJs(start, slug, rules, defaultBrain) {
       best = { tier: m.tier, len: m.len, rule };
     }
   }
-  if (!best) return { matched: false, brain: null };
+  if (!best) return null;
   const { rule } = best;
-  if (rule.deny) return { matched: true, brain: null };
-  if (rule.brain) return { matched: true, brain: expandPath(rule.brain) };
-  if (defaultBrain) return { matched: true, brain: expandPath(defaultBrain.brain) };
-  return { matched: true, brain: null };
+  if (rule.deny) return { kind: "denied" };
+  if (rule.brain) return { kind: "brain", brain: expandPath(rule.brain) };
+  if (defaultBrain) return { kind: "brain", brain: expandPath(defaultBrain.brain) };
+  return { kind: "none" };
 }
 
 /**
- * Resolve the brain for `startDir`: (1) nearest valid `.commonwealth/brain` marker (#68) →
- * (2) nearest ancestor that is itself a brain (#74) → (3) the unified ruleset (ADR-0024:
- * most-specific wins, deny → no capture) → (4) `$COMMONWEALTH_BRAIN_DIR` → (5) null. Returns null
- * for a denied cwd so the hook skips capture there. Mirror of core's `resolveBrain`; never throws.
- * Exported for tests so the real resolution path is covered.
+ * Resolve `startDir` in ONE pass that is both routing AND scope (ADR-0024 §3), returning the
+ * three-way outcome `{ kind: "brain", brain } | { kind: "denied" } | { kind: "none" }`. Order:
+ * (1) nearest valid `.commonwealth/brain` marker (#68) → (2) nearest ancestor that is itself a
+ * brain (#74) → (3) the unified ruleset, with the legacy scope allow/deny folded in as sugar
+ * (ADR-0024 §3/§7): most-specific wins, deny → `denied` → (4) `$COMMONWEALTH_BRAIN_DIR` → (5) `none`.
+ * Mirror of core's `resolveBrain`; never throws. Exported for tests so the real path is covered.
  */
-export async function realResolveBrainDir(startDir) {
-  if (typeof startDir !== "string" || startDir.length === 0) return null;
+export async function realResolveBrain(startDir) {
+  if (typeof startDir !== "string" || startDir.length === 0) return { kind: "none" };
   const start = path.resolve(startDir);
 
   for (const dir of walkUp(start)) {
@@ -825,12 +837,12 @@ export async function realResolveBrainDir(startDir) {
         const resolved = expandPath(target, dir);
         // Skip a dangling marker (missing target) so a stale one falls through to the
         // registry instead of hijacking capture to a dead brain path (#68).
-        if (await isDir(resolved)) return resolved;
+        if (await isDir(resolved)) return { kind: "brain", brain: resolved };
       }
     }
   }
   for (const dir of walkUp(start)) {
-    if (await isFile(path.join(dir, BRAIN_IDENTITY_REL))) return dir;
+    if (await isFile(path.join(dir, BRAIN_IDENTITY_REL))) return { kind: "brain", brain: dir };
   }
 
   const reg = await loadRegistryData(resolveRegistryPath());
@@ -841,14 +853,24 @@ export async function realResolveBrainDir(startDir) {
       const needsSlug = rules.some((r) => (r.repo && r.repo !== "*") || (r.org && r.org !== "*"));
       const slug = needsSlug ? await gitOriginSlug(start) : null;
       const m = matchRulesJs(start, slug, rules, reg.defaultBrain);
-      // A matched rule STOPS resolution — brain path when routed, null for deny / undestined allow.
-      if (m.matched) return m.brain;
+      // A matched rule STOPS resolution (brain / denied / none) — never falls through to env.
+      if (m) return m;
     }
   }
 
   const env = process.env.COMMONWEALTH_BRAIN_DIR;
-  if (env && env.length > 0) return path.resolve(env);
-  return null;
+  if (env && env.length > 0) return { kind: "brain", brain: path.resolve(env) };
+  return { kind: "none" };
+}
+
+/**
+ * Back-compat wrapper: the collapsed brain path (`string | null`) over {@link realResolveBrain},
+ * mapping both `denied` and `none` to `null`. Exported for tests / callers that only need "which
+ * brain, if any".
+ */
+export async function realResolveBrainDir(startDir) {
+  const r = await realResolveBrain(startDir);
+  return r.kind === "brain" ? r.brain : null;
 }
 
 /**

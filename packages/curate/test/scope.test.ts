@@ -2,13 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  addAllow,
-  isInScope,
-  loadUserConfig,
-  saveUserConfig,
-  type UserConfig,
-} from "../src/scope.js";
+import { addAllow, loadUserConfig, saveUserConfig, type UserConfig } from "../src/scope.js";
 
 let configDir: string;
 let configPath: string;
@@ -25,42 +19,10 @@ afterEach(async () => {
   await fs.rm(configDir, { recursive: true, force: true });
 });
 
-describe("isInScope", () => {
-  it("puts everything in scope for an empty config", () => {
-    const config: UserConfig = { allow: [], deny: [] };
-    expect(isInScope("/anywhere/at/all", config)).toBe(true);
-    expect(isInScope("/personal/secret", config)).toBe(true);
-  });
-
-  it("honors an allow list", () => {
-    const config: UserConfig = { allow: ["/work"], deny: [] };
-    expect(isInScope("/work/project", config)).toBe(true);
-    expect(isInScope("/work", config)).toBe(true);
-    expect(isInScope("/personal", config)).toBe(false);
-    // A sibling that merely shares a prefix string is not "under" the allow root.
-    expect(isInScope("/workshop", config)).toBe(false);
-  });
-
-  it("lets deny win over allow", () => {
-    const config: UserConfig = { allow: ["/work"], deny: ["/work/secret"] };
-    expect(isInScope("/work/proj", config)).toBe(true);
-    expect(isInScope("/work/secret/x", config)).toBe(false);
-    expect(isInScope("/work/secret", config)).toBe(false);
-  });
-
-  it("expands a tilde entry against the home directory", () => {
-    const home = os.homedir();
-    const config: UserConfig = { allow: ["~/foo"], deny: [] };
-    expect(isInScope(path.join(home, "foo", "bar"), config)).toBe(true);
-    expect(isInScope(path.join(home, "other"), config)).toBe(false);
-  });
-
-  it("treats the filesystem root as containing everything", () => {
-    expect(isInScope("/anything/here", { allow: ["/"], deny: [] })).toBe(true);
-    // deny of root blocks everything (allow is satisfied by root, then deny wins)
-    expect(isInScope("/anything/here", { allow: ["/"], deny: ["/"] })).toBe(false);
-  });
-});
+// NOTE: `isInScope` is retired (ADR-0024 §3). The scope decision now lives in `@cmnwlth/core`'s
+// `resolveBrain`, which folds these `allow`/`deny` lists into its ruleset and returns
+// `brain`/`denied`/`none`. That folding is covered in core's rule-resolution.test.ts; here we only
+// keep the config IO (still the readable sugar the `scope` CLI edits).
 
 describe("addAllow", () => {
   it("returns the resolved absolute path it persisted (tilde expanded), idempotently", async () => {
