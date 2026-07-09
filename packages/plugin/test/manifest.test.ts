@@ -80,6 +80,35 @@ describe("repo-root .claude-plugin/marketplace.json", () => {
   });
 });
 
+describe("agents/curator.md (subagent — #198)", () => {
+  it("ships a curator subagent with name + description + scoped tools", () => {
+    const file = path.join(pluginRoot, "agents", "curator.md");
+    expect(existsSync(file)).toBe(true);
+    const raw = readFileSync(file, "utf8");
+
+    // A Claude Code subagent is YAML frontmatter (name/description/tools) + a markdown body prompt.
+    expect(raw.startsWith("---\n")).toBe(true);
+    const end = raw.indexOf("\n---", 3);
+    expect(end).toBeGreaterThan(0);
+    const front = raw.slice(4, end);
+    const body = raw.slice(end + 4).trim();
+
+    // Named `curator` so it is invokable as @commonwealth:curator.
+    expect(/^name:\s*curator\s*$/m.test(front)).toBe(true);
+    expect(/^description:/m.test(front)).toBe(true);
+
+    // Scoped to the Commonwealth MCP tools + Bash (for the review CLI). It must NOT be granted
+    // broad write tools like Write/Edit — the curator is advisory (read + review-CLI only).
+    expect(/^tools:.*mcp__commonwealth__search/m.test(front)).toBe(true);
+    expect(/^tools:.*\bBash\b/m.test(front)).toBe(true);
+    expect(/^tools:.*\b(Write|Edit)\b/m.test(front)).toBe(false);
+
+    // The prompt must encode the advisory posture (never auto-promote).
+    expect(body.length).toBeGreaterThan(0);
+    expect(/never|advisory|recommend/i.test(body)).toBe(true);
+  });
+});
+
 describe("hooks/hooks.json", () => {
   it("references both the SessionStart and SessionEnd hook scripts", () => {
     const hooks = readJson("hooks/hooks.json") as {
