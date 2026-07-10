@@ -32,4 +32,4 @@ export { approve, approveAll, listPending, reject } from "./review.js";
 export { listStaged, stageNote, stagedAbsPath, stagingRoot } from "./staging.js";
 export { selectRelevant } from "./relevance.js";
 export { formatContext } from "./context.js";
-export { addAllow, addDeny, isInScope, loadUserConfig } from "./scope.js";
+export { addAllow, addDeny, loadUserConfig } from "./scope.js";

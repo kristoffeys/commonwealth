@@ -7,11 +7,16 @@ import * as core from "@cmnwlth/core";
  * in the same per-user `config.json`.
  *
  *   commonwealth registry show
- *   commonwealth registry route <matcher> <brain> [--remote <url>]
+ *   commonwealth registry route <matcher> <brain> [--remote <url>] [--shared]
  *   commonwealth registry allow <matcher>                 # → the default brain
- *   commonwealth registry deny  <matcher>
- *   commonwealth registry remove <matcher>
+ *   commonwealth registry deny  <matcher> [--shared]
+ *   commonwealth registry remove <matcher> [--shared]
  *   commonwealth registry default <brain> [--remote <url>] | --clear
+ *   commonwealth registry pull                            # materialize teams' shared rules
+ *
+ * `--shared` (ADR-0024 §5) stores the rule in the target brain's committed `sharedRules` (route →
+ * the named brain; deny → the default brain) so it syncs to the whole team; local rules override
+ * shared. `pull` re-materializes every wired brain's shared rules into the per-user config.
  *
  * A <matcher> is one of:
  *   repo:<owner/repo>   exact repo identity (git origin), e.g. repo:weareantenna/erp
@@ -22,7 +27,7 @@ import * as core from "@cmnwlth/core";
 
 /** Parsed `commonwealth registry` invocation. */
 export interface RegistryOptions {
-  action: "show" | "route" | "allow" | "deny" | "remove" | "default";
+  action: "show" | "route" | "allow" | "deny" | "remove" | "default" | "pull";
   /** Matcher-only rule (repo/org/prefix) for route/allow/deny/remove. */
   matcher?: core.Rule;
   /** Brain path for route / default. */
@@ -31,6 +36,11 @@ export interface RegistryOptions {
   remote?: string;
   /** `default --clear`: unset the default brain. */
   clear?: boolean;
+  /**
+   * `--shared` (ADR-0024 §5): write this route/deny/remove to the target brain's committed,
+   * team-synced `sharedRules` instead of the local per-user config, and materialize it locally.
+   */
+  shared?: boolean;
 }
 
 /** Injected effects of {@link runRegistry}; wired for real in {@link defaultRegistryDeps}. */
@@ -39,6 +49,16 @@ export interface RegistryDeps {
   removeRule(matcher: core.Rule): Promise<{ removed: number }>;
   setDefaultBrain(brain: string | null, remote?: string): Promise<void>;
   load(): Promise<core.Registry | null>;
+  /** Write a SHARED rule into `brainDir`'s committed config (ADR-0024 §5). */
+  addSharedRule(brainDir: string, rule: core.Rule): Promise<{ added: boolean; updated: boolean }>;
+  /** Remove a SHARED rule from `brainDir`'s committed config. */
+  removeSharedRule(brainDir: string, matcher: core.Rule): Promise<{ removed: number }>;
+  /** Materialize one brain's shared rules into the per-user config. */
+  importBrain(brainDir: string): Promise<{ imported: number; pruned: number }>;
+  /** Materialize every wired brain's shared rules into the per-user config. */
+  importAll(): Promise<{ imported: number; pruned: number }>;
+  /** Every wired brain directory (for a shared `remove` that sweeps all brains). */
+  wiredBrains(): Promise<string[]>;
   /** Diagnostic sink (stderr in production). */
   log(m: string): void;
   /** Result sink (stdout in production). */
@@ -69,6 +89,7 @@ export function parseRegistryArgs(rest: string[]): RegistryOptions | null {
   const positionals: string[] = [];
   let remote: string | undefined;
   let clear = false;
+  let shared = false;
   for (let i = 1; i < rest.length; i += 1) {
     const arg = rest[i];
     if (arg === undefined) continue;
@@ -78,6 +99,8 @@ export function parseRegistryArgs(rest: string[]): RegistryOptions | null {
       i += 1;
     } else if (arg === "--clear") {
       clear = true;
+    } else if (arg === "--shared") {
+      shared = true;
     } else if (arg.startsWith("--")) {
       return null;
     } else {
@@ -86,8 +109,13 @@ export function parseRegistryArgs(rest: string[]): RegistryOptions | null {
   }
 
   if (action === "show" || action === undefined) return { action: "show" };
+  if (action === "pull") {
+    if (positionals.length > 0) return null;
+    return { action: "pull" };
+  }
 
   if (action === "default") {
+    if (shared) return null; // the default brain is a per-user pointer, never shared
     if (clear) return { action: "default", clear: true };
     const brain = positionals[0];
     if (brain === undefined || positionals.length > 1) return null;
@@ -98,13 +126,26 @@ export function parseRegistryArgs(rest: string[]): RegistryOptions | null {
     const matcher = parseMatcher(positionals[0]);
     const brain = positionals[1];
     if (!matcher || brain === undefined || positionals.length > 2) return null;
-    return { action: "route", matcher, brain, ...(remote ? { remote } : {}) };
+    return {
+      action: "route",
+      matcher,
+      brain,
+      ...(remote ? { remote } : {}),
+      ...(shared ? { shared: true } : {}),
+    };
   }
 
-  if (action === "allow" || action === "deny" || action === "remove") {
+  if (action === "allow") {
+    if (shared) return null; // use `route <matcher> <brain> --shared` for a shared route
     const matcher = parseMatcher(positionals[0]);
     if (!matcher || positionals.length > 1) return null;
-    return { action, matcher };
+    return { action: "allow", matcher };
+  }
+
+  if (action === "deny" || action === "remove") {
+    const matcher = parseMatcher(positionals[0]);
+    if (!matcher || positionals.length > 1) return null;
+    return { action, matcher, ...(shared ? { shared: true } : {}) };
   }
 
   return null;
@@ -124,7 +165,67 @@ function formatRule(rule: core.Rule): string {
     : rule.brain
       ? `→ ${rule.brain}${rule.remote ? ` (remote ${rule.remote})` : ""}`
       : "→ (default brain)";
-  return `  ${matcher.padEnd(32)} ${outcome}`;
+  // Shared rules (ADR-0024 §5) are synced from a brain; tag them so `show` distinguishes them from
+  // the machine-local rules a `local` override would win against.
+  const origin = rule.origin === "shared" ? " [shared]" : "";
+  return `  ${matcher.padEnd(32)} ${outcome}${origin}`;
+}
+
+/**
+ * Handle a `--shared` route/deny/remove (ADR-0024 §5): write the rule into a brain's committed
+ * `sharedRules` (so it syncs to the team), then materialize the change into the per-user config.
+ *   - route → the explicit target brain holds the shared route;
+ *   - deny  → the **default brain** holds the team-wide shared deny (errors if none is set);
+ *   - remove → sweep the matcher out of EVERY wired brain, then re-import to prune.
+ * @returns Exit code: 0 success, 1 write failure, 2 usage/validation error.
+ */
+async function runSharedWrite(opts: RegistryOptions, deps: RegistryDeps): Promise<number> {
+  const matcher = opts.matcher as core.Rule;
+  try {
+    if (opts.action === "route") {
+      const brain = opts.brain as string;
+      const { added, updated } = await deps.addSharedRule(brain, matcher);
+      const { imported } = await deps.importBrain(brain);
+      deps.log(
+        `registry: ${added ? "added" : updated ? "updated" : "unchanged"} shared rule ` +
+          `${formatRule({ ...matcher, brain, origin: "shared" }).trim()} in ${brain} ` +
+          `(${imported} materialized locally)`,
+      );
+      return 0;
+    }
+    if (opts.action === "deny") {
+      const reg = await deps.load();
+      const target = reg?.defaultBrain?.brain;
+      if (!target) {
+        deps.log(
+          "registry: a shared deny needs a default brain to live in — set one with " +
+            "`commonwealth registry default <brain>`, then retry.",
+        );
+        return 2;
+      }
+      const { added, updated } = await deps.addSharedRule(target, { ...matcher, deny: true });
+      await deps.importBrain(target);
+      deps.log(
+        `registry: ${added ? "added" : updated ? "updated" : "unchanged"} shared deny ` +
+          `${formatRule({ ...matcher, deny: true, origin: "shared" }).trim()} in ${target}`,
+      );
+      return 0;
+    }
+    // remove: sweep every wired brain, then re-import to prune the local materialization.
+    const brains = await deps.wiredBrains();
+    let removed = 0;
+    for (const brain of brains) removed += (await deps.removeSharedRule(brain, matcher)).removed;
+    const { pruned } = await deps.importAll();
+    deps.log(
+      removed > 0
+        ? `registry: removed ${removed} shared rule(s) across ${brains.length} brain(s) (${pruned} pruned locally)`
+        : "registry: no matching shared rule in any wired brain",
+    );
+    return 0;
+  } catch (err) {
+    deps.log(`registry: FAILED to write shared rule: ${(err as Error).message}`);
+    return 1;
+  }
 }
 
 /**
@@ -145,6 +246,25 @@ export async function runRegistry(opts: RegistryOptions, deps: RegistryDeps): Pr
     deps.out(rules.length ? `rules (${rules.length}):` : "rules: none");
     for (const r of rules) deps.out(formatRule(r));
     return 0;
+  }
+
+  if (opts.action === "pull") {
+    try {
+      const { imported, pruned } = await deps.importAll();
+      deps.log(`registry: pulled shared rules (${imported} imported, ${pruned} pruned)`);
+    } catch (err) {
+      deps.log(`registry: FAILED to pull shared rules: ${(err as Error).message}`);
+      return 1;
+    }
+    return 0;
+  }
+
+  // Shared writes (ADR-0024 §5) target a brain's committed `sharedRules`, then materialize locally.
+  if (
+    opts.shared &&
+    (opts.action === "route" || opts.action === "deny" || opts.action === "remove")
+  ) {
+    return runSharedWrite(opts, deps);
   }
 
   if (opts.action === "default") {
@@ -217,6 +337,11 @@ export function defaultRegistryDeps(): RegistryDeps {
     removeRule: (matcher) => core.removeRule(matcher),
     setDefaultBrain: (brain, remote) => core.setDefaultBrain(brain, remote ? { remote } : {}),
     load: () => core.loadRegistryFile(),
+    addSharedRule: (brainDir, rule) => core.addSharedRule(brainDir, rule),
+    removeSharedRule: (brainDir, matcher) => core.removeSharedRule(brainDir, matcher),
+    importBrain: (brainDir) => core.importSharedRules(brainDir),
+    importAll: () => core.importAllSharedRules(),
+    wiredBrains: () => core.listWiredBrainDirs(),
     log: (m) => {
       process.stderr.write(`${m}\n`);
     },
@@ -232,13 +357,16 @@ export async function cmdRegistry(rest: string[]): Promise<number> {
   if (opts === null) {
     process.stderr.write(
       "usage: commonwealth registry show\n" +
-        "       commonwealth registry route <matcher> <brain> [--remote <url>]\n" +
+        "       commonwealth registry route <matcher> <brain> [--remote <url>] [--shared]\n" +
         "       commonwealth registry allow  <matcher>\n" +
-        "       commonwealth registry deny   <matcher>\n" +
-        "       commonwealth registry remove <matcher>\n" +
+        "       commonwealth registry deny   <matcher> [--shared]\n" +
+        "       commonwealth registry remove <matcher> [--shared]\n" +
         "       commonwealth registry default <brain> [--remote <url>] | --clear\n" +
+        "       commonwealth registry pull\n" +
         "\n" +
-        "  <matcher>: repo:<owner/repo> | org:<owner> | path:<dir> | *\n",
+        "  <matcher>: repo:<owner/repo> | org:<owner> | path:<dir> | *\n" +
+        "  --shared:  store the rule in the brain's committed config so it syncs to the team\n" +
+        "             (ADR-0024 §5); local rules override shared. `pull` re-materializes them.\n",
     );
     return 2;
   }

@@ -2,8 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { promises as fs, type Stats } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { resolveBrainDir, resolveBrainMapping } from "@cmnwlth/core";
-import { isInScope, loadUserConfig } from "@cmnwlth/curate";
+import { resolveBrain, resolveBrainDir, resolveBrainMapping } from "@cmnwlth/core";
 
 /**
  * `commonwealth doctor` — full-chain install/sync diagnosis (#134). The Commonwealth setup spans
@@ -57,10 +56,15 @@ type GitState = { kind: "no-repo" } | { kind: "no-upstream" } | { kind: "tracked
  */
 export interface DoctorEnv {
   cwd: string;
-  /** Per-user scope config path (defaults to `$COMMONWEALTH_CONFIG` / `~/.commonwealth/config.json`). */
-  scopeConfigPath?: string;
   /** Resolve the brain for a cwd. */
   resolveBrain: (cwd: string) => Promise<string | null>;
+  /**
+   * The three-way scope/resolution result for a cwd (ADR-0024 §3): `brain` (in scope), `denied` (an
+   * explicit deny rule — out of scope), or `none` (nothing configured here). Distinct from
+   * {@link resolveBrain}, which collapses `denied`/`none` to null and may be env-pinned; this reads
+   * the ruleset so `doctor` can tell a deliberate deny apart from an unmapped dir.
+   */
+  resolveScope: (cwd: string) => Promise<"brain" | "denied" | "none">;
   /**
    * The git remote a missing brain could clone from (ADR-0019), or null. Optional — when absent,
    * a missing brain reads as a hard config error rather than a "not cloned yet" state.
@@ -171,6 +175,10 @@ export function defaultDoctorEnv(cwd: string): DoctorEnv {
       brainEnv && brainEnv.length > 0
         ? Promise.resolve(path.resolve(brainEnv))
         : resolveBrainDir(dir),
+    // Scope reads the ruleset directly (never env-pinned): the single ADR-0024 §3 pass that folds
+    // in the legacy allow/deny. `scopeConfigPath` (→ `$COMMONWEALTH_CONFIG`) selects the file.
+    resolveScope: async (dir) =>
+      (await resolveBrain(dir, { registryPath: process.env.COMMONWEALTH_CONFIG })).kind,
     resolveRemote: async (dir) => {
       if (brainEnv && brainEnv.length > 0) return null; // env-pinned brains carry no mapping remote
       return (await resolveBrainMapping(dir))?.remote ?? null;
@@ -387,18 +395,28 @@ export async function diagnose(
   //    or missing index is a warn, never a failure.
   checks.push(await checkIndex(brain));
 
-  // 8) Scope — is the cwd in capture scope? Out-of-scope is often intended (a personal project).
-  const inScope = isInScope(cwd, await loadUserConfig(env.scopeConfigPath));
+  // 8) Scope — is the cwd in capture scope (ADR-0024 §3)? The single resolution pass answers it:
+  //    `brain` = in scope; `denied` = an explicit deny rule (out of scope); `none` = nothing
+  //    configured here. Out-of-scope is often intended (a personal project), so it warns, never fails.
+  const scope = await env.resolveScope(cwd);
   checks.push(
-    inScope
+    scope === "brain"
       ? { id: "scope", label: "Scope", status: "ok", detail: "cwd is in capture scope." }
-      : {
-          id: "scope",
-          label: "Scope",
-          status: "warn",
-          detail: "cwd is OUT of capture scope — nothing is captured here (may be intended).",
-          fix: `commonwealth scope allow ${cwd}`,
-        },
+      : scope === "denied"
+        ? {
+            id: "scope",
+            label: "Scope",
+            status: "warn",
+            detail: "cwd is OUT of capture scope — a deny rule matches it (may be intended).",
+            fix: "commonwealth registry show   # find and `commonwealth registry remove` the deny",
+          }
+        : {
+            id: "scope",
+            label: "Scope",
+            status: "warn",
+            detail: "cwd is OUT of capture scope — no rule maps it (may be intended).",
+            fix: `commonwealth add ${cwd}`,
+          },
   );
 
   const report = finalize(cwd, brain, checks, false);

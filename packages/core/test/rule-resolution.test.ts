@@ -32,8 +32,13 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-/** Write a config file with the given rules / defaultBrain. */
-async function writeRegistry(reg: { rules?: Rule[]; defaultBrain?: unknown }): Promise<void> {
+/** Write a config file with the given rules / defaultBrain / legacy scope allow-deny. */
+async function writeRegistry(reg: {
+  rules?: Rule[];
+  defaultBrain?: unknown;
+  allow?: string[];
+  deny?: string[];
+}): Promise<void> {
   await fs.writeFile(registryPath, JSON.stringify(reg), "utf8");
 }
 
@@ -198,6 +203,59 @@ describe("resolveBrain — path, catch-all, default brain", () => {
     });
 
     expect(await resolveBrain(dir, { registryPath })).toEqual({ kind: "denied" });
+  });
+});
+
+describe("resolveBrain — legacy scope allow/deny folded in as sugar (ADR-0024 §3/§7, retiring isInScope)", () => {
+  it("a legacy `deny` entry becomes a deny rule → denied (the privacy gate)", async () => {
+    const secret = await mkdir("finances");
+    await writeRegistry({ deny: [path.join(root, "finances")] });
+
+    expect(await resolveBrain(secret, { registryPath })).toEqual({ kind: "denied" });
+  });
+
+  it("a legacy `allow` entry routes to the default brain, else resolves to none", async () => {
+    const work = await mkdir("work");
+    const antenna = brainPath("antenna");
+
+    // With a default brain, an allowed dir is in scope and routes there.
+    await writeRegistry({ allow: [path.join(root, "work")], defaultBrain: antenna });
+    expect(await resolveBrain(work, { registryPath })).toEqual({ kind: "brain", brain: antenna });
+
+    // Without one, a bare-allow match is a no-op (never captures nowhere) — not env fallback.
+    await writeRegistry({ allow: [path.join(root, "work")] });
+    expect(await resolveBrain(work, { registryPath, env: "/env/brain" })).toEqual({ kind: "none" });
+  });
+
+  it("an authored `brain` rule is never shadowed by an equally-specific legacy allow (sugar appended last)", async () => {
+    const work = await mkdir("work");
+    const brain = brainPath("routed");
+    // Same prefix as the allow entry, but authored rules are seen first, so the route wins the tie.
+    await writeRegistry({
+      rules: [{ prefix: path.join(root, "work"), brain }],
+      allow: [path.join(root, "work")],
+    });
+
+    expect(await resolveBrain(work, { registryPath })).toEqual({ kind: "brain", brain });
+  });
+
+  it("a legacy `deny` still wins over an equally-specific allow rule (deny breaks ties)", async () => {
+    const work = await mkdir("work");
+    await writeRegistry({
+      rules: [{ prefix: path.join(root, "work"), brain: brainPath("x") }],
+      deny: [path.join(root, "work")],
+    });
+
+    expect(await resolveBrain(work, { registryPath })).toEqual({ kind: "denied" });
+  });
+
+  it("a specific identity rule carves an exception out of a broad legacy deny prefix", async () => {
+    const repo = await gitRepo("erp", "git@github.com:weareantenna/erp.git");
+    const erpBrain = brainPath("erp");
+    // Deny the whole temp root by prefix, but allow this one repo by identity (higher tier wins).
+    await writeRegistry({ rules: [{ repo: "weareantenna/erp", brain: erpBrain }], deny: [root] });
+
+    expect(await resolveBrain(repo, { registryPath })).toEqual({ kind: "brain", brain: erpBrain });
   });
 });
 

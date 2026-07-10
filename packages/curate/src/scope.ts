@@ -3,14 +3,18 @@ import os from "node:os";
 import path from "node:path";
 
 /**
- * A single user's scope configuration (the privacy gate). Personal project folders are
- * kept out of the brain by only capturing / injecting context for sessions whose cwd is
- * in scope. `deny` always wins over `allow`.
+ * A single user's scope configuration (the privacy gate). Personal project folders are kept out of
+ * the brain by only capturing / injecting context for sessions whose cwd is in scope.
+ *
+ * As of ADR-0024 §3 the scope decision is no longer computed here: `@cmnwlth/core`'s `resolveBrain`
+ * folds these `allow`/`deny` lists into its ruleset and returns a three-way result — `denied` (out
+ * of scope), `none` (nothing configured here), or `brain` (in scope). This type + its IO remain the
+ * readable **sugar** the `scope` CLI edits; `isInScope` is retired in favor of that single pass.
  */
 export interface UserConfig {
-  /** Absolute (tilde-allowed) roots that are in scope. Empty => everything is in scope. */
+  /** Absolute (tilde-allowed) roots that are in scope. Folded into resolution as bare-allow rules. */
   allow: string[];
-  /** Absolute (tilde-allowed) roots that are always out of scope. Wins over `allow`. */
+  /** Absolute (tilde-allowed) roots that are always out of scope. Folded in as `deny` rules. */
   deny: string[];
 }
 
@@ -89,31 +93,6 @@ function expand(entry: string): string {
   if (entry === "~") return path.resolve(home);
   if (entry.startsWith("~/")) return path.resolve(home, entry.slice(2));
   return path.resolve(entry);
-}
-
-/**
- * True when `child` is the same path as `parent` or nested beneath it. Operates on
- * normalized absolute paths (no tilde expansion — callers pass expanded paths).
- */
-function isUnder(child: string, parent: string): boolean {
-  if (parent === path.sep) return true; // filesystem root contains everything
-  return child === parent || child.startsWith(parent + path.sep);
-}
-
-/** True when `p` is under any entry in `list` (entries are tilde-expanded first). */
-function underAny(p: string, list: string[]): boolean {
-  return list.some((entry) => isUnder(p, expand(entry)));
-}
-
-/**
- * Decide whether `cwd` is in scope for a user's config. Rule (deny wins):
- * `inScope = (allow empty || cwd under some allow) && cwd not under any deny`.
- * The default (empty allow, empty deny) puts everything in scope.
- */
-export function isInScope(cwd: string, config: UserConfig): boolean {
-  const target = expand(cwd);
-  const allowed = config.allow.length === 0 || underAny(target, config.allow);
-  return allowed && !underAny(target, config.deny);
 }
 
 /**

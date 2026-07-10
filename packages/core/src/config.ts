@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { EmbeddingsConfig } from "./embed.js";
+import type { Rule } from "./registry.js";
 import { SCHEMA_VERSION } from "./schema.js";
 import type { ScanOptions } from "./secrets.js";
 
@@ -32,6 +33,39 @@ export interface BrainConfig {
    * `hosted` opt-in, `none` to disable). See {@link EmbeddingsConfig}.
    */
   embeddings: EmbeddingsConfig;
+  /**
+   * **Shared** brain-resolution rules (ADR-0024 §5): the `origin: "shared"` half of the ruleset,
+   * committed here so it syncs to the whole team. Each entry is a **matcher only** (`repo` / `org`
+   * / `prefix`) plus an optional `deny` — it carries NO brain path (a route means "capture into
+   * THIS brain, wherever each teammate has it cloned") and NO `origin`/`remote` (those are
+   * per-machine). On sync each teammate's {@link importSharedRules} materializes these into their
+   * per-user `~/.commonwealth/config.json` as `origin: "shared"` rules; a teammate's own `local`
+   * rule for the same matcher overrides. Personal `local` denies never land here. Defaults to `[]`.
+   */
+  sharedRules: Rule[];
+}
+
+/**
+ * Validate one raw **shared** rule (ADR-0024 §5): a matcher (`repo` / `org` / `prefix`) plus an
+ * optional `deny`, and nothing else — a shared rule never carries a brain path, `origin`, or
+ * `remote` (all per-machine). Returns a clean {@link Rule} or null for a matcher-less / malformed
+ * entry, so a partial hand-edit degrades to "fewer shared rules" rather than throwing.
+ */
+export function parseSharedRule(raw: unknown): Rule | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const str = (v: unknown): string | undefined =>
+    typeof v === "string" && v.length > 0 ? v : undefined;
+  const repo = str(r.repo);
+  const org = str(r.org);
+  const prefix = str(r.prefix);
+  if (!repo && !org && !prefix) return null;
+  const out: Rule = {};
+  if (repo) out.repo = repo;
+  if (org) out.org = org;
+  if (prefix) out.prefix = prefix;
+  if (r.deny === true) out.deny = true;
+  return out;
 }
 
 /** Build the {@link ScanOptions} for the secret scanner from a brain's config (#46). */
@@ -104,6 +138,7 @@ export function defaultBrainConfig(name: string): BrainConfig {
     features: defaultFeatures(),
     secretScan: { entropy: false, allowlist: [] },
     embeddings: defaultEmbeddingsConfig(),
+    sharedRules: [],
   };
 }
 
@@ -175,6 +210,11 @@ export async function loadBrainConfig(brainDir: string): Promise<BrainConfig> {
     },
     secretScan: normalizeSecretScan(obj.secretScan, defaults.secretScan),
     embeddings: normalizeEmbeddings(obj.embeddings, defaults.embeddings),
+    // Shared rules (ADR-0024 §5): keep only well-formed matcher(+deny) entries; a malformed one is
+    // dropped rather than throwing (mirrors the per-user ruleset's defensive parse).
+    sharedRules: Array.isArray(obj.sharedRules)
+      ? obj.sharedRules.map(parseSharedRule).filter((r): r is Rule => r !== null)
+      : defaults.sharedRules,
   };
 }
 

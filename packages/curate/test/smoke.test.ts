@@ -72,14 +72,27 @@ describe("built binary", () => {
   });
 
   it("reports scope check for a cwd (exit 0, prints in/out-scope)", async () => {
-    // COMMONWEALTH_CONFIG points at a non-existent temp file → empty config → everything in scope.
+    // Scope IS resolution now (ADR-0024 §3): in scope ⟺ the cwd resolves to a brain. A rule routing
+    // the cwd → a brain makes it in-scope; an empty config (nothing configured) is out-of-scope.
     const configPath = path.join(brainDir, "config.json");
-    const out = execFileSync("node", [distEntry, "scope", "check", "--cwd", brainDir], {
-      cwd: repoRoot,
-      stdio: "pipe",
-      env: { ...process.env, COMMONWEALTH_CONFIG: configPath },
-    });
-    expect(out.toString().trim()).toBe("in-scope");
+    const scopeCheck = (env: NodeJS.ProcessEnv): string =>
+      execFileSync("node", [distEntry, "scope", "check", "--cwd", brainDir], {
+        cwd: repoRoot,
+        stdio: "pipe",
+        env,
+      })
+        .toString()
+        .trim();
+
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ rules: [{ prefix: brainDir, brain: brainDir }] }),
+    );
+    expect(scopeCheck({ ...process.env, COMMONWEALTH_CONFIG: configPath })).toBe("in-scope");
+
+    // An empty/absent config maps the cwd to nothing → out of scope.
+    const emptyConfig = path.join(brainDir, "empty-config.json");
+    expect(scopeCheck({ ...process.env, COMMONWEALTH_CONFIG: emptyConfig })).toBe("out-of-scope");
   });
 
   it("resolves the brain via the registry when run without --dir from a mapped cwd (#69)", async () => {

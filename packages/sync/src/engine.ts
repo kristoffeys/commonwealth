@@ -1,4 +1,4 @@
-import { buildIndex, regenerateDerived } from "@cmnwlth/core";
+import { buildIndex, importSharedRules, regenerateDerived } from "@cmnwlth/core";
 import { resolveConflictsAsSiblings, type ResolvedConflict } from "./conflict.js";
 import {
   abortRebase,
@@ -118,6 +118,16 @@ export class SyncEngine {
           conflicts.push(...(await resolveConflictsAsSiblings(dir, paths)));
         }
       }
+    }
+
+    // 2b. Propagate this brain's SHARED routing rules (ADR-0024 §5) into the per-user config, so a
+    //     teammate's freshly-pulled `sharedRules` take effect locally (local rules still override).
+    //     Best-effort: a sync must never fail over a rule-materialization hiccup, and it is a true
+    //     no-op for the common brain that shares nothing.
+    try {
+      await importSharedRules(dir);
+    } catch {
+      // non-fatal — the per-user config is untouched on any error (persistRegistry is atomic).
     }
 
     // 3. Rebuild derived artifacts from the (now-merged) note set.
