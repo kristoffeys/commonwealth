@@ -318,12 +318,62 @@ export async function launchCaptureWorker(rawInput, opts = {}) {
 }
 
 /**
- * Human-readable one-liner for a {@link sessionEnd} outcome, or `null` when there is nothing
- * worth telling the user. Turns the silent no-op (#96) into a specific explanation: a skip
- * says WHY (no brain / out of scope), a zero-capture says the extractor found nothing, and a
- * real capture reports the count. Pure function.
+ * Parse the `capture` CLI's stdout into structured notes (#204). Each line is either a staged
+ * note `<id>  [<kind>]  <title>` or an auto-promoted one `promoted  <path>  [<kind>]  <title>`
+ * (see curate/src/index.ts). We key off the first `[kind]` bracket (ids/paths never contain
+ * brackets) and take everything after it as the title, so titles with spaces survive intact.
+ * Unparseable lines are skipped. Pure function.
  *
- * @param {{skipped?: boolean, reason?: string, captured?: number}} result
+ * @param {string} stdout  Raw stdout from the `capture` command.
+ * @returns {Array<{kind: string, title: string, promoted: boolean}>}
+ */
+export function parseCaptureLines(stdout) {
+  if (typeof stdout !== "string") return [];
+  const notes = [];
+  for (const raw of stdout.split("\n")) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    const m = line.match(/\[([^\]]+)\]\s+(.+)$/);
+    if (!m) continue;
+    notes.push({ kind: m[1], title: m[2].trim(), promoted: line.startsWith("promoted") });
+  }
+  return notes;
+}
+
+/** Cap on how many note titles a capture receipt lists inline before collapsing to "(+N more)". */
+const RECEIPT_TITLE_LIMIT = 3;
+
+/**
+ * Render a capture receipt that shows WHAT was remembered, not just a count (#204). Lists up to
+ * {@link RECEIPT_TITLE_LIMIT} titles then "(+N more)", so it stays a glanceable diff rather than a
+ * wall of text. Tense is keyed on `autoPromote` (ADR-0014) via each note's `promoted` flag:
+ * promoted notes are already canon → a past-tense "remembered" notification; staged notes await
+ * review → a "staged … run /commonwealth:promote" nudge. Pure function.
+ *
+ * @param {Array<{kind: string, title: string, promoted: boolean}>} notes
+ * @returns {string}
+ */
+function renderCaptureReceipt(notes) {
+  const shown = notes.slice(0, RECEIPT_TITLE_LIMIT).map((n) => `• "${n.title}"`);
+  const extra = notes.length - shown.length;
+  const list = [...shown, ...(extra > 0 ? [`(+${extra} more)`] : [])].join("\n");
+  // autoPromote is a brain-level flag, so a capture is all-promoted or all-staged; `some` is a
+  // belt-and-suspenders read in case a line ever fails to parse its prefix.
+  const promoted = notes.some((n) => n.promoted);
+  if (promoted) {
+    return `🧠 Commonwealth remembered from the last session:\n${list}\nRun \`commonwealth status\` to review.`;
+  }
+  return `🧠 Commonwealth staged ${notes.length} note(s) from the last session for review:\n${list}\nRun \`/commonwealth:promote\` to approve.`;
+}
+
+/**
+ * Human-readable receipt for a {@link sessionEnd} outcome, or `null` when there is nothing worth
+ * telling the user. Turns the silent no-op (#96) into a specific explanation: a skip says WHY (no
+ * brain / out of scope), a zero-capture says the extractor found nothing, and a real capture lists
+ * WHAT was remembered (#204) — falling back to a bare count when structured notes are unavailable.
+ * Pure function.
+ *
+ * @param {{skipped?: boolean, reason?: string, captured?: number, notes?: Array<{kind: string, title: string, promoted: boolean}>}} result
  * @returns {string | null}
  */
 export function endReceiptMessage(result) {
@@ -336,6 +386,10 @@ export function endReceiptMessage(result) {
       return "🧠 Commonwealth: the last session's directory is outside your Commonwealth capture scope, so nothing was captured.";
     }
     return null; // no-cwd / unknown — nothing useful to surface
+  }
+  // Prefer the legible, titled receipt when we have structured notes (#204).
+  if (Array.isArray(result.notes) && result.notes.length > 0) {
+    return renderCaptureReceipt(result.notes);
   }
   if (typeof result.captured === "number") {
     if (result.captured === 0) {
@@ -645,9 +699,11 @@ export function realDeps(overrides = {}) {
       input: JSON.stringify(candidates),
       env: { COMMONWEALTH_BRAIN_DIR: brain },
     });
-    // `capture` prints one line per staged note to stdout; count them for the summary.
-    const staged = res.code === 0 ? res.stdout.split("\n").filter((l) => l.trim().length > 0) : [];
-    return { captured: staged.length, staged };
+    // `capture` prints one line per note to stdout, each carrying its kind + title (and a
+    // `promoted` prefix when autoPromote landed it in canon). Parse them into structured notes so
+    // the receipt can show WHAT was remembered, not just a count (#204).
+    const notes = res.code === 0 ? parseCaptureLines(res.stdout) : [];
+    return { captured: notes.length, notes };
   }
 
   async function extractCandidates(transcriptPath) {
