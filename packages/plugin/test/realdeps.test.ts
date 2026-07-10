@@ -220,6 +220,50 @@ describe("plugin hook recursion guard (#104)", () => {
     expect(res.code).toBe(0);
     expect(res.stdout).toBe("");
   });
+
+  it("pre-compact no-ops (no output) when DISABLE_HOOKS is set (#195)", async () => {
+    const res = await runHook("pre-compact.mjs", { COMMONWEALTH_DISABLE_HOOKS: "1" });
+    expect(res.code).toBe(0);
+    expect(res.stdout).toBe("");
+    expect(res.stderr).not.toContain("[commonwealth] pre-compact");
+  });
+});
+
+describe("PreCompact launches the capture worker (#195)", () => {
+  const hooksDir = fileURLToPath(new URL("../hooks", import.meta.url));
+
+  it("hands the pre-compaction hook JSON to the detached worker", async () => {
+    // Same worker plumbing as SessionEnd: pre-compact.mjs should launch the worker (stubbed via
+    // COMMONWEALTH_CAPTURE_WORKER) with the hook JSON as argv[2], then return immediately.
+    const marker = path.join(tmp, "precompact-worker-ran.json");
+    const stubWorker = path.join(tmp, "stub-worker.mjs");
+    await fs.writeFile(
+      stubWorker,
+      [
+        "import { promises as fs } from 'node:fs';",
+        "const input = process.argv[2] ?? '';",
+        `await fs.writeFile(${JSON.stringify(marker)}, input);`,
+      ].join("\n"),
+    );
+
+    const { spawn } = await import("node:child_process");
+    await new Promise<void>((resolve) => {
+      const child = spawn("node", [path.join(hooksDir, "pre-compact.mjs")], {
+        stdio: ["pipe", "ignore", "ignore"],
+        env: { ...process.env, COMMONWEALTH_CAPTURE_WORKER: stubWorker },
+      });
+      child.on("close", () => resolve());
+      child.stdin!.end(
+        JSON.stringify({ cwd: "/work/x", transcript_path: "/t.jsonl", trigger: "auto" }),
+      );
+    });
+
+    // Give the detached worker a moment to write its marker.
+    await new Promise((r) => setTimeout(r, 800));
+    const got = await fs.readFile(marker, "utf8").catch(() => null);
+    expect(got, "the worker should have received the pre-compaction hook JSON").not.toBeNull();
+    expect(JSON.parse(got!).trigger).toBe("auto");
+  });
 });
 
 describe("realDeps().capture (real curate binary over stdin)", () => {
