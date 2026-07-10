@@ -9,6 +9,7 @@ import {
   endReceiptMessage,
   launchCaptureWorker,
   parseCandidateArray,
+  parseCaptureLines,
   promptCaptureIntervalMs,
   sessionEnd,
   sessionStart,
@@ -29,9 +30,11 @@ function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
       async () => "## Team brain — 2 relevant note(s)\n- **JWT** (memory) — 15m expiry",
     ),
     extractCandidates: vi.fn(async () => [{ kind: "memory", title: "T", body: "B" }]),
-    capture: vi.fn(async (_brain: string, _cwd: string, candidates: unknown[]) => ({
+    capture: vi.fn(async (_brain: string, _cwd: string, candidates: { title?: string }[]) => ({
       captured: candidates.length,
-      staged: candidates,
+      // Mirror the real dep's shape (#204): structured notes carrying kind + title + promoted
+      // (autoPromote on by default → promoted straight to canon).
+      notes: candidates.map((c) => ({ kind: "memory", title: c.title ?? "T", promoted: true })),
     })),
     saveReceipt: vi.fn(async () => {}),
     takeReceipt: vi.fn(async () => null),
@@ -196,7 +199,10 @@ describe("sessionEnd", () => {
     expect(deps.capture).toHaveBeenCalledWith("/brains/acme", "/work/acme/app", [
       { kind: "memory", title: "T", body: "B" },
     ]);
-    expect(result).toEqual({ captured: 1, staged: [{ kind: "memory", title: "T", body: "B" }] });
+    expect(result).toEqual({
+      captured: 1,
+      notes: [{ kind: "memory", title: "T", promoted: true }],
+    });
   });
 
   it("skips (no brain — none) and NEVER extracts or captures, but leaves a receipt (#96)", async () => {
@@ -241,13 +247,14 @@ describe("sessionEnd", () => {
     );
   });
 
-  it("leaves a count receipt after a real capture", async () => {
+  it("leaves a titled receipt naming what was remembered after a real capture (#204)", async () => {
     const deps = makeDeps();
     await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" }, deps);
     expect(deps.saveReceipt).toHaveBeenCalledWith(
       expect.objectContaining({
         cwd: "/work/acme/app",
-        message: expect.stringContaining("1 note"),
+        // Past-tense "remembered" (autoPromote on) naming the note title, not a bare count.
+        message: expect.stringContaining('remembered from the last session:\n• "T"'),
       }),
     );
   });
@@ -276,7 +283,10 @@ describe("sessionEnd", () => {
       expect(deps.capture).toHaveBeenCalledWith("/brains/acme", "/work/acme/app", [
         { kind: "memory", title: "T", body: "B" },
       ]);
-      expect(result).toEqual({ captured: 1, staged: [{ kind: "memory", title: "T", body: "B" }] });
+      expect(result).toEqual({
+        captured: 1,
+        notes: [{ kind: "memory", title: "T", promoted: true }],
+      });
     } finally {
       if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
       else process.env.CLAUDE_PROJECT_DIR = prev;
@@ -327,7 +337,10 @@ describe("sessionEnd", () => {
       expect(deps.capture).toHaveBeenCalledWith("/brains/acme", "/work/acme/app", [
         { kind: "memory", title: "T", body: "B" },
       ]);
-      expect(result).toEqual({ captured: 1, staged: [{ kind: "memory", title: "T", body: "B" }] });
+      expect(result).toEqual({
+        captured: 1,
+        notes: [{ kind: "memory", title: "T", promoted: true }],
+      });
     } finally {
       if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
       else process.env.CLAUDE_PROJECT_DIR = prev;
@@ -355,6 +368,84 @@ describe("endReceiptMessage (#96)", () => {
   it("returns null for junk input", () => {
     expect(endReceiptMessage(null)).toBe(null);
     expect(endReceiptMessage({})).toBe(null);
+  });
+});
+
+describe("endReceiptMessage titled receipt (#204)", () => {
+  it("names promoted notes in the past tense and points at status", () => {
+    const msg = endReceiptMessage({
+      captured: 2,
+      notes: [
+        { kind: "decision", title: "Chose Productive over Harvest", promoted: true },
+        { kind: "memory", title: "Staging deploys need the VPN", promoted: true },
+      ],
+    });
+    expect(msg).toContain("remembered from the last session:");
+    expect(msg).toContain('• "Chose Productive over Harvest"');
+    expect(msg).toContain('• "Staging deploys need the VPN"');
+    expect(msg).toContain("commonwealth status");
+    expect(msg).not.toContain("(+"); // both fit under the limit
+  });
+
+  it("nudges toward /commonwealth:promote when notes are staged (autoPromote off)", () => {
+    const msg = endReceiptMessage({
+      captured: 1,
+      notes: [{ kind: "memory", title: "Prefer pnpm over npm", promoted: false }],
+    });
+    expect(msg).toContain("staged 1 note(s) from the last session for review:");
+    expect(msg).toContain('• "Prefer pnpm over npm"');
+    expect(msg).toContain("/commonwealth:promote");
+  });
+
+  it("caps the list at 3 titles and collapses the rest into (+N more)", () => {
+    const notes = ["a", "b", "c", "d", "e"].map((t) => ({
+      kind: "memory",
+      title: t,
+      promoted: true,
+    }));
+    const msg = endReceiptMessage({ captured: 5, notes });
+    expect(msg).toContain('• "a"');
+    expect(msg).toContain('• "c"');
+    expect(msg).not.toContain('• "d"');
+    expect(msg).toContain("(+2 more)");
+  });
+
+  it("falls back to the bare count when no structured notes are present", () => {
+    expect(endReceiptMessage({ captured: 2 })).toContain("2 note(s)");
+  });
+});
+
+describe("parseCaptureLines (#204)", () => {
+  it("parses staged lines into kind + title (not promoted)", () => {
+    const notes = parseCaptureLines("mem-abc123  [memory]  JWT expiry is 15m");
+    expect(notes).toEqual([{ kind: "memory", title: "JWT expiry is 15m", promoted: false }]);
+  });
+
+  it("parses promoted lines (path prefix) and flags them promoted", () => {
+    const notes = parseCaptureLines(
+      "promoted  decisions/dec-x.md  [decision]  Chose Productive over Harvest",
+    );
+    expect(notes).toEqual([
+      { kind: "decision", title: "Chose Productive over Harvest", promoted: true },
+    ]);
+  });
+
+  it("keeps titles that contain brackets by keying off the first (kind) bracket", () => {
+    const notes = parseCaptureLines("mem-1  [memory]  Use [[wikilinks]] for refs");
+    expect(notes[0]).toEqual({
+      kind: "memory",
+      title: "Use [[wikilinks]] for refs",
+      promoted: false,
+    });
+  });
+
+  it("skips blank and unparseable lines", () => {
+    const notes = parseCaptureLines("\n  \ngarbage with no bracket\nmem-2  [memory]  Real one\n");
+    expect(notes).toEqual([{ kind: "memory", title: "Real one", promoted: false }]);
+  });
+
+  it("returns [] for non-string input", () => {
+    expect(parseCaptureLines(undefined as unknown as string)).toEqual([]);
   });
 });
 
