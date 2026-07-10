@@ -209,6 +209,19 @@ describe("realDeps() receipt IO (#96) — saveReceipt / takeReceipt round-trip",
   it("takeReceipt returns null when no receipt exists", async () => {
     expect(await realDeps().takeReceipt("/anything")).toBeNull();
   });
+
+  it("prompt-capture mark round-trips per session key (#194)", async () => {
+    const deps = realDeps();
+    // Unseen key → null (never captured → the throttle fires on first prompt).
+    expect(await deps.readCaptureMark("sess-A")).toBeNull();
+    await deps.writeCaptureMark("sess-A", 1_700_000);
+    expect(await deps.readCaptureMark("sess-A")).toBe(1_700_000);
+    // Keys are independent (per-session throttle).
+    expect(await deps.readCaptureMark("sess-B")).toBeNull();
+    // A cwd-shaped key with slashes is sanitized to a safe filename, not an error.
+    await deps.writeCaptureMark("/work/app", 42);
+    expect(await deps.readCaptureMark("/work/app")).toBe(42);
+  });
 });
 
 describe("realDeps().extractCandidates hardening (#104)", () => {
@@ -273,6 +286,12 @@ describe("plugin hook recursion guard (#104)", () => {
     expect(res.stdout).toBe("");
     expect(res.stderr).not.toContain("[commonwealth] pre-compact");
   });
+
+  it("user-prompt-submit no-ops (no stdout) when DISABLE_HOOKS is set (#194)", async () => {
+    const res = await runHook("user-prompt-submit.mjs", { COMMONWEALTH_DISABLE_HOOKS: "1" });
+    expect(res.code).toBe(0);
+    expect(res.stdout).toBe("");
+  });
 });
 
 describe("PreCompact launches the capture worker (#195)", () => {
@@ -309,6 +328,70 @@ describe("PreCompact launches the capture worker (#195)", () => {
     const got = await fs.readFile(marker, "utf8").catch(() => null);
     expect(got, "the worker should have received the pre-compaction hook JSON").not.toBeNull();
     expect(JSON.parse(got!).trigger).toBe("auto");
+  });
+});
+
+describe("UserPromptSubmit throttled capture (#194)", () => {
+  const hooksDir = fileURLToPath(new URL("../hooks", import.meta.url));
+
+  /** Run user-prompt-submit.mjs with a stub worker + the given env; resolve when it exits. */
+  async function runPrompt(env: Record<string, string>): Promise<void> {
+    const { spawn } = await import("node:child_process");
+    await new Promise<void>((resolve) => {
+      const child = spawn("node", [path.join(hooksDir, "user-prompt-submit.mjs")], {
+        stdio: ["pipe", "ignore", "ignore"],
+        env: { ...process.env, ...env },
+      });
+      child.on("close", () => resolve());
+      child.stdin!.end(
+        JSON.stringify({ cwd: "/work/x", prompt: "how do we sign JWTs?", session_id: "sess-1" }),
+      );
+    });
+  }
+
+  it("launches the detached capture worker when the throttle interval allows", async () => {
+    const marker = path.join(tmp, "ups-worker-ran.json");
+    const stubWorker = path.join(tmp, "stub-worker.mjs");
+    await fs.writeFile(
+      stubWorker,
+      [
+        "import { promises as fs } from 'node:fs';",
+        "const input = process.argv[2] ?? '';",
+        `await fs.writeFile(${JSON.stringify(marker)}, input);`,
+      ].join("\n"),
+    );
+
+    // Tiny interval forces a capture on the very first prompt (no prior mark for the session).
+    await runPrompt({
+      COMMONWEALTH_CAPTURE_WORKER: stubWorker,
+      COMMONWEALTH_PROMPT_CAPTURE_MS: "1",
+    });
+
+    await new Promise((r) => setTimeout(r, 800));
+    const got = await fs.readFile(marker, "utf8").catch(() => null);
+    expect(got, "the worker should have received the prompt hook JSON").not.toBeNull();
+    expect(JSON.parse(got!).prompt).toBe("how do we sign JWTs?");
+  });
+
+  it("does NOT launch capture when prompt-capture is disabled (interval 0)", async () => {
+    const marker = path.join(tmp, "ups-disabled-marker.json");
+    const stubWorker = path.join(tmp, "stub-worker2.mjs");
+    await fs.writeFile(
+      stubWorker,
+      [
+        "import { promises as fs } from 'node:fs';",
+        `await fs.writeFile(${JSON.stringify(marker)}, process.argv[2] ?? '');`,
+      ].join("\n"),
+    );
+
+    await runPrompt({
+      COMMONWEALTH_CAPTURE_WORKER: stubWorker,
+      COMMONWEALTH_PROMPT_CAPTURE_MS: "0",
+    });
+
+    await new Promise((r) => setTimeout(r, 500));
+    // Disabled → the worker must never have run.
+    await expect(fs.access(marker)).rejects.toThrow();
   });
 });
 
