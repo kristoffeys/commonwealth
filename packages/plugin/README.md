@@ -7,10 +7,11 @@ teammate needs and wires the auto-bridge (docs/03-distribution.md):
 work-state / people`), auto-started by declaring it in the manifest (no manual
   `claude mcp add`). `ask` returns citation-anchored context; the agent writes the cited answer
   (ADR-0020) — Commonwealth never embeds an LLM.
-- **Lifecycle hooks** — `SessionStart` pulls relevant team-brain context and injects it;
-  `SessionEnd` extracts learnings from the transcript and stages them into the review queue;
-  `PreCompact` runs the same extraction before a long session compacts, so knowledge that scrolls
-  out of the model's active context isn't lost if the session is later abandoned (#195).
+- **Lifecycle hooks** — `SessionStart` injects session-wide context (active work-state, recent
+  decisions); `UserPromptSubmit` injects the notes relevant to *this turn's* prompt and, throttled,
+  also captures long-session knowledge in the background (#194); `SessionEnd` extracts learnings
+  from the transcript and stages them; `PreCompact` runs the same extraction before a long session
+  compacts, so knowledge that scrolls out of context isn't lost if the session is abandoned (#195).
 - **Brain registry** — resolves the current project directory → its brain repo
   (`@cmnwlth/core`'s `resolveBrainDir`, issue #14).
 - **`/commonwealth` commands** — manual `remember`, `decide`, `recall`, `ask`, `promote`, `status`.
@@ -27,7 +28,8 @@ brain repo stays the source of truth.
 .claude-plugin/plugin.json   manifest (name, mcpServers, hooks)
 hooks/hooks.json             SessionStart + SessionEnd → node <script>.mjs
 hooks/lib.mjs                testable, dependency-injected hook core
-hooks/session-start.mjs      thin stdin→lib→stdout entry (prints context)
+hooks/session-start.mjs      thin stdin→lib→stdout entry (prints session-wide context)
+hooks/user-prompt-submit.mjs thin entry: per-turn prompt-scoped context + throttled capture (#194)
 hooks/session-end.mjs        thin stdin→lib entry (stages candidates)
 hooks/pre-compact.mjs        thin stdin→worker entry (captures before compaction, #195)
 commands/*.md                /commonwealth remember|decide|recall|promote|status

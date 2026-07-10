@@ -13,19 +13,38 @@
 //                                                            routed, `denied` out of scope, `none`
 //                                                            nothing here. Retires the old split of
 //                                                            resolveBrainDir + isInScope.)
-//   getContext(brain, cwd)             -> string           (markdown to inject; "" for none)
+//   getContext(brain, cwd)             -> string           (session-wide markdown; "" for none)
+//   getContextQuery(brain, cwd, query) -> string           (prompt-scoped markdown; "" for no match)
 //   extractCandidates(transcriptPath)  -> NewNoteInput[]   (learnings/decisions from a session)
 //   capture(brain, cwd, candidates)    -> { captured, ... }(stage candidates via the review queue)
+//   readCaptureMark(key)               -> number | null    (last prompt-capture ts for a session)
+//   writeCaptureMark(key, ts)          -> void             (record a prompt-capture ts; #194)
 
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Hard cap on the extraction `claude -p` child (#104). Extraction is an LLM call, so allow real
  * latency — but never let a hung/wedged child block SessionEnd forever; kill it past this.
  */
 const EXTRACTION_TIMEOUT_MS = 120_000;
+
+/**
+ * Hard cap on the per-turn `context --query` child (#194). UserPromptSubmit runs synchronously on
+ * the user's turn (Claude Code kills the whole hook at 30s), so a slow query must never hang it —
+ * bound it well under that and inject nothing on timeout.
+ */
+const CONTEXT_QUERY_TIMEOUT_MS = 10_000;
+
+/**
+ * Default throttle between prompt-triggered captures (#194): capture during a long session at most
+ * this often, so knowledge that scrolls out of context isn't lost if the session is abandoned
+ * before PreCompact/SessionEnd — without paying a full LLM extraction on EVERY turn. Tunable via
+ * `$COMMONWEALTH_PROMPT_CAPTURE_MS` (`0` disables prompt-capture entirely).
+ */
+const DEFAULT_PROMPT_CAPTURE_INTERVAL_MS = 15 * 60 * 1000;
 
 /**
  * Env var the extraction spawn sets so the NESTED `claude -p` it launches doesn't re-fire the
@@ -133,6 +152,70 @@ export async function sessionStart(input, deps) {
 
   const context = await deps.getContext(resolved.brain, resolved.cwd);
   return typeof context === "string" ? context : "";
+}
+
+/**
+ * UserPromptSubmit (#194): fires on EVERY turn with the user's prompt, so we can inject the notes
+ * relevant to what the developer is asking *right now* — the query-driven retrieval SessionStart
+ * can't do (it has no prompt yet). Resolves the brain in the same single ADR-0024 §3 pass as
+ * {@link sessionStart} (which IS the scope gate: `denied`/`none` → inject nothing), then runs the
+ * query path and returns markdown to inject via `additionalContext`. Returns "" when: there's no
+ * prompt, the cwd isn't in scope, or — the hard relevance gate — the query matched nothing (the
+ * query `context` command prints nothing without a real match). Complements SessionStart's
+ * session-wide context; does not replace it. Runs synchronously on the user's turn, so keep it
+ * fast (see {@link realDeps}'s prefer-vendored-binary fast path) and time-bounded.
+ *
+ * @param {{ cwd: string, prompt?: string, user_prompt?: string }} input  Parsed UserPromptSubmit stdin.
+ * @param {object} deps  See the contract at the top of this file.
+ * @returns {Promise<string>}  Prompt-scoped context markdown, or "".
+ */
+export async function userPromptSubmit(input, deps) {
+  const inputCwd = input?.cwd;
+  if (typeof inputCwd !== "string" || inputCwd.length === 0) return "";
+
+  // Claude Code names the field `prompt`; tolerate `user_prompt` too. No prompt → nothing to query.
+  const rawPrompt =
+    typeof input?.prompt === "string"
+      ? input.prompt
+      : typeof input?.user_prompt === "string"
+        ? input.user_prompt
+        : "";
+  const query = rawPrompt.trim();
+  if (query.length === 0) return "";
+
+  const resolved = await resolveSessionBrain(inputCwd, deps);
+  if (resolved.kind !== "brain") return "";
+
+  // The query path is the hard relevance gate: it renders context only when notes actually match,
+  // so an off-topic prompt injects nothing (no per-turn noise).
+  const context = await deps.getContextQuery(resolved.brain, resolved.cwd, query);
+  return typeof context === "string" ? context : "";
+}
+
+/**
+ * Parse the prompt-capture throttle interval from the environment (#194). Empty/unset → the default;
+ * a non-negative integer of milliseconds; `0` (or negative) disables prompt-triggered capture. Pure.
+ */
+export function promptCaptureIntervalMs(env = process.env) {
+  const raw = env.COMMONWEALTH_PROMPT_CAPTURE_MS;
+  if (raw === undefined || raw === "") return DEFAULT_PROMPT_CAPTURE_INTERVAL_MS;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) ? n : DEFAULT_PROMPT_CAPTURE_INTERVAL_MS;
+}
+
+/**
+ * Decide whether a prompt-triggered capture should fire now (#194) — the "if needed" throttle so we
+ * don't run a full LLM extraction on every turn. Fires when capture is enabled (`intervalMs > 0`)
+ * and either this session has never captured (`lastMark` null) or at least `intervalMs` has elapsed
+ * since it last did. Pure — the entry supplies `now`/`lastMark` and does the launch.
+ *
+ * @param {{ lastMark: number | null, now: number, intervalMs: number }} args
+ * @returns {boolean}
+ */
+export function shouldCaptureNow({ lastMark, now, intervalMs }) {
+  if (typeof intervalMs !== "number" || intervalMs <= 0) return false; // disabled
+  if (typeof lastMark !== "number") return true; // never captured this session
+  return now - lastMark >= intervalMs;
 }
 
 /**
@@ -301,6 +384,25 @@ export function buildSessionStartOutput(context) {
 }
 
 /**
+ * Build the UserPromptSubmit hook's stdout payload (#194). Returns `null` when there is no context
+ * to inject (empty/whitespace) so the hook writes nothing. Otherwise returns the JSON shape Claude
+ * Code expects for this event: `additionalContext` is injected into the model for THIS turn (fresh
+ * each turn). No `systemMessage` — per-turn retrieval is silent, not a user-facing receipt. Pure.
+ *
+ * @param {string} context  The prompt-scoped context from {@link userPromptSubmit}.
+ * @returns {{ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: string } } | null}
+ */
+export function buildUserPromptSubmitOutput(context) {
+  if (typeof context !== "string" || context.trim().length === 0) return null;
+  return {
+    hookSpecificOutput: {
+      hookEventName: "UserPromptSubmit",
+      additionalContext: context,
+    },
+  };
+}
+
+/**
  * Fold a deferred SessionEnd receipt (#96) into the SessionStart output. The receipt is
  * user-facing only, so it goes in `systemMessage` — never in `additionalContext` (it must not
  * pollute the model's injected context). Cases:
@@ -465,8 +567,8 @@ async function run(cmd, args, { input, cwd, env, timeoutMs } = {}) {
  * - `resolveBrain` mirrors `@cmnwlth/core`'s unified resolver (ADR-0024): one pass that is both
  *   routing AND scope — `brain` (in scope), `denied` (out of scope), or `none`. This retires the
  *   old split of `resolveBrainDir` + a separate `scope check` shell-out (one fewer npx per session).
- * - `getContext` / `capture` run the published `commonwealth-curate` (`context` / `capture`) via
- *   npx with `COMMONWEALTH_BRAIN_DIR` set — reusing curate.s relevance selection, dedupe, and gates.
+ * - `getContext` / `getContextQuery` / `capture` run `commonwealth-curate` with
+ *   `COMMONWEALTH_BRAIN_DIR` set — reusing curate's relevance selection, dedupe, and gates.
  * - `extractCandidates` shells out to `claude -p` with {@link EXTRACTION_PROMPT} and parses
  *   the JSON array it prints; if `claude` is unavailable or the output is not a JSON array,
  *   it returns `[]` gracefully (capture then reports `captured: 0`).
@@ -474,17 +576,39 @@ async function run(cmd, args, { input, cwd, env, timeoutMs } = {}) {
  * @param {object} [overrides]  Optional overrides (curateEntry/curatePackage/nodeBin/claudeBin) for tests.
  * @returns {object}            The `deps` object matching the contract at the top.
  */
+/**
+ * The plugin's vendored curate entry (`<pluginRoot>/vendor/curate/index.js`), or null when absent.
+ * When present it is the fast path for {@link realDeps} — a direct `node <entry>` with no `npx -y`
+ * registry resolution — which is what makes the per-turn UserPromptSubmit hook viable (#194).
+ */
+function resolveVendoredCurate() {
+  try {
+    const entry = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "vendor",
+      "curate",
+      "index.js",
+    );
+    return existsSync(entry) ? entry : null;
+  } catch {
+    return null;
+  }
+}
+
 export function realDeps(overrides = {}) {
   const nodeBin = overrides.nodeBin ?? process.execPath;
   const claudeBin = overrides.claudeBin ?? "claude";
   const extractionTimeoutMs = overrides.extractionTimeoutMs ?? EXTRACTION_TIMEOUT_MS;
 
-  // The curate runtime is the PUBLISHED `@cmnwlth/curate`, fetched on demand via `npx` (#62).
-  // Claude Code copies plugin files but does NOT `npm install`, so there's no committed `vendor/`
-  // to break a teammate's GitHub install, and `npx` pulls `better-sqlite3`'s per-platform
-  // prebuild transitively. Pinned to the plugin's version for lockstep. Tests/local dev pass
-  // `overrides.curateEntry` to run a locally-built copy with node instead of hitting the registry.
-  const curateEntry = overrides.curateEntry ?? null;
+  // Curate runtime, resolved ONCE (matters for the per-turn UserPromptSubmit hook, #194):
+  //   1. an explicit `overrides.curateEntry` (tests / local dev);
+  //   2. else the plugin's VENDORED `vendor/curate/index.js` when present — the fast path: a direct
+  //      `node <entry>`, no `npx -y` registry resolution on every turn;
+  //   3. else the PUBLISHED `@cmnwlth/curate` via `npx -y` (#62) — a bare git-clone install has no
+  //      vendor/, and npx pulls `better-sqlite3`'s prebuild transitively. Fine once-per-session,
+  //      slower per-turn.
+  const curateEntry = overrides.curateEntry ?? resolveVendoredCurate();
   const curatePackage = overrides.curatePackage ?? "@cmnwlth/curate@0.1.9";
   const runCurate = (args, runOpts) =>
     curateEntry
@@ -494,6 +618,21 @@ export function realDeps(overrides = {}) {
   async function getContext(brain, cwd) {
     const res = await runCurate(["context", "--cwd", cwd], {
       env: { COMMONWEALTH_BRAIN_DIR: brain },
+    });
+    if (res.code !== 0) return "";
+    return res.stdout.trimEnd();
+  }
+
+  /**
+   * Prompt-scoped context for UserPromptSubmit (#194): the query branch of curate's `context`
+   * (→ `selectRelevant({ query })` → FTS). Capped small for per-turn relevance/brevity and hard
+   * time-bounded so a slow query never hangs the turn. Empty stdout (no match) → "" → inject
+   * nothing (the relevance gate).
+   */
+  async function getContextQuery(brain, cwd, query) {
+    const res = await runCurate(["context", "--cwd", cwd, "--query", query, "--limit", "5"], {
+      env: { COMMONWEALTH_BRAIN_DIR: brain },
+      timeoutMs: CONTEXT_QUERY_TIMEOUT_MS,
     });
     if (res.code !== 0) return "";
     return res.stdout.trimEnd();
@@ -604,13 +743,49 @@ export function realDeps(overrides = {}) {
     return null;
   }
 
+  /**
+   * Per-session throttle marks for prompt-triggered capture (#194), stored next to the receipt
+   * file so all per-user state lives together. One tiny file per session key so concurrent
+   * sessions never contend. `key` (session id, else cwd) is sanitized to a safe filename.
+   */
+  function captureMarkPath(key) {
+    const safe = String(key || "default")
+      .replace(/[^A-Za-z0-9_.-]/g, "_")
+      .slice(0, 128);
+    return path.join(path.dirname(receiptPath()), `prompt-capture-${safe}.json`);
+  }
+
+  /** Read the last prompt-capture timestamp for `key`, or null when never captured. Never throws. */
+  async function readCaptureMark(key) {
+    try {
+      const parsed = JSON.parse(await fs.readFile(captureMarkPath(key), "utf8"));
+      return typeof parsed?.ts === "number" ? parsed.ts : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Record the prompt-capture timestamp for `key` (best-effort; a hook must never break). */
+  async function writeCaptureMark(key, ts) {
+    try {
+      const p = captureMarkPath(key);
+      await fs.mkdir(path.dirname(p), { recursive: true });
+      await fs.writeFile(p, JSON.stringify({ ts }), "utf8");
+    } catch {
+      // Non-fatal: at worst the next turn re-evaluates the throttle from scratch.
+    }
+  }
+
   return {
     resolveBrain: realResolveBrain,
     getContext,
+    getContextQuery,
     capture,
     extractCandidates,
     saveReceipt,
     takeReceipt,
+    readCaptureMark,
+    writeCaptureMark,
   };
 }
 

@@ -3,13 +3,17 @@ import { describe, expect, it, vi } from "vitest";
 import {
   attachReceipt,
   buildSessionStartOutput,
+  buildUserPromptSubmitOutput,
   compactTranscript,
   deriveReceipt,
   endReceiptMessage,
   launchCaptureWorker,
   parseCandidateArray,
+  promptCaptureIntervalMs,
   sessionEnd,
   sessionStart,
+  shouldCaptureNow,
+  userPromptSubmit,
 } from "../hooks/lib.mjs";
 
 /**
@@ -21,6 +25,9 @@ function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
     // ADR-0024 §3: one pass is both routing and scope — `brain` in scope, `denied` out of scope.
     resolveBrain: vi.fn(async () => ({ kind: "brain", brain: "/brains/acme" })),
     getContext: vi.fn(async () => "## Relevant from the team brain\n- **X** (memory) — hi"),
+    getContextQuery: vi.fn(
+      async () => "## Team brain — 2 relevant note(s)\n- **JWT** (memory) — 15m expiry",
+    ),
     extractCandidates: vi.fn(async () => [{ kind: "memory", title: "T", body: "B" }]),
     capture: vi.fn(async (_brain: string, _cwd: string, candidates: unknown[]) => ({
       captured: candidates.length,
@@ -81,6 +88,100 @@ describe("sessionStart", () => {
       if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
       else process.env.CLAUDE_PROJECT_DIR = prev;
     }
+  });
+});
+
+describe("userPromptSubmit (#194)", () => {
+  it("injects prompt-scoped context via the query path when in scope + matched", async () => {
+    const deps = makeDeps();
+    const out = await userPromptSubmit(
+      { cwd: "/work/acme/app", prompt: "how long is the JWT?" },
+      deps,
+    );
+    expect(out).toContain("JWT");
+    expect(deps.resolveBrain).toHaveBeenCalledWith("/work/acme/app");
+    // The QUERY path is used (not the no-query session-wide getContext).
+    expect(deps.getContextQuery).toHaveBeenCalledWith(
+      "/brains/acme",
+      "/work/acme/app",
+      "how long is the JWT?",
+    );
+    expect(deps.getContext).not.toHaveBeenCalled();
+  });
+
+  it("tolerates the `user_prompt` field name too", async () => {
+    const deps = makeDeps();
+    await userPromptSubmit({ cwd: "/work/acme/app", user_prompt: "cache ttl?" }, deps);
+    expect(deps.getContextQuery).toHaveBeenCalledWith(
+      "/brains/acme",
+      "/work/acme/app",
+      "cache ttl?",
+    );
+  });
+
+  it('returns "" and never queries when the prompt is empty/whitespace', async () => {
+    const deps = makeDeps();
+    expect(await userPromptSubmit({ cwd: "/work/acme/app", prompt: "   " }, deps)).toBe("");
+    expect(await userPromptSubmit({ cwd: "/work/acme/app" }, deps)).toBe("");
+    expect(deps.getContextQuery).not.toHaveBeenCalled();
+  });
+
+  it('returns "" when denied/none (the scope gate) or on no match (relevance gate)', async () => {
+    const denied = makeDeps({ resolveBrain: vi.fn(async () => ({ kind: "denied" })) });
+    expect(await userPromptSubmit({ cwd: "/personal", prompt: "q" }, denied)).toBe("");
+    expect(denied.getContextQuery).not.toHaveBeenCalled();
+
+    const none = makeDeps({ resolveBrain: vi.fn(async () => ({ kind: "none" })) });
+    expect(await userPromptSubmit({ cwd: "/loose", prompt: "q" }, none)).toBe("");
+
+    // Hard relevance gate: the query path returns "" (no match) → inject nothing.
+    const noMatch = makeDeps({ getContextQuery: vi.fn(async () => "") });
+    expect(await userPromptSubmit({ cwd: "/work/acme/app", prompt: "q" }, noMatch)).toBe("");
+  });
+
+  it('returns "" for a missing cwd without touching any dep', async () => {
+    const deps = makeDeps();
+    expect(await userPromptSubmit({ prompt: "q" }, deps)).toBe("");
+    expect(deps.resolveBrain).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildUserPromptSubmitOutput (#194)", () => {
+  it("wraps context as UserPromptSubmit additionalContext (no systemMessage)", () => {
+    const out = buildUserPromptSubmitOutput("## Team brain — 1 relevant note(s)\n- x");
+    expect(out?.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
+    expect(out?.hookSpecificOutput.additionalContext).toContain("relevant note");
+    expect((out as Record<string, unknown>).systemMessage).toBeUndefined();
+  });
+
+  it("returns null for empty/whitespace context (inject nothing)", () => {
+    expect(buildUserPromptSubmitOutput("")).toBe(null);
+    expect(buildUserPromptSubmitOutput("   \n ")).toBe(null);
+  });
+});
+
+describe("prompt-capture throttle (#194)", () => {
+  it("fires on first capture and after the interval elapses; not before", () => {
+    // Never captured → fire.
+    expect(shouldCaptureNow({ lastMark: null, now: 1_000_000, intervalMs: 900_000 })).toBe(true);
+    // Within the interval → skip.
+    expect(shouldCaptureNow({ lastMark: 1_000_000, now: 1_400_000, intervalMs: 900_000 })).toBe(
+      false,
+    );
+    // Interval elapsed → fire.
+    expect(shouldCaptureNow({ lastMark: 1_000_000, now: 1_900_000, intervalMs: 900_000 })).toBe(
+      true,
+    );
+    // Disabled (intervalMs <= 0) → never, even with no prior mark.
+    expect(shouldCaptureNow({ lastMark: null, now: 1_000_000, intervalMs: 0 })).toBe(false);
+  });
+
+  it("parses the interval env: default when unset, explicit value, 0 to disable", () => {
+    expect(promptCaptureIntervalMs({})).toBeGreaterThan(0); // default (15m)
+    expect(promptCaptureIntervalMs({ COMMONWEALTH_PROMPT_CAPTURE_MS: "60000" })).toBe(60_000);
+    expect(promptCaptureIntervalMs({ COMMONWEALTH_PROMPT_CAPTURE_MS: "0" })).toBe(0);
+    // Garbage → fall back to the default rather than NaN.
+    expect(promptCaptureIntervalMs({ COMMONWEALTH_PROMPT_CAPTURE_MS: "nope" })).toBeGreaterThan(0);
   });
 });
 

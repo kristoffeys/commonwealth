@@ -110,13 +110,14 @@ describe("agents/curator.md (subagent — #198)", () => {
 });
 
 describe("hooks/hooks.json", () => {
-  it("references the SessionStart, SessionEnd, and PreCompact hook scripts", () => {
+  it("references the SessionStart, SessionEnd, PreCompact, and UserPromptSubmit hook scripts", () => {
     const hooks = readJson("hooks/hooks.json") as {
       hooks: Record<string, Array<{ hooks: Array<{ type: string; command: string }> }>>;
     };
     const start = hooks.hooks.SessionStart?.[0]?.hooks?.[0];
     const end = hooks.hooks.SessionEnd?.[0]?.hooks?.[0];
     const preCompact = hooks.hooks.PreCompact?.[0]?.hooks?.[0];
+    const prompt = hooks.hooks.UserPromptSubmit?.[0]?.hooks?.[0];
 
     expect(start?.type).toBe("command");
     expect(start?.command).toContain("hooks/session-start.mjs");
@@ -130,7 +131,12 @@ describe("hooks/hooks.json", () => {
     expect(preCompact?.type).toBe("command");
     expect(preCompact?.command).toContain("hooks/pre-compact.mjs");
     expect(preCompact?.command).toContain("${CLAUDE_PLUGIN_ROOT}");
-    // The pre-compact entry script must exist on disk.
     expect(existsSync(path.join(pluginRoot, "hooks", "pre-compact.mjs"))).toBe(true);
+
+    // Per-prompt context injection + throttled capture (#194).
+    expect(prompt?.type).toBe("command");
+    expect(prompt?.command).toContain("hooks/user-prompt-submit.mjs");
+    expect(prompt?.command).toContain("${CLAUDE_PLUGIN_ROOT}");
+    expect(existsSync(path.join(pluginRoot, "hooks", "user-prompt-submit.mjs"))).toBe(true);
   });
 });
