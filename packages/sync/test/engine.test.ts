@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { listNotes, search, writeNote } from "@cmnwlth/core";
+import { addSharedRule, listNotes, loadRegistryFile, search, writeNote } from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SyncEngine } from "../src/engine";
 import { git, makeFixture, type Fixture } from "./helpers";
@@ -150,6 +150,42 @@ describe("SyncEngine.syncOnce convergence", () => {
     const bodies = (await listNotes(fx.bob, "memory")).map((n) => n.body).join("\n");
     expect(bodies).toContain("ALICE");
     expect(bodies).toContain("BOB");
+  });
+});
+
+describe("SyncEngine — shared-rule propagation (ADR-0024 §5)", () => {
+  // The import writes to the per-user config at $COMMONWEALTH_CONFIG; redirect it at a temp file so
+  // the test never touches the real ~/.commonwealth/config.json.
+  let userConfig: string;
+  let prevConfig: string | undefined;
+
+  beforeEach(() => {
+    prevConfig = process.env.COMMONWEALTH_CONFIG;
+    userConfig = path.join(fx.remote, "..", "user-config.json"); // sibling of the fixture root
+    process.env.COMMONWEALTH_CONFIG = userConfig;
+  });
+  afterEach(async () => {
+    if (prevConfig === undefined) delete process.env.COMMONWEALTH_CONFIG;
+    else process.env.COMMONWEALTH_CONFIG = prevConfig;
+    await fs.rm(userConfig, { force: true });
+  });
+
+  it("materializes a brain's shared rules into the per-user config on sync", async () => {
+    await addSharedRule(fx.alice, { org: "weareantenna/*" });
+    await new SyncEngine(fx.alice).syncOnce();
+
+    const reg = await loadRegistryFile({ registryPath: userConfig });
+    expect(reg?.rules).toContainEqual({
+      org: "weareantenna/*",
+      brain: fx.alice,
+      origin: "shared",
+      sharedFrom: fx.alice,
+    });
+  });
+
+  it("does not create the per-user config when the brain shares nothing (no-op fast path)", async () => {
+    await new SyncEngine(fx.alice).syncOnce();
+    await expect(fs.access(userConfig)).rejects.toThrow(); // never written
   });
 });
 

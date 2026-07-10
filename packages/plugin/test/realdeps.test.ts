@@ -175,6 +175,21 @@ describe("realResolveBrain — three-way scope result + folded allow/deny (ADR-0
     expect(await realResolveBrain(loose)).toEqual({ kind: "none" });
     expect(await realResolveBrain(work)).toEqual({ kind: "brain", brain });
   });
+
+  it("local overrides shared in the hook mirror (same matcher → the local rule wins)", async () => {
+    const work = path.join(tmp, "work3");
+    const mine = path.join(tmp, "mine");
+    const team = path.join(tmp, "team");
+    await fs.mkdir(work, { recursive: true });
+    // A shared rule routes `work` → team; my LOCAL rule for the same prefix routes it → mine.
+    await writeRegistry({
+      rules: [
+        { prefix: work, brain: team, origin: "shared", sharedFrom: team },
+        { prefix: work, brain: mine },
+      ],
+    });
+    expect(await realResolveBrain(work)).toEqual({ kind: "brain", brain: mine });
+  });
 });
 
 describe("realDeps() receipt IO (#96) — saveReceipt / takeReceipt round-trip", () => {

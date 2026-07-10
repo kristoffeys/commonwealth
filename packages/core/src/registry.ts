@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { brainConfigPath, loadBrainConfig, parseSharedRule, saveBrainConfig } from "./config.js";
 import { repoIdentity, resolveProjectSource } from "./source.js";
 
 /**
@@ -62,11 +63,18 @@ export interface Rule {
   /** Git remote for {@link brain}'s clone-on-demand (ADR-0019). */
   remote?: string;
   /**
-   * `"local"` (this machine only, never synced — the default) vs `"shared"` (may live with the
-   * brain and propagate to teammates). Personal denies stay `local`. Reserved for the shared-vs-local
-   * work (ADR-0024 §5); parsed and preserved but not yet acted on.
+   * `"local"` (this machine only, never synced) vs `"shared"` (mirrors a rule that lives in a
+   * brain's committed config and syncs to teammates; ADR-0024 §5). **Absent means local** — the
+   * default, so existing configs need no migration. A `local` rule overrides a `shared` rule with
+   * the same matcher (see {@link importSharedRules} and the resolve-time shadow drop).
    */
   origin?: "local" | "shared";
+  /**
+   * For an imported `origin: "shared"` rule only: the absolute brain directory it was materialized
+   * from (ADR-0024 §5), so {@link importSharedRules} can prune it when the brain stops sharing that
+   * matcher. Per-machine; never written into a brain's committed `sharedRules`.
+   */
+  sharedFrom?: string;
 }
 
 /**
@@ -228,6 +236,8 @@ function parseRule(raw: unknown): Rule | null {
   const remote = str(r.remote);
   if (remote) rule.remote = remote;
   if (r.origin === "local" || r.origin === "shared") rule.origin = r.origin;
+  const sharedFrom = str(r.sharedFrom);
+  if (sharedFrom) rule.sharedFrom = sharedFrom;
   return rule;
 }
 
@@ -352,6 +362,28 @@ function scopeSugarRules(registry: Registry): Rule[] {
   for (const d of registry.deny ?? []) out.push({ prefix: d, deny: true });
   for (const a of registry.allow ?? []) out.push({ prefix: a });
   return out;
+}
+
+/**
+ * Enforce "local overrides shared" (ADR-0024 §5): drop any `origin: "shared"` rule whose matcher is
+ * also carried by a local rule (origin absent/`"local"`, including the legacy allow/deny sugar). The
+ * per-user config normally already holds this invariant ({@link importSharedRules} never imports a
+ * shadowed shared rule), so this is the defensive resolve-time guard for a hand-edited file. Pure.
+ */
+function dropShadowedShared(rules: Rule[]): Rule[] {
+  const localKeys = new Set<string>();
+  for (const r of rules) {
+    if (r.origin !== "shared") {
+      const k = ruleMatcherKey(r);
+      if (k) localKeys.add(k);
+    }
+  }
+  if (localKeys.size === 0) return rules;
+  return rules.filter((r) => {
+    if (r.origin !== "shared") return true;
+    const k = ruleMatcherKey(r);
+    return !(k !== null && localKeys.has(k));
+  });
 }
 
 /** Specificity tiers for rule matching (higher wins). Ties break by length, then deny-wins. */
@@ -500,7 +532,9 @@ export async function resolveBrain(
   // 3) The unified ruleset, plus the legacy scope allow/deny folded in as sugar (ADR-0024 §3/§7):
   //    this single pass IS the scope gate now that `isInScope` is retired.
   const registry = await loadRegistry(registryPath);
-  const rules = registry ? [...(registry.rules ?? []), ...scopeSugarRules(registry)] : [];
+  const rules = registry
+    ? dropShadowedShared([...(registry.rules ?? []), ...scopeSugarRules(registry)])
+    : [];
   if (rules.length > 0) {
     // Resolve git identity once, only if an identity rule could use it (path-only stays cheap).
     const needsSlug = rules.some((r) => (r.repo && r.repo !== "*") || (r.org && r.org !== "*"));
@@ -686,6 +720,7 @@ function normalizeRuleForStore(rule: Rule): Rule {
   if (rule.deny) out.deny = true;
   if (rule.remote) out.remote = rule.remote;
   if (rule.origin) out.origin = rule.origin;
+  if (rule.sharedFrom) out.sharedFrom = expand(rule.sharedFrom);
   return out;
 }
 
@@ -740,6 +775,156 @@ export async function removeRule(
     removed = before - registry.rules.length;
   });
   return { removed };
+}
+
+/** The matcher-only fields of a rule (`repo`/`org`/`prefix`), dropping every outcome/provenance. */
+function matcherFields(rule: Rule): Rule {
+  const out: Rule = {};
+  if (rule.repo) out.repo = rule.repo;
+  if (rule.org) out.org = rule.org;
+  if (rule.prefix) out.prefix = rule.prefix;
+  return out;
+}
+
+/**
+ * Add or update a **shared** rule (ADR-0024 §5) in a brain's committed config `sharedRules` — the
+ * shareable, team-synced source of truth. Only the matcher (+ optional `deny`) is stored; the brain
+ * path is implicit ("route into THIS brain") and `origin`/`remote` are per-machine, so they are
+ * stripped. Dedupe is by {@link ruleMatcherKey} (update-in-place). Materialize it into resolution
+ * with {@link importSharedRules}. Throws if the rule has no matcher.
+ */
+export async function addSharedRule(
+  brainDir: string,
+  rule: Rule,
+): Promise<{ added: boolean; updated: boolean }> {
+  const shared = parseSharedRule(rule);
+  if (!shared) throw new Error("a shared rule needs a matcher: one of repo, org, or prefix");
+  const key = ruleMatcherKey(shared);
+  const config = await loadBrainConfig(brainDir);
+  const idx = config.sharedRules.findIndex((r) => ruleMatcherKey(r) === key);
+  let added = false;
+  let updated = false;
+  if (idx === -1) {
+    config.sharedRules.push(shared);
+    added = true;
+  } else if (JSON.stringify(config.sharedRules[idx]) !== JSON.stringify(shared)) {
+    config.sharedRules[idx] = shared;
+    updated = true;
+  }
+  if (added || updated) await saveBrainConfig(brainDir, config);
+  return { added, updated };
+}
+
+/**
+ * Remove every **shared** rule whose matcher equals `matcher`'s from a brain's committed
+ * `sharedRules` (ADR-0024 §5). Returns the count removed. The per-user materialization is pruned
+ * on the next {@link importSharedRules}.
+ */
+export async function removeSharedRule(
+  brainDir: string,
+  matcher: Rule,
+): Promise<{ removed: number }> {
+  const key = ruleMatcherKey(matcher);
+  if (!key) throw new Error("a matcher is required: one of repo, org, or prefix");
+  const config = await loadBrainConfig(brainDir);
+  const before = config.sharedRules.length;
+  config.sharedRules = config.sharedRules.filter((r) => ruleMatcherKey(r) !== key);
+  const removed = before - config.sharedRules.length;
+  if (removed > 0) await saveBrainConfig(brainDir, config);
+  return { removed };
+}
+
+/**
+ * Materialize a brain's **shared** rules (ADR-0024 §5) into the per-user config as `origin: "shared"`
+ * rules — the propagation step teammates run on sync so a team's shared routing/denies take effect
+ * locally. A shared route rule becomes `{ matcher, brain: <this brain>, origin, sharedFrom }`; a
+ * shared deny becomes `{ matcher, deny, origin, sharedFrom }`. Rules already imported **from this
+ * brain** are replaced wholesale, so un-sharing a matcher upstream prunes it here. **Local overrides
+ * shared**: a shared rule whose matcher already has a `local` (non-shared) per-user rule is skipped.
+ * Atomic + refuse-to-clobber-corrupt via {@link persistRegistry}. Never throws on a missing brain
+ * config (its `sharedRules` is simply empty).
+ */
+export async function importSharedRules(
+  brainDir: string,
+  opts: { registryPath?: string } = {},
+): Promise<{ imported: number; pruned: number }> {
+  const registryPath = opts.registryPath ?? defaultRegistryPath();
+  const dir = expand(brainDir);
+  // A missing brain config is NOT "no shared rules": the brain may just be uncloned/unmounted, and
+  // treating it as empty would wrongly prune this brain's already-imported shared rules. Skip.
+  if (!(await isFile(brainConfigPath(dir)))) return { imported: 0, pruned: 0 };
+  const desired = (await loadBrainConfig(dir)).sharedRules;
+  // No-write fast path: a brain with no shared rules and nothing previously imported from it is a
+  // true no-op — never open `persistRegistry` (which always rewrites the per-user config). This is
+  // the overwhelmingly common case, and it keeps the sync-time hook from touching config needlessly.
+  if (desired.length === 0) {
+    const reg = await loadRegistry(registryPath);
+    const hasPrior = (reg?.rules ?? []).some(
+      (r) => r.origin === "shared" && r.sharedFrom !== undefined && expand(r.sharedFrom) === dir,
+    );
+    if (!hasPrior) return { imported: 0, pruned: 0 };
+  }
+  let imported = 0;
+  let pruned = 0;
+  await persistRegistry(registryPath, (registry) => {
+    const rules = registry.rules ?? [];
+    // Keys owned by a LOCAL rule shadow any shared rule with the same matcher (local overrides shared).
+    const localKeys = new Set(
+      rules
+        .filter((r) => r.origin !== "shared")
+        .map(ruleMatcherKey)
+        .filter((k): k is string => k !== null),
+    );
+    // Everything previously imported FROM this brain is dropped, then the current desired set is
+    // re-added — so a stale (un-shared) matcher does not linger.
+    const priorKeys = new Set(
+      rules
+        .filter(
+          (r) =>
+            r.origin === "shared" && r.sharedFrom !== undefined && expand(r.sharedFrom) === dir,
+        )
+        .map(ruleMatcherKey)
+        .filter((k): k is string => k !== null),
+    );
+    const kept = rules.filter(
+      (r) => !(r.origin === "shared" && r.sharedFrom !== undefined && expand(r.sharedFrom) === dir),
+    );
+    const finalKeys = new Set<string>();
+    for (const sr of desired) {
+      const key = ruleMatcherKey(sr);
+      if (key === null || localKeys.has(key)) continue; // shadowed by a local rule → skip
+      const materialized: Rule = sr.deny
+        ? { ...matcherFields(sr), deny: true, origin: "shared", sharedFrom: dir }
+        : { ...matcherFields(sr), brain: dir, origin: "shared", sharedFrom: dir };
+      kept.push(materialized);
+      finalKeys.add(key);
+      if (!priorKeys.has(key)) imported += 1;
+    }
+    for (const key of priorKeys) if (!finalKeys.has(key)) pruned += 1;
+    registry.rules = kept;
+  });
+  return { imported, pruned };
+}
+
+/**
+ * Materialize the shared rules of **every wired brain** (ADR-0024 §5) into the per-user config. The
+ * "pull everything" convenience over {@link importSharedRules}, run by `commonwealth registry pull`
+ * and after a full sync. Returns per-brain counts. Never throws on a missing/corrupt registry.
+ */
+export async function importAllSharedRules(
+  opts: { registryPath?: string } = {},
+): Promise<{ imported: number; pruned: number }> {
+  const dirs = await listWiredBrainDirs({
+    ...(opts.registryPath ? { registryPath: opts.registryPath } : {}),
+  });
+  let imported = 0;
+  let pruned = 0;
+  for (const dir of dirs) {
+    const res = await importSharedRules(dir, opts);
+    imported += res.imported;
+    pruned += res.pruned;
+  }
+  return { imported, pruned };
 }
 
 /**

@@ -761,6 +761,36 @@ function ruleIsCatchAll(rule) {
   return rule.repo === "*" || rule.org === "*" || rule.prefix === "*";
 }
 
+/** A rule's matcher key (mirror of core's ruleMatcherKey), for the local-over-shared shadow drop. */
+function ruleMatcherKeyJs(rule) {
+  if (ruleIsCatchAll(rule)) return "*";
+  if (rule.repo) return `repo:${rule.repo.toLowerCase()}`;
+  if (rule.org) return `org:${rule.org.replace(/\/\*$/, "").toLowerCase()}`;
+  if (rule.prefix) return `prefix:${expandPath(rule.prefix)}`;
+  return null;
+}
+
+/**
+ * Enforce "local overrides shared" (ADR-0024 §5): drop any `origin: "shared"` rule whose matcher is
+ * also carried by a local rule (origin absent/"local", incl. the folded allow/deny sugar). Mirror of
+ * core's dropShadowedShared; defensive (the per-user config normally already holds this invariant).
+ */
+function dropShadowedSharedJs(rules) {
+  const localKeys = new Set();
+  for (const r of rules) {
+    if (r.origin !== "shared") {
+      const k = ruleMatcherKeyJs(r);
+      if (k) localKeys.add(k);
+    }
+  }
+  if (localKeys.size === 0) return rules;
+  return rules.filter((r) => {
+    if (r.origin !== "shared") return true;
+    const k = ruleMatcherKeyJs(r);
+    return !(k !== null && localKeys.has(k));
+  });
+}
+
 /** Highest-tier matcher of `rule` that matches `(start, slug)`, or null. Mirror of core scoreRule. */
 function scoreRule(rule, start, slug) {
   if (ruleIsCatchAll(rule)) return { tier: TIER_STAR, len: 0 };
@@ -847,7 +877,7 @@ export async function realResolveBrain(startDir) {
 
   const reg = await loadRegistryData(resolveRegistryPath());
   if (reg) {
-    const rules = reg.rules;
+    const rules = dropShadowedSharedJs(reg.rules);
     if (rules.length > 0) {
       // Resolve git identity once, and only when an identity rule could use it (path-only is cheap).
       const needsSlug = rules.some((r) => (r.repo && r.repo !== "*") || (r.org && r.org !== "*"));

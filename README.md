@@ -93,7 +93,7 @@ rest — every command resolves the right brain from the current directory autom
 
 ```bash
 commonwealth add <folder> [--brain <dir>] # wire another folder to the brain, in one go
-commonwealth registry <show|route|allow|deny|remove|default>  # brain-resolution rules (see below)
+commonwealth registry <show|route|allow|deny|remove|default|pull>  # brain-resolution rules (see below)
 commonwealth status                       # review queue + sync-daemon state
 commonwealth recall <query>               # search the brain
 commonwealth ask <question>               # a cited answer, synthesized from the brain
@@ -165,6 +165,16 @@ commonwealth registry route  'path:~/scratch' ~/brains/scratch   # a path (non-r
 commonwealth registry show                           # list rules and the default brain
 commonwealth registry remove repo:weareantenna/erp   # drop a rule
 ```
+
+**Share rules with your team** ([ADR-0024 §5](docs/adr/0024-rule-based-brain-resolution.md)). Add `--shared` and the rule lives in the brain's committed config instead of your machine-local one, so it syncs to every teammate — the `repo → brain` _intent_ is portable even though each person's brain _path_ differs:
+
+```bash
+commonwealth registry route repo:weareantenna/erp ~/brains/erp --shared  # the team routes erp here
+commonwealth registry deny  repo:weareantenna/secrets --shared           # a team-wide deny
+commonwealth registry pull                                               # materialize teammates' shared rules
+```
+
+Shared rules are materialized into your local config automatically on `sync`; `pull` does it on demand. Your **local** rules always override a shared rule for the same matcher, so a personal deny or reroute is never clobbered by the team's — and personal (`local`, the default) rules never sync.
 
 A **matcher** is one of:
 
