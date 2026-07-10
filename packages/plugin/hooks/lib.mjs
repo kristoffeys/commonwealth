@@ -609,7 +609,7 @@ export function realDeps(overrides = {}) {
   //      vendor/, and npx pulls `better-sqlite3`'s prebuild transitively. Fine once-per-session,
   //      slower per-turn.
   const curateEntry = overrides.curateEntry ?? resolveVendoredCurate();
-  const curatePackage = overrides.curatePackage ?? "@cmnwlth/curate@0.1.9";
+  const curatePackage = overrides.curatePackage ?? "@cmnwlth/curate@0.1.10";
   const runCurate = (args, runOpts) =>
     curateEntry
       ? run(nodeBin, [curateEntry, ...args], runOpts)
