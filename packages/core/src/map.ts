@@ -51,7 +51,10 @@ export function brainMap(notes: Note[]): BrainMap {
     authorCounts.set(who, (authorCounts.get(who) ?? 0) + 1);
   }
 
-  const byKind: KindCount[] = NOTE_KINDS.map((kind) => ({ kind, count: kindCounts.get(kind) ?? 0 }));
+  const byKind: KindCount[] = NOTE_KINDS.map((kind) => ({
+    kind,
+    count: kindCounts.get(kind) ?? 0,
+  }));
   const contributors: Contributor[] = [...authorCounts.entries()]
     .map(([author, count]) => ({ author, count }))
     .sort((a, b) => (b.count !== a.count ? b.count - a.count : a.author < b.author ? -1 : 1));
