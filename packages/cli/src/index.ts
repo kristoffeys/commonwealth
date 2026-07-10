@@ -21,6 +21,13 @@ import { defaultDemoEnv, runDemo } from "./demo.js";
 import { defaultDoctorEnv, diagnose, formatDoctorText } from "./doctor.js";
 import { defaultEmitEnv, formatEmitResult, runEmit } from "./emit.js";
 import { defaultVerifyRestoreEnv, formatVerifyRestore, runVerifyRestore } from "./verify.js";
+import {
+  defaultClaudeSettingsPath,
+  defaultStatuslineEnv,
+  installStatusLine,
+  runStatusline,
+  uninstallStatusLine,
+} from "./statusline.js";
 import { defaultBrainDir } from "./init.js";
 import { runOnboard, runWizard, type OnboardOptions, type WizardDefaults } from "./onboard.js";
 import { createReadlinePrompter, isInteractive, type Prompter } from "./prompt.js";
@@ -116,6 +123,7 @@ function printUsage(): void {
       "  commonwealth emit      [--commit]              write brain context for Cursor/Copilot/Codex into this repo",
       "  commonwealth health                            freshness/trust rollup for the brain",
       "  commonwealth map                               brain-at-a-glance: per-kind counts + contributors",
+      "  commonwealth statusline  [install|uninstall]   Claude Code status line (brain · freshness · pending)",
       "  commonwealth consolidate  [--dry-run]          supersede near-duplicate canon notes",
       "  commonwealth graduate  [--suggest] [--dry-run]  promote knowledge recurring across ≥2 brains to the org-brain",
       "  commonwealth sync      <start | stop | once>   control/run the sync daemon",
@@ -227,6 +235,8 @@ export async function run(argv: string[]): Promise<number> {
       return delegateCurate(["health"]);
     case "map":
       return delegateCurate(["map"]);
+    case "statusline":
+      return cmdStatusline(rest);
     case "consolidate":
       return delegateCurate(["consolidate", ...rest]);
     case "graduate":
@@ -336,6 +346,64 @@ async function cmdEmit(rest: string[]): Promise<number> {
     return 1;
   }
   process.stderr.write(formatEmitResult(result));
+  return 0;
+}
+
+/** Read all of stdin as UTF-8, or "" if there is none (statusline is invoked with a JSON blob). */
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) return "";
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * `commonwealth statusline [install|uninstall]` (#197). With no subcommand it is the Claude Code
+ * `statusLine` command: read the stdin JSON, resolve the brain for its cwd, and print the one-line
+ * status (empty when no brain). `install`/`uninstall` wire the entry into `~/.claude/settings.json`
+ * (a plugin can't register a statusLine itself). Rendering NEVER throws — a broken statusline must
+ * not spam the session — so all errors degrade to empty output.
+ */
+async function cmdStatusline(rest: string[]): Promise<number> {
+  const sub = rest[0];
+  if (sub === "install" || sub === "uninstall") {
+    const settingsPath = defaultClaudeSettingsPath();
+    try {
+      const result =
+        sub === "install"
+          ? await installStatusLine(settingsPath)
+          : await uninstallStatusLine(settingsPath);
+      const messages: Record<string, string> = {
+        installed: `Added the Commonwealth status line to ${settingsPath}. Restart Claude Code to see it.`,
+        already: `The Commonwealth status line is already configured in ${settingsPath}.`,
+        conflict: `${settingsPath} already defines a different statusLine — leaving it untouched. To use Commonwealth's, set "statusLine.command" to "commonwealth statusline".`,
+        removed: `Removed the Commonwealth status line from ${settingsPath}.`,
+        absent: `No statusLine was configured in ${settingsPath}.`,
+      };
+      process.stderr.write(`${messages[result]}\n`);
+      return result === "conflict" ? 1 : 0;
+    } catch (err) {
+      process.stderr.write(`${(err as Error).message}\n`);
+      return 1;
+    }
+  }
+
+  // Render path: parse the statusline stdin JSON for the cwd, then emit the one-liner. Any failure
+  // (bad JSON, resolver error) degrades to empty output rather than a visible error.
+  try {
+    let cwd = process.cwd();
+    const raw = await readStdin();
+    if (raw.trim().length > 0) {
+      const input = JSON.parse(raw);
+      cwd = input?.cwd || input?.workspace?.current_dir || cwd;
+    }
+    const line = await runStatusline(defaultStatuslineEnv(cwd));
+    if (line.length > 0) process.stdout.write(`${line}\n`);
+  } catch {
+    // Emit nothing — a statusline must never surface an error into the session chrome.
+  }
   return 0;
 }
 

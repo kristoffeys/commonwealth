@@ -17,6 +17,7 @@
 //   getContextQuery(brain, cwd, query) -> string           (prompt-scoped markdown; "" for no match)
 //   extractCandidates(transcriptPath)  -> NewNoteInput[]   (learnings/decisions from a session)
 //   capture(brain, cwd, candidates)    -> { captured, ... }(stage candidates via the review queue)
+//   refreshStatus(brain, cwd)          -> void             (refresh the statusline cache; #197)
 //   readCaptureMark(key)               -> number | null    (last prompt-capture ts for a session)
 //   writeCaptureMark(key, ts)          -> void             (record a prompt-capture ts; #194)
 
@@ -254,10 +255,16 @@ export async function sessionEnd(input, deps) {
   const { cwd, brain } = resolved;
 
   const candidates = await deps.extractCandidates(input.transcript_path);
-  if (!Array.isArray(candidates) || candidates.length === 0)
-    return await finishEnd(deps, cwd, { captured: 0 });
+  const result =
+    Array.isArray(candidates) && candidates.length > 0
+      ? await deps.capture(brain, cwd, candidates)
+      : { captured: 0 };
 
-  const result = await deps.capture(brain, cwd, candidates);
+  // Refresh the ambient status cache AFTER capture so the statusline reflects this session's notes
+  // (#197). We're in the detached worker here, off the per-turn statusline hot path, so the index
+  // work is free to run. Best-effort — the dep swallows its own errors; a hook must never break.
+  if (typeof deps.refreshStatus === "function") await deps.refreshStatus(brain, cwd);
+
   return await finishEnd(deps, cwd, result);
 }
 
@@ -706,6 +713,20 @@ export function realDeps(overrides = {}) {
     return { captured: notes.length, notes };
   }
 
+  /**
+   * Refresh the ambient status cache for `brain` (#197) by shelling to curate's `status-cache`
+   * (with the brain in `$COMMONWEALTH_BRAIN_DIR`, mirroring `capture`). Best-effort: any failure
+   * is swallowed so a broken cache can never break SessionEnd. `cwd` is unused today but kept in
+   * the signature so a future per-project status can resolve from it.
+   */
+  async function refreshStatus(brain, _cwd) {
+    try {
+      await runCurate(["status-cache"], { env: { COMMONWEALTH_BRAIN_DIR: brain } });
+    } catch {
+      // Non-fatal: a stale/absent status cache only costs a staler status line.
+    }
+  }
+
   async function extractCandidates(transcriptPath) {
     if (typeof transcriptPath !== "string" || transcriptPath.length === 0) return [];
     const { promises: fs } = await import("node:fs");
@@ -837,6 +858,7 @@ export function realDeps(overrides = {}) {
     getContext,
     getContextQuery,
     capture,
+    refreshStatus,
     extractCandidates,
     saveReceipt,
     takeReceipt,
