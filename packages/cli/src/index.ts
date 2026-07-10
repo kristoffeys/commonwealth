@@ -115,6 +115,7 @@ function printUsage(): void {
       "  commonwealth verify-restore [--from-remote] [--json]   clone + prove full disaster recovery (CI gate)",
       "  commonwealth emit      [--commit]              write brain context for Cursor/Copilot/Codex into this repo",
       "  commonwealth health                            freshness/trust rollup for the brain",
+      "  commonwealth map                               brain-at-a-glance: per-kind counts + contributors",
       "  commonwealth consolidate  [--dry-run]          supersede near-duplicate canon notes",
       "  commonwealth graduate  [--suggest] [--dry-run]  promote knowledge recurring across ≥2 brains to the org-brain",
       "  commonwealth sync      <start | stop | once>   control/run the sync daemon",
@@ -224,6 +225,8 @@ export async function run(argv: string[]): Promise<number> {
     }
     case "health":
       return delegateCurate(["health"]);
+    case "map":
+      return delegateCurate(["map"]);
     case "consolidate":
       return delegateCurate(["consolidate", ...rest]);
     case "graduate":
