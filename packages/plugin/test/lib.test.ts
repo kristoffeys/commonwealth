@@ -36,6 +36,7 @@ function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
       // (autoPromote on by default → promoted straight to canon).
       notes: candidates.map((c) => ({ kind: "memory", title: c.title ?? "T", promoted: true })),
     })),
+    refreshStatus: vi.fn(async () => {}),
     saveReceipt: vi.fn(async () => {}),
     takeReceipt: vi.fn(async () => null),
     ...overrides,
@@ -203,6 +204,16 @@ describe("sessionEnd", () => {
       captured: 1,
       notes: [{ kind: "memory", title: "T", promoted: true }],
     });
+    // The ambient statusline cache is refreshed after capture (#197).
+    expect(deps.refreshStatus).toHaveBeenCalledWith("/brains/acme", "/work/acme/app");
+  });
+
+  it("refreshes the status cache even when nothing was captured (#197)", async () => {
+    const deps = makeDeps({ extractCandidates: vi.fn(async () => []) });
+    await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" }, deps);
+    expect(deps.capture).not.toHaveBeenCalled();
+    // Brain resolved → status still refreshed (pending count / freshness may have changed).
+    expect(deps.refreshStatus).toHaveBeenCalledWith("/brains/acme", "/work/acme/app");
   });
 
   it("skips (no brain — none) and NEVER extracts or captures, but leaves a receipt (#96)", async () => {
@@ -211,6 +222,8 @@ describe("sessionEnd", () => {
     expect(result).toEqual({ skipped: true, reason: "no-brain" });
     expect(deps.extractCandidates).not.toHaveBeenCalled();
     expect(deps.capture).not.toHaveBeenCalled();
+    // No brain resolved → no status refresh.
+    expect(deps.refreshStatus).not.toHaveBeenCalled();
     // A receipt for THIS cwd is saved so the next SessionStart can explain the silence.
     expect(deps.saveReceipt).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: "/x", message: expect.stringContaining("no team brain") }),

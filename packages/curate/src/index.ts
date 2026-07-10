@@ -11,6 +11,7 @@ import {
   type NewNoteInput,
   NOTE_KINDS,
   type NoteKind,
+  refreshBrainStatus,
   resolveBrain,
   resolveBrainDir,
   resolveProjectSource,
@@ -107,6 +108,7 @@ function usage(): void {
       "  commonwealth-curate scope deny <path>",
       "  commonwealth-curate health [--dir <brain>]",
       "  commonwealth-curate map [--dir <brain>]",
+      "  commonwealth-curate status-cache [--dir <brain>]",
       "  commonwealth-curate consolidate [--dry-run] [--dir <brain>]",
       "  commonwealth-curate graduate [--suggest] [--dry-run] [--threshold <n>] [--org-dir <brain>]",
       "  commonwealth-curate feature list [--dir <brain>]",
@@ -476,6 +478,20 @@ async function cmdMap(dir: string): Promise<void> {
 }
 
 /**
+ * `status-cache` — refresh the ambient status cache for a brain (#197). Computes the freshness
+ * score + pending-review count and persists them to the per-user cache the `statusLine` reader
+ * consumes. This is the OFF-hot-path writer: the SessionEnd worker invokes it (with the resolved
+ * brain in `$COMMONWEALTH_BRAIN_DIR`) so the index work happens in the background, never in the
+ * per-turn statusline render. Diagnostics to stderr; nothing on stdout.
+ */
+async function cmdStatusCache(dir: string): Promise<void> {
+  const s = await refreshBrainStatus(dir, Date.now());
+  console.error(
+    `[commonwealth-curate] status cached for ${s.brain}: ${s.score}/100, ${s.pending} pending`,
+  );
+}
+
+/**
  * `consolidate [--dry-run]` — cross-user canon consolidation (#29): supersede near-duplicate
  * memory/decision notes onto a single survivor (supersede-not-delete), single-writer.
  */
@@ -603,6 +619,9 @@ async function main(): Promise<void> {
       break;
     case "map":
       await cmdMap(await requireBrain());
+      break;
+    case "status-cache":
+      await cmdStatusCache(await requireBrain());
       break;
     case "consolidate":
       await cmdConsolidate(await requireBrain(), rest);

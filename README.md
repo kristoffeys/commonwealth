@@ -105,6 +105,7 @@ commonwealth sync start|stop|once         # control the background sync (foregro
 commonwealth service <install|uninstall|status|restart>  # run sync as an OS background service
 commonwealth health                       # freshness / trust score for the brain
 commonwealth map                          # brain-at-a-glance: per-kind counts + top contributors
+commonwealth statusline [install]         # ambient status line for Claude Code (see below)
 commonwealth graduate [--suggest]         # propose facts recurring across ≥2 brains to the org-brain
 commonwealth doctor [--fix]               # diagnose (and optionally fix) the setup
 commonwealth update                       # update the CLI + refresh the Claude Code plugin (hooks + MCP)
@@ -137,6 +138,23 @@ commonwealth config set autoPromote false   # require manual review
 commonwealth pending                         # see what's waiting
 commonwealth promote <id...> | --all         # approve into canon
 ```
+
+### Ambient status line
+
+Show the brain at a glance in Claude Code's status line — name, freshness score, and
+pending-review count — so "is it working?" and "is anything waiting for me?" are answered without
+running a command:
+
+```bash
+commonwealth statusline install     # add it to ~/.claude/settings.json (then restart Claude Code)
+```
+
+Renders e.g. `🧠 antenna · 87/100 · 3 pending · ⇅` (the `⇅` shows only when the sync daemon is
+live; `pending` only when the queue is non-empty). It reads a cached status the SessionEnd hook
+refreshes, so it stays well under the status line's per-turn latency budget — no git or index work
+happens on render. `commonwealth statusline uninstall` removes it; a hand-written `statusLine` is
+never clobbered. (Claude Code doesn't let a plugin register a main status line, so this one-time
+`install` writes the entry into your own settings.)
 
 ### Graduate shared knowledge to an org-brain
 
