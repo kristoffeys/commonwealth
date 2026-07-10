@@ -104,6 +104,7 @@ commonwealth reject <id...>               # discard staged notes
 commonwealth sync start|stop|once         # control the background sync (foreground)
 commonwealth service <install|uninstall|status|restart>  # run sync as an OS background service
 commonwealth health                       # freshness / trust score for the brain
+commonwealth map                          # brain-at-a-glance: per-kind counts + top contributors
 commonwealth graduate [--suggest]         # propose facts recurring across ≥2 brains to the org-brain
 commonwealth doctor [--fix]               # diagnose (and optionally fix) the setup
 commonwealth update                       # update the CLI + refresh the Claude Code plugin (hooks + MCP)

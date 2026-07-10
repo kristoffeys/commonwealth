@@ -2,8 +2,11 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { parseArgs } from "node:util";
 import {
+  brainHealth,
+  brainMap,
   computeBrainHealth,
   FEATURE_FLAGS,
+  listNotes,
   loadBrainConfig,
   type NewNoteInput,
   NOTE_KINDS,
@@ -103,6 +106,7 @@ function usage(): void {
       "  commonwealth-curate scope allow <path>",
       "  commonwealth-curate scope deny <path>",
       "  commonwealth-curate health [--dir <brain>]",
+      "  commonwealth-curate map [--dir <brain>]",
       "  commonwealth-curate consolidate [--dry-run] [--dir <brain>]",
       "  commonwealth-curate graduate [--suggest] [--dry-run] [--threshold <n>] [--org-dir <brain>]",
       "  commonwealth-curate feature list [--dir <brain>]",
@@ -429,6 +433,48 @@ async function cmdHealth(dir: string): Promise<void> {
   console.log(`  orphaned:     ${h.orphaned.count}`);
 }
 
+/** Longest per-kind bar, in `█` chars, at the highest-count kind. Shorter bars scale down. */
+const MAP_BAR_WIDTH = 24;
+
+/** Render an `n`-of-`max` bar as `█`s scaled to {@link MAP_BAR_WIDTH}; a positive count is ≥1 cell. */
+function bar(n: number, max: number): string {
+  if (n <= 0 || max <= 0) return "";
+  return "█".repeat(Math.max(1, Math.round((n / max) * MAP_BAR_WIDTH)));
+}
+
+/**
+ * `map` — brain-at-a-glance coverage overview (#205): per-kind counts (with ASCII bars) and top
+ * contributors, plus the {@link brainHealth} trust score on the headline. The brain is otherwise
+ * invisible (the derived index is agent-facing); this is the "what does it hold?" surface.
+ * Read-only; prints a human summary to stdout. Notes are loaded once and fed to both pure rollups.
+ */
+async function cmdMap(dir: string): Promise<void> {
+  const notes = await listNotes(dir);
+  const m = brainMap(notes);
+  const { score } = brainHealth(notes);
+
+  if (m.total === 0) {
+    console.log("Brain map: empty — no notes captured yet.");
+    return;
+  }
+
+  console.log(`Brain map: ${m.total} note${m.total === 1 ? "" : "s"}  ·  health ${score}/100`);
+  const kindLabelWidth = Math.max(...m.byKind.map((k) => k.kind.length));
+  const kindCountWidth = Math.max(...m.byKind.map((k) => String(k.count).length));
+  const maxKind = Math.max(...m.byKind.map((k) => k.count));
+  for (const { kind, count } of m.byKind) {
+    const label = kind.padEnd(kindLabelWidth);
+    const num = String(count).padStart(kindCountWidth);
+    console.log(`  ${label}  ${num}  ${bar(count, maxKind)}`.trimEnd());
+  }
+
+  console.log("Contributors:");
+  const authorWidth = Math.max(...m.contributors.map((c) => c.author.length));
+  for (const { author, count } of m.contributors) {
+    console.log(`  ${author.padEnd(authorWidth)}  ${count}`);
+  }
+}
+
 /**
  * `consolidate [--dry-run]` — cross-user canon consolidation (#29): supersede near-duplicate
  * memory/decision notes onto a single survivor (supersede-not-delete), single-writer.
@@ -554,6 +600,9 @@ async function main(): Promise<void> {
       break;
     case "health":
       await cmdHealth(await requireBrain());
+      break;
+    case "map":
+      await cmdMap(await requireBrain());
       break;
     case "consolidate":
       await cmdConsolidate(await requireBrain(), rest);
