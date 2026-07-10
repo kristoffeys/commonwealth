@@ -14,6 +14,9 @@ work-state / people`), auto-started by declaring it in the manifest (no manual
 - **Brain registry** — resolves the current project directory → its brain repo
   (`@cmnwlth/core`'s `resolveBrainDir`, issue #14).
 - **`/commonwealth` commands** — manual `remember`, `decide`, `recall`, `ask`, `promote`, `status`.
+- **`@commonwealth:curator` subagent** — an in-session, advisory brain-tender: reviews the staging
+  queue, recommends promotions/rejections, proposes consolidations, and flags contradictions with
+  canon. Runs on the session model (no extra key), read-only by default, never auto-promotes (#198).
 
 Everything real is done by the `@cmnwlth/*` packages; the plugin is glue. Markdown in the
 brain repo stays the source of truth.
@@ -28,6 +31,7 @@ hooks/session-start.mjs      thin stdin→lib→stdout entry (prints context)
 hooks/session-end.mjs        thin stdin→lib entry (stages candidates)
 hooks/pre-compact.mjs        thin stdin→worker entry (captures before compaction, #195)
 commands/*.md                /commonwealth remember|decide|recall|promote|status
+agents/curator.md            @commonwealth:curator advisory review/consolidation subagent
 ```
 
 ## Runtime (published packages via npx)
