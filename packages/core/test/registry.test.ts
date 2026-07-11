@@ -334,6 +334,20 @@ describe("resolveBrain — corrupt config surfaces loudly, not as no-brain (#210
     const res = await resolveBrain(project, { registryPath });
     expect(res.kind).toBe("none");
   });
+
+  it("treats a config that parses but is NOT a JSON object as corrupt; {} stays valid (#210)", async () => {
+    const registryPath = path.join(root, "config.json");
+    const project = await mkdir("proj");
+    for (const bad of ["[]", '"x"', "42", "null"]) {
+      await fs.writeFile(registryPath, bad, "utf8");
+      const res = await resolveBrain(project, { registryPath });
+      expect(res.kind).toBe("corrupt-config");
+      if (res.kind === "corrupt-config") expect(res.error).toContain("must be a JSON object");
+    }
+    // An empty object is a valid, empty config → nothing configured → none (never corrupt).
+    await fs.writeFile(registryPath, "{}", "utf8");
+    expect((await resolveBrain(project, { registryPath })).kind).toBe("none");
+  });
 });
 
 describe("rule remote — clone-on-demand wiring (ADR-0019)", () => {

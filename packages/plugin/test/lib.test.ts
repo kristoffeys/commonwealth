@@ -255,7 +255,10 @@ describe("sessionEnd", () => {
         error: "Unexpected token } in JSON at position 42 (line 3 column 5)",
       })),
     });
-    const result = await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" }, deps);
+    const result = await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
+      deps,
+    );
     expect(result).toEqual({
       skipped: true,
       reason: "corrupt-config",

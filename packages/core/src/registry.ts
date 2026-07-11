@@ -271,10 +271,11 @@ function parseResolvedBrainField(raw: unknown): ResolvedBrain | null {
 }
 
 /**
- * Turn a `JSON.parse` failure into a human message that names the failure LOCATION. V8's own
- * message already carries a byte `position` (and, on Node ≥21, a `(line N column M)` suffix); when
- * only a bare position is present we derive `line`/`column` from `raw` and append them, so the
- * signal a hand-editor needs ("line 7") is always there. Pure; falls back to the raw message.
+ * Turn a `JSON.parse` failure into a human message that names the failure LOCATION *when the
+ * runtime supplies a position*. Some V8 messages carry a byte `position` (and sometimes a
+ * `(line N column M)` suffix already); when only a bare position is present we derive `line`/
+ * `column` from `raw` and append them. But many messages (e.g. the trailing-comma case on modern
+ * Node) carry no position at all — then we simply return the runtime's message unchanged. Pure.
  */
 function describeJsonError(err: unknown, raw: string): string {
   const msg = err instanceof Error ? err.message : String(err);
@@ -297,11 +298,17 @@ async function readRegistryFile(registryPath: string): Promise<RegistryLoad> {
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    // Keep the parse message (V8 includes a byte position, and on Node ≥21 a `(line N column M)`
-    // suffix too) so every reader can name WHERE the file broke — not just THAT it broke (#210).
+    // Keep the parse message (with a `(line N column M)` suffix when the runtime supplies a byte
+    // position) so every reader can name WHERE the file broke — not just THAT it broke (#210).
     return { status: "corrupt", raw, error: describeJsonError(err, raw) };
   }
-  const obj = (typeof parsed === "object" && parsed !== null ? parsed : {}) as Partial<Registry>;
+  // A file that parses but isn't a JSON *object* (e.g. `[]`, `"x"`, `42`, `null`) is not a usable
+  // config: it silently degraded to "no rules" before — the same invisible-failure class as a parse
+  // error, one level up (#210). Treat it as corrupt so it surfaces loudly. `{}` stays valid/empty.
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { status: "corrupt", raw, error: "config must be a JSON object" };
+  }
+  const obj = parsed as Partial<Registry>;
   const registry: Registry = {};
 
   // Parse the unified ruleset (ADR-0024) with the same defensive discipline: skip any malformed

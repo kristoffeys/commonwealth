@@ -73,7 +73,8 @@ export function defaultStatuslineEnv(cwd: string): StatuslineEnv {
  */
 export async function runStatusline(env: StatuslineEnv): Promise<string> {
   const resolved = await env.resolveBrain(env.cwd);
-  if (resolved.kind === "corrupt-config") return "🧠 ⚠ config unparseable — run `commonwealth doctor`";
+  if (resolved.kind === "corrupt-config")
+    return "🧠 ⚠ config unparseable — run `commonwealth doctor`";
   if (resolved.kind !== "brain" || !resolved.brain) return "";
   const brainDir = resolved.brain;
   const cache = await env.readCache();

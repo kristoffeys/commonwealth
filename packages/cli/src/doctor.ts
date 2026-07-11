@@ -210,7 +210,8 @@ export function defaultDoctorEnv(cwd: string): DoctorEnv {
     resolveScope: async (dir) => {
       // A corrupt config surfaces via the dedicated config-parse check (#210); for scope it just
       // degrades to "none" (undeterminable) rather than widening this three-way result.
-      const kind = (await resolveBrain(dir, { registryPath: process.env.COMMONWEALTH_CONFIG })).kind;
+      const kind = (await resolveBrain(dir, { registryPath: process.env.COMMONWEALTH_CONFIG }))
+        .kind;
       return kind === "corrupt-config" ? "none" : kind;
     },
     resolveRemote: async (dir) => {

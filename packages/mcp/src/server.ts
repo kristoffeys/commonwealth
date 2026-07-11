@@ -29,8 +29,7 @@ type ToolError = { content: { type: "text"; text: string }[]; isError: true };
  * typo, #210) — a fundamentally different failure whose fix is "repair the file", NOT re-onboarding.
  */
 export type BrainUnavailable =
-  | { kind: "none" }
-  | { kind: "corrupt-config"; path: string; error: string };
+  { kind: "none" } | { kind: "corrupt-config"; path: string; error: string };
 
 /** Wrap human text as the MCP error-result shape. */
 function toolError(text: string): ToolError {
