@@ -67,10 +67,13 @@ export function defaultStatuslineEnv(cwd: string): StatuslineEnv {
  * Render the one-line status for the session's cwd, or `""` when the cwd maps to no brain (an empty
  * statusline, not an error). Reads only the cache — a cwd whose brain has never been refreshed
  * still shows the brain name, degrading gracefully to `🧠 <name>` until the first SessionEnd warms
- * the cache. Never throws.
+ * the cache. A broken per-user config file (#210) is the one exception to the empty-on-no-brain
+ * rule: it renders a distinct, ambient warning so a hand-edit typo that has silently disabled
+ * capture is visible every turn — not indistinguishable from "no brain here". Never throws.
  */
 export async function runStatusline(env: StatuslineEnv): Promise<string> {
   const resolved = await env.resolveBrain(env.cwd);
+  if (resolved.kind === "corrupt-config") return "🧠 ⚠ config unparseable — run `commonwealth doctor`";
   if (resolved.kind !== "brain" || !resolved.brain) return "";
   const brainDir = resolved.brain;
   const cache = await env.readCache();

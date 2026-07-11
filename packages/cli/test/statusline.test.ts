@@ -49,6 +49,20 @@ describe("runStatusline (#197)", () => {
     const none = makeEnv({ resolveBrain: vi.fn(async () => ({ kind: "none" })) });
     expect(await runStatusline(none)).toBe("");
   });
+
+  it("renders a distinct config-broken warning, not an empty line, on corrupt-config (#210)", async () => {
+    const broken = makeEnv({
+      resolveBrain: vi.fn(async () => ({
+        kind: "corrupt-config",
+        path: "/home/dev/.commonwealth/config.json",
+        error: "Unexpected token } in JSON at position 42",
+      })),
+    });
+    const line = await runStatusline(broken);
+    expect(line).not.toBe("");
+    expect(line).toContain("config unparseable");
+    expect(line).toContain("commonwealth doctor");
+  });
 });
 
 describe("install/uninstall statusLine (#197)", () => {

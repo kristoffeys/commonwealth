@@ -24,24 +24,42 @@ function summarizeNote(note: Note): string {
 type ToolError = { content: { type: "text"; text: string }[]; isError: true };
 
 /**
- * The explicit "no brain configured" result. Returned by every tool when the server was
- * built without a resolved brain (see {@link createServer}), instead of silently operating
- * on the process cwd. Tells the user exactly how to wire one up. (#64)
+ * Why no brain is available, when {@link createServer} is built with `null`. `none` = nothing maps
+ * (run `init`); `corrupt-config` = the per-user config file exists but doesn't parse (a hand-edit
+ * typo, #210) — a fundamentally different failure whose fix is "repair the file", NOT re-onboarding.
  */
-function noBrainConfigured(): ToolError {
+export type BrainUnavailable =
+  | { kind: "none" }
+  | { kind: "corrupt-config"; path: string; error: string };
+
+/** Wrap human text as the MCP error-result shape. */
+function toolError(text: string): ToolError {
+  return { isError: true, content: [{ type: "text", text }] };
+}
+
+/**
+ * The explicit "brain unavailable" result. Returned by every tool when the server was built
+ * without a resolved brain (see {@link createServer}), instead of silently operating on the process
+ * cwd. For `none` it tells the user how to wire one up (#64); for `corrupt-config` it names the
+ * broken file and the parse error and says to fix or restore it — the misleading "run
+ * `commonwealth init`" would send the user re-onboarding instead of fixing the one-char typo that
+ * disabled everything (#210).
+ */
+function brainUnavailable(reason: BrainUnavailable): ToolError {
+  if (reason.kind === "corrupt-config") {
+    return toolError(
+      `Commonwealth's config file at ${reason.path} is unparseable: ${reason.error}. No brain ` +
+        `could be resolved, so capture and recall are OFF until it is fixed. Repair the JSON (a ` +
+        `stray trailing comma is the usual cause) or restore it from a \`.corrupt-<ts>\` backup, ` +
+        `then retry. Run \`commonwealth doctor\` to confirm.`,
+    );
+  }
   const cwd = process.cwd();
-  return {
-    isError: true,
-    content: [
-      {
-        type: "text",
-        text:
-          `No Commonwealth brain is configured for ${cwd}. Run \`commonwealth init\` here to ` +
-          `create or join a brain, or add a prefix → brain mapping to ` +
-          `~/.commonwealth/registry.json. (Set COMMONWEALTH_BRAIN_DIR to pin one explicitly.)`,
-      },
-    ],
-  };
+  return toolError(
+    `No Commonwealth brain is configured for ${cwd}. Run \`commonwealth init\` here to ` +
+      `create or join a brain, or add a prefix → brain mapping to ` +
+      `~/.commonwealth/config.json. (Set COMMONWEALTH_BRAIN_DIR to pin one explicitly.)`,
+  );
 }
 
 /**
@@ -49,13 +67,19 @@ function noBrainConfigured(): ToolError {
  * `tools.ts`. Every tool reads/writes the brain only through `@cmnwlth/core`, keeping
  * markdown the source of truth (ADR-0003).
  *
- * @param brainDir Absolute path to the brain repo, or `null` when {@link resolveBrainDir}
- *   found no brain for the cwd. When `null` the server still starts (so the plugin never
- *   breaks an unmapped project) but every tool returns {@link noBrainConfigured} rather than
- *   silently reading/writing the cwd. Defaults to the process cwd when omitted so a caller
- *   that already `cd`'d into a brain can build the server without resolving.
+ * @param brainDir Absolute path to the brain repo, or `null` when resolution found no brain for the
+ *   cwd. When `null` the server still starts (so the plugin never breaks an unmapped project) but
+ *   every tool returns {@link brainUnavailable} rather than silently reading/writing the cwd.
+ *   Defaults to the process cwd when omitted so a caller that already `cd`'d into a brain can build
+ *   the server without resolving.
+ * @param unavailable Why no brain is available, used to shape the error when `brainDir` is `null`:
+ *   `none` (nothing maps) vs `corrupt-config` (the config file is broken, #210). Ignored when a
+ *   brain resolved.
  */
-export function createServer(brainDir: string | null = process.cwd()): McpServer {
+export function createServer(
+  brainDir: string | null = process.cwd(),
+  unavailable: BrainUnavailable = { kind: "none" },
+): McpServer {
   const server = new McpServer({ name: "commonwealth", version: "0.0.0" });
 
   server.registerTool(
@@ -72,7 +96,7 @@ export function createServer(brainDir: string | null = process.cwd()): McpServer
       },
     },
     async ({ query, kind, limit }) => {
-      if (brainDir === null) return noBrainConfigured();
+      if (brainDir === null) return brainUnavailable(unavailable);
       const results = await searchNotes(brainDir, { query, kind, limit });
       const text =
         results.length === 0
@@ -106,7 +130,7 @@ export function createServer(brainDir: string | null = process.cwd()): McpServer
       },
     },
     async ({ question, limit }) => {
-      if (brainDir === null) return noBrainConfigured();
+      if (brainDir === null) return brainUnavailable(unavailable);
       const result = await askBrainTool(brainDir, { question, limit });
       const text = !result.coverage.matched
         ? `No notes in the brain matched "${question}". Tell the user you don't have enough to answer.`
@@ -133,7 +157,7 @@ export function createServer(brainDir: string | null = process.cwd()): McpServer
       },
     },
     async ({ path }) => {
-      if (brainDir === null) return noBrainConfigured();
+      if (brainDir === null) return brainUnavailable(unavailable);
       const note = await readNoteTool(brainDir, { path });
       const text = `# ${note.frontmatter.title}\n\n${note.body}`;
       return {
@@ -161,7 +185,7 @@ export function createServer(brainDir: string | null = process.cwd()): McpServer
       },
     },
     async ({ kind, title, body, tags, author }) => {
-      if (brainDir === null) return noBrainConfigured();
+      if (brainDir === null) return brainUnavailable(unavailable);
       const result = await remember(brainDir, { kind, title, body, tags, author });
       const text =
         result.status === "promoted"
@@ -186,7 +210,7 @@ export function createServer(brainDir: string | null = process.cwd()): McpServer
       inputSchema: {},
     },
     async () => {
-      if (brainDir === null) return noBrainConfigured();
+      if (brainDir === null) return brainUnavailable(unavailable);
       const notes = await listWorkState(brainDir);
       const text =
         notes.length === 0 ? "No active work-state." : notes.map(summarizeNote).join("\n");
@@ -206,7 +230,7 @@ export function createServer(brainDir: string | null = process.cwd()): McpServer
       },
     },
     async ({ query }) => {
-      if (brainDir === null) return noBrainConfigured();
+      if (brainDir === null) return brainUnavailable(unavailable);
       const notes = await whoIs(brainDir, { query });
       const text =
         notes.length === 0 ? `No people matched "${query}".` : notes.map(summarizeNote).join("\n");

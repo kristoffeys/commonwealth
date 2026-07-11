@@ -89,27 +89,40 @@ function candidateCwds(inputCwd) {
  * Resolve the session's working directory in ONE pass that is both routing and scope (ADR-0024 §3),
  * trying each {@link candidateCwds} entry in order:
  *  - the first candidate that resolves to a `brain` wins (in scope + routed) → `{ kind: "brain", cwd, brain }`;
+ *  - else, if any candidate's config file was present-but-unparseable (`corrupt-config`, #210), report
+ *    that → `{ kind: "corrupt-config", cwd, path, error }` (so SessionEnd surfaces a "fix your config"
+ *    receipt, not the misleading "no brain mapped — add it to your registry");
  *  - else, if any candidate was an explicit `denied` (a deny rule — the privacy gate), report that
  *    → `{ kind: "denied", cwd }` (so SessionEnd surfaces an out-of-scope receipt, not "no brain");
  *  - else nothing was configured for any candidate → `{ kind: "none" }`.
  *
- * A brain-mapped fallback still wins over an earlier denied candidate (matching the pre-ADR-0024
- * behavior where a denied cwd fell through to `$CLAUDE_PROJECT_DIR` / `process.cwd()`).
+ * A brain-mapped fallback still wins over an earlier denied/corrupt candidate (matching the
+ * pre-ADR-0024 behavior where a denied cwd fell through to `$CLAUDE_PROJECT_DIR` / `process.cwd()`).
  *
  * @param {string} inputCwd  The hook-supplied cwd (already validated as a non-empty string).
  * @param {object} deps      See the contract at the top of this file.
- * @returns {Promise<{kind: "brain", cwd: string, brain: string} | {kind: "denied", cwd: string} | {kind: "none"}>}
+ * @returns {Promise<{kind: "brain", cwd: string, brain: string} | {kind: "corrupt-config", cwd: string, path: string, error: string} | {kind: "denied", cwd: string} | {kind: "none"}>}
  */
 async function resolveSessionBrain(inputCwd, deps) {
   let denied = null;
+  let corrupt = null;
   for (const cwd of candidateCwds(inputCwd)) {
     const r = await deps.resolveBrain(cwd);
     if (r && r.kind === "brain" && typeof r.brain === "string" && r.brain.length > 0) {
       return { kind: "brain", cwd, brain: r.brain };
     }
+    if (r && r.kind === "corrupt-config" && !corrupt) {
+      corrupt = {
+        kind: "corrupt-config",
+        cwd,
+        path: typeof r.path === "string" ? r.path : "",
+        error: typeof r.error === "string" ? r.error : "",
+      };
+    }
     if (r && r.kind === "denied" && !denied) denied = { kind: "denied", cwd };
   }
-  return denied ?? { kind: "none" };
+  // A broken config is a loud, actionable failure — surface it ahead of a deny/none silence.
+  return corrupt ?? denied ?? { kind: "none" };
 }
 
 /**
@@ -238,6 +251,17 @@ export async function sessionEnd(input, deps) {
     return { skipped: true, reason: "no-cwd" };
 
   const resolved = await resolveSessionBrain(inputCwd, deps);
+  if (resolved.kind === "corrupt-config") {
+    // The per-user config file exists but doesn't parse (#210). No brain resolved, so nothing was
+    // captured — but that's a BROKEN config, not "no brain here". Anchor a loud, actionable receipt
+    // to the cwd so the next SessionStart there tells the user to fix the file (never silent).
+    return await finishEnd(deps, resolved.cwd, {
+      skipped: true,
+      reason: "corrupt-config",
+      path: resolved.path,
+      error: resolved.error,
+    });
+  }
   if (resolved.kind === "denied") {
     // An explicit deny rule matched (the privacy gate) — out of scope. Anchor the receipt to the
     // denied cwd so the next SessionStart there explains the silence.
@@ -380,12 +404,22 @@ function renderCaptureReceipt(notes) {
  * WHAT was remembered (#204) — falling back to a bare count when structured notes are unavailable.
  * Pure function.
  *
- * @param {{skipped?: boolean, reason?: string, captured?: number, notes?: Array<{kind: string, title: string, promoted: boolean}>}} result
+ * @param {{skipped?: boolean, reason?: string, path?: string, error?: string, captured?: number, notes?: Array<{kind: string, title: string, promoted: boolean}>}} result
  * @returns {string | null}
  */
 export function endReceiptMessage(result) {
   if (!result || typeof result !== "object") return null;
   if (result.skipped) {
+    if (result.reason === "corrupt-config") {
+      // A broken config file (#210): a hand-edit typo makes every reader treat the brain as missing
+      // and silently disables ALL capture. Name the file and the parse error and say how to fix it —
+      // never let a one-char typo turn the flagship feature off invisibly.
+      const where =
+        typeof result.path === "string" && result.path.length > 0 ? ` (${result.path})` : "";
+      const why =
+        typeof result.error === "string" && result.error.length > 0 ? ` — ${result.error}` : "";
+      return `🧠 Commonwealth: your config file${where} is unparseable${why}, so NO brain resolved and nothing was captured. Fix the JSON (a stray trailing comma is the usual cause) or restore it from a \`.corrupt-<ts>\` backup, then run \`commonwealth doctor\` to confirm.`;
+    }
     if (result.reason === "no-brain") {
       return "🧠 Commonwealth: the last session ended in a directory with no team brain mapped, so nothing was captured. Add a rule with `commonwealth registry` (or run `commonwealth add`) to capture here.";
     }

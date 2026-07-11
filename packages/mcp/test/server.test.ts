@@ -56,4 +56,28 @@ describe("createServer", () => {
     await client.close();
     await server.close();
   });
+
+  it("names the broken config file and parse error on corrupt-config (not 'run init') (#210)", async () => {
+    const server = createServer(null, {
+      kind: "corrupt-config",
+      path: "/home/dev/.commonwealth/config.json",
+      error: "Unexpected token } in JSON at position 42 (line 3 column 5)",
+    });
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const res = await client.callTool({ name: "search", arguments: { query: "anything" } });
+    expect(res.isError).toBe(true);
+    const text = (res.content as { type: string; text: string }[])[0].text;
+    expect(text).toContain("/home/dev/.commonwealth/config.json");
+    expect(text).toContain("unparseable");
+    expect(text).toContain("line 3 column 5");
+    // Must NOT send the user re-onboarding — the fix is repairing the file.
+    expect(text).not.toContain("commonwealth init");
+
+    await client.close();
+    await server.close();
+  });
 });

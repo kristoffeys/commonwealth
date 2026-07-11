@@ -75,6 +75,14 @@ async function resolveScopedBrain(
   // The resolution is the gate. An explicit brain only redirects an already-in-scope capture.
   if (resolution.kind === "denied") return { skip: "out-of-scope" };
   if (resolution.kind === "none") return { skip: "no-brain" };
+  if (resolution.kind === "corrupt-config") {
+    // The per-user config file is unparseable (#210). `resolveBrain` already honors an explicit
+    // env/`--dir` brain OVER a corrupt config, so reaching here means none was pinned: skip like
+    // no-brain (the hook layer surfaces the loud "fix your config" receipt), unless an explicit
+    // brain redirects us anyway.
+    const dest = explicitBrain(explicit);
+    return dest ? { brain: dest } : { skip: "no-brain" };
+  }
   return { brain: explicitBrain(explicit) ?? resolution.brain };
 }
 

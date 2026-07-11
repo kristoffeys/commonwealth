@@ -36,6 +36,9 @@ describe("commonwealth doctor — diagnose()", () => {
       cwd,
       resolveBrain: () => Promise.resolve(brain),
       resolveScope: () => Promise.resolve("brain"),
+      // Default: no config file present (a valid pre-init state) → no config check emitted, so the
+      // existing checks/ids are unchanged. Corrupt/healthy cases override this per-test.
+      configParse: () => Promise.resolve(null),
       pluginInstalled: () => true,
       pidAlive: () => true,
       gitState: () => ({ kind: "tracked", behind: 0 }),
@@ -152,6 +155,36 @@ describe("commonwealth doctor — diagnose()", () => {
     expect(scope.status).toBe("warn");
     expect(scope.detail).toContain("deny rule");
     expect(scope.fix).toContain("commonwealth registry");
+  });
+
+  it("fails, naming the file, when the per-user config is unparseable (#210)", async () => {
+    const configPath = path.join(tmp, "config.json");
+    const report = await diagnose(
+      healthyEnv({
+        configParse: () =>
+          Promise.resolve({
+            path: configPath,
+            ok: false,
+            error: "Unexpected token } in JSON at position 42 (line 3 column 5)",
+          }),
+      }),
+    );
+    expect(report.ok).toBe(false);
+    const config = check(report, "config");
+    expect(config.status).toBe("fail");
+    expect(config.detail).toContain(configPath);
+    expect(config.detail).toContain("line 3 column 5");
+    expect(config.fix).toContain("trailing comma");
+  });
+
+  it("passes the config check for a healthy, parseable config", async () => {
+    const configPath = path.join(tmp, "config.json");
+    const report = await diagnose(
+      healthyEnv({ configParse: () => Promise.resolve({ path: configPath, ok: true }) }),
+    );
+    const config = check(report, "config");
+    expect(config.status).toBe("ok");
+    expect(report.checks.some((c) => c.id === "config" && c.status === "fail")).toBe(false);
   });
 
   it("presents the plugin link as inferred (skip) when claude is absent", async () => {
