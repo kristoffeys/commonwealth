@@ -247,6 +247,36 @@ describe("sessionEnd", () => {
     );
   });
 
+  it("skips on a corrupt config and leaves a loud 'fix your config' receipt naming the file (#210)", async () => {
+    const deps = makeDeps({
+      resolveBrain: vi.fn(async () => ({
+        kind: "corrupt-config",
+        path: "/home/dev/.commonwealth/config.json",
+        error: "Unexpected token } in JSON at position 42 (line 3 column 5)",
+      })),
+    });
+    const result = await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
+      deps,
+    );
+    expect(result).toEqual({
+      skipped: true,
+      reason: "corrupt-config",
+      path: "/home/dev/.commonwealth/config.json",
+      error: "Unexpected token } in JSON at position 42 (line 3 column 5)",
+    });
+    // A broken config is NOT a work session — never extract/capture.
+    expect(deps.extractCandidates).not.toHaveBeenCalled();
+    expect(deps.capture).not.toHaveBeenCalled();
+    // The receipt names the file and tells the user to fix it — never silent, never "no brain".
+    expect(deps.saveReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/work/acme/app",
+        message: expect.stringContaining("/home/dev/.commonwealth/config.json"),
+      }),
+    );
+  });
+
   it("reports captured:0, does not call capture, and leaves a 'nothing worth capturing' receipt", async () => {
     const deps = makeDeps({ extractCandidates: vi.fn(async () => []) });
     const result = await sessionEnd(
@@ -367,6 +397,18 @@ describe("endReceiptMessage (#96)", () => {
   });
   it("explains an out-of-scope skip", () => {
     expect(endReceiptMessage({ skipped: true, reason: "out-of-scope" })).toContain("capture scope");
+  });
+  it("explains a corrupt-config skip, naming the file and the parse error (#210)", () => {
+    const msg = endReceiptMessage({
+      skipped: true,
+      reason: "corrupt-config",
+      path: "/home/dev/.commonwealth/config.json",
+      error: "Unexpected token } in JSON at position 42 (line 3 column 5)",
+    });
+    expect(msg).toContain("/home/dev/.commonwealth/config.json");
+    expect(msg).toContain("unparseable");
+    expect(msg).toContain("line 3 column 5");
+    expect(msg).toContain("commonwealth doctor");
   });
   it("returns null for a no-cwd skip (nothing useful to say)", () => {
     expect(endReceiptMessage({ skipped: true, reason: "no-cwd" })).toBe(null);

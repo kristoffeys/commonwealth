@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   addRule,
   linkBrain,
+  resolveBrain,
   resolveBrainDir,
   resolveBrainMapping,
   setBrainMarker,
@@ -277,6 +278,75 @@ describe("addRule — corrupt-file safety (#78)", () => {
     expect(written.allow).toEqual(["/work"]); // scope keys survive the rule write
     expect(written.deny).toEqual(["/work/secret"]);
     expect(written.rules).toHaveLength(1);
+  });
+});
+
+describe("resolveBrain — corrupt config surfaces loudly, not as no-brain (#210)", () => {
+  const corrupt = '{ "rules": [ { "prefix": "/a", "brain": "/b" }, ] }'; // trailing comma
+
+  it("returns corrupt-config (with path + parse error) instead of none for a bad file", async () => {
+    const registryPath = path.join(root, "config.json");
+    await fs.writeFile(registryPath, corrupt, "utf8");
+    const project = await mkdir("proj");
+
+    const res = await resolveBrain(project, { registryPath });
+    expect(res.kind).toBe("corrupt-config");
+    if (res.kind === "corrupt-config") {
+      expect(res.path).toBe(registryPath);
+      expect(res.error.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("collapses corrupt-config to null for resolveBrainDir / resolveBrainMapping (back-compat)", async () => {
+    const registryPath = path.join(root, "config.json");
+    await fs.writeFile(registryPath, corrupt, "utf8");
+    const project = await mkdir("proj");
+
+    expect(await resolveBrainDir(project, { registryPath })).toBeNull();
+    expect(await resolveBrainMapping(project, { registryPath })).toBeNull();
+  });
+
+  it("still resolves an explicit marker file despite a corrupt config", async () => {
+    const registryPath = path.join(root, "config.json");
+    await fs.writeFile(registryPath, corrupt, "utf8");
+    const project = await mkdir("proj");
+    const brain = await makeBrain(await mkdir("acme-brain"));
+    await setBrainMarker(project, brain);
+
+    const res = await resolveBrain(project, { registryPath });
+    expect(res).toEqual({ kind: "brain", brain });
+  });
+
+  it("lets the COMMONWEALTH_BRAIN_DIR env pin win over a corrupt config", async () => {
+    const registryPath = path.join(root, "config.json");
+    await fs.writeFile(registryPath, corrupt, "utf8");
+    const project = await mkdir("proj");
+    const envBrain = await mkdir("env-brain");
+
+    const res = await resolveBrain(project, { registryPath, env: envBrain });
+    expect(res).toEqual({ kind: "brain", brain: envBrain });
+  });
+
+  it("a MISSING config still resolves to none (not corrupt-config)", async () => {
+    const registryPath = path.join(root, "does-not-exist.json");
+    const project = await mkdir("proj");
+
+    const res = await resolveBrain(project, { registryPath });
+    expect(res.kind).toBe("none");
+  });
+
+  it("treats a config that parses but is NOT a JSON object as corrupt; {} stays valid (#210)", async () => {
+    const registryPath = path.join(root, "config.json");
+    const project = await mkdir("proj");
+    for (const bad of ["[]", '"x"', "42", "null"]) {
+      await fs.writeFile(registryPath, bad, "utf8");
+      const res = await resolveBrain(project, { registryPath });
+      expect(res.kind).toBe("corrupt-config");
+      if (res.kind === "corrupt-config") expect(res.error).toContain("must be a JSON object");
+    }
+    // An empty object is a valid, empty config → nothing configured → none (never corrupt).
+    await fs.writeFile(registryPath, "{}", "utf8");
+    expect((await resolveBrain(project, { registryPath })).kind).toBe("none");
   });
 });
 

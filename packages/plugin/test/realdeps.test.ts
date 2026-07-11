@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // The REAL production wiring — not the injected fakes the other tests use. These guard the
 // two silent-failure bugs the M4b verifier caught: an unresolvable core import and a broken
 // `capture --from -` invocation.
-import { realDeps, realResolveBrain, realResolveBrainDir } from "../hooks/lib.mjs";
+import { realDeps, realResolveBrain, realResolveBrainDir, sessionEnd } from "../hooks/lib.mjs";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const curateEntry = path.join(repoRoot, "packages", "curate", "dist", "index.js");
@@ -189,6 +189,85 @@ describe("realResolveBrain — three-way scope result + folded allow/deny (ADR-0
       ],
     });
     expect(await realResolveBrain(work)).toEqual({ kind: "brain", brain: mine });
+  });
+});
+
+describe("realResolveBrain — corrupt config surfaces loudly in the REAL hook path (#210)", () => {
+  /** Write RAW bytes (deliberately-broken JSON) to the registry the inlined resolver reads. */
+  async function writeRaw(raw: string): Promise<void> {
+    await fs.writeFile(process.env.COMMONWEALTH_REGISTRY as string, raw);
+  }
+
+  it("returns corrupt-config (path + parse error) for an unparseable file — NOT none", async () => {
+    const loose = path.join(tmp, "loose");
+    await fs.mkdir(loose, { recursive: true });
+    // The exact hand-edit that silently disabled capture: a trailing comma in `allow`.
+    await writeRaw('{ "allow": ["/work"], }');
+
+    const res = await realResolveBrain(loose);
+    expect(res.kind).toBe("corrupt-config");
+    expect(res.path).toBe(process.env.COMMONWEALTH_REGISTRY);
+    expect(typeof res.error).toBe("string");
+    expect(res.error.length).toBeGreaterThan(0);
+  });
+
+  it("treats a config that parses but is not a JSON object as corrupt (#210)", async () => {
+    const loose = path.join(tmp, "loose2");
+    await fs.mkdir(loose, { recursive: true });
+    await writeRaw("[]");
+    const res = await realResolveBrain(loose);
+    expect(res.kind).toBe("corrupt-config");
+    expect(res.error).toContain("must be a JSON object");
+  });
+
+  it("an explicit env pin still wins over a corrupt config", async () => {
+    const brain = path.join(tmp, "env-brain");
+    process.env.COMMONWEALTH_BRAIN_DIR = brain;
+    await writeRaw('{ "allow": ["/work"], }');
+    expect(await realResolveBrain(path.join(tmp, "loose3"))).toEqual({ kind: "brain", brain });
+  });
+
+  it("a valid marker still wins over a corrupt config", async () => {
+    const project = path.join(tmp, "proj");
+    const brain = path.join(tmp, "marker-brain");
+    await fs.mkdir(brain, { recursive: true });
+    await fs.mkdir(path.join(project, ".commonwealth"), { recursive: true });
+    await fs.writeFile(path.join(project, ".commonwealth", "brain"), `${brain}\n`);
+    await writeRaw('{ "allow": ["/work"], }');
+    expect(await realResolveBrain(project)).toEqual({ kind: "brain", brain });
+  });
+});
+
+// The bug the verifier caught: the corrupt-config receipt branch is DEAD unless the production
+// resolver (realResolveBrain, wired via realDeps().resolveBrain) actually emits corrupt-config. This
+// exercises the real capture entry — sessionEnd + realDeps(), no stubbed dep — end to end, and would
+// have failed on the pre-fix code (which returned { kind: "none" } → the misleading "no brain" receipt).
+describe("SessionEnd surfaces a corrupt config via the REAL resolver + receipt (#210)", () => {
+  it("flows corrupt-config through sessionEnd to a loud receipt naming the file", async () => {
+    const savedCwd = process.cwd();
+    const project = path.join(tmp, "proj");
+    await fs.mkdir(project, { recursive: true });
+    await fs.writeFile(process.env.COMMONWEALTH_REGISTRY as string, '{ "allow": ["/work"], }');
+    // Ensure the process.cwd() fallback candidate (candidateCwds) is a plain, brain-less temp dir,
+    // so every candidate resolves to corrupt-config and no stray brain shadows the result.
+    process.chdir(tmp);
+    try {
+      const deps = realDeps();
+      const result = await sessionEnd(
+        { cwd: project, transcript_path: path.join(tmp, "t.jsonl") },
+        deps,
+      );
+      expect(result.skipped).toBe(true);
+      expect(result.reason).toBe("corrupt-config");
+      expect(result.path).toBe(process.env.COMMONWEALTH_REGISTRY);
+      // Never extract/capture on a broken config — it isn't a work session.
+      // The deferred receipt the NEXT SessionStart shows names the file and says it's unparseable.
+      const message = await deps.takeReceipt(project);
+      expect(message).toContain(process.env.COMMONWEALTH_REGISTRY as string);
+      expect(message).toContain("unparseable");
+    } finally {
+      process.chdir(savedCwd);
+    }
   });
 });
 

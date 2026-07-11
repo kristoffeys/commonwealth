@@ -83,9 +83,20 @@ export interface Rule {
  * "out of scope here") from **none** (nothing matched) — the two feed different hook receipts.
  * This three-way result IS the scope gate: `brain` = in scope for that brain, `denied` = out of
  * scope, `none` = nothing configured here.
+ *
+ * A fourth variant, `corrupt-config`, is surfaced when the per-user config file exists but does
+ * NOT parse as JSON (e.g. a stray trailing comma from a hand-edit). Readers used to collapse that
+ * to `none` — indistinguishable from "no file" — which silently disabled ALL capture with zero
+ * signal (#210). We now carry the file `path` and the JSON parse `error` so callers can be LOUD
+ * about it (hook receipt, MCP error, doctor) instead of degrading to no-brain. Explicit pins
+ * (marker file, a dir that is itself a brain) and the `COMMONWEALTH_BRAIN_DIR` env fallback still
+ * win over a corrupt config; it is returned only when nothing else resolved.
  */
 export type BrainResolution =
-  { kind: "brain"; brain: string; remote?: string } | { kind: "denied" } | { kind: "none" };
+  | { kind: "brain"; brain: string; remote?: string }
+  | { kind: "denied" }
+  | { kind: "none" }
+  | { kind: "corrupt-config"; path: string; error: string };
 
 /** Shape of the per-user config JSON file (`~/.commonwealth/config.json`). */
 export interface Registry {
@@ -208,7 +219,7 @@ function resolveRegistryPath(explicit?: string): string {
 type RegistryLoad =
   | { status: "ok"; registry: Registry; rawObj: Record<string, unknown> }
   | { status: "missing" }
-  | { status: "corrupt"; raw: string };
+  | { status: "corrupt"; raw: string; error: string };
 
 /**
  * Validate one raw rule (ADR-0024). Returns a clean {@link Rule} or null. A rule must have at
@@ -259,6 +270,26 @@ function parseResolvedBrainField(raw: unknown): ResolvedBrain | null {
   return null;
 }
 
+/**
+ * Turn a `JSON.parse` failure into a human message that names the failure LOCATION *when the
+ * runtime supplies a position*. Some V8 messages carry a byte `position` (and sometimes a
+ * `(line N column M)` suffix already); when only a bare position is present we derive `line`/
+ * `column` from `raw` and append them. But many messages (e.g. the trailing-comma case on modern
+ * Node) carry no position at all — then we simply return the runtime's message unchanged. Pure.
+ */
+function describeJsonError(err: unknown, raw: string): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/line \d+ column \d+/i.test(msg)) return msg; // V8 already localized it
+  const posMatch = msg.match(/position (\d+)/i);
+  if (!posMatch) return msg;
+  const pos = Number.parseInt(posMatch[1]!, 10);
+  if (!Number.isFinite(pos)) return msg;
+  const upto = raw.slice(0, pos);
+  const line = upto.split("\n").length;
+  const column = pos - upto.lastIndexOf("\n"); // 1-based column within the line
+  return `${msg} (line ${line} column ${column})`;
+}
+
 /** Read + classify the registry file. Never throws; distinguishes missing from corrupt. */
 async function readRegistryFile(registryPath: string): Promise<RegistryLoad> {
   const raw = await readFileOrNull(registryPath);
@@ -266,10 +297,18 @@ async function readRegistryFile(registryPath: string): Promise<RegistryLoad> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
-    return { status: "corrupt", raw };
+  } catch (err) {
+    // Keep the parse message (with a `(line N column M)` suffix when the runtime supplies a byte
+    // position) so every reader can name WHERE the file broke — not just THAT it broke (#210).
+    return { status: "corrupt", raw, error: describeJsonError(err, raw) };
   }
-  const obj = (typeof parsed === "object" && parsed !== null ? parsed : {}) as Partial<Registry>;
+  // A file that parses but isn't a JSON *object* (e.g. `[]`, `"x"`, `42`, `null`) is not a usable
+  // config: it silently degraded to "no rules" before — the same invisible-failure class as a parse
+  // error, one level up (#210). Treat it as corrupt so it surfaces loudly. `{}` stays valid/empty.
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { status: "corrupt", raw, error: "config must be a JSON object" };
+  }
+  const obj = parsed as Partial<Registry>;
   const registry: Registry = {};
 
   // Parse the unified ruleset (ADR-0024) with the same defensive discipline: skip any malformed
@@ -316,10 +355,14 @@ async function readRegistryFile(registryPath: string): Promise<RegistryLoad> {
 }
 
 /**
- * Parse the registry file into a normalized {@link Registry}; null on missing OR invalid. Used by
- * {@link resolveBrainDir}, which must never throw on a bad file — a corrupt registry simply
- * resolves no rules (resolution falls through to env). Writers use {@link readRegistryFile}
- * directly so they can refuse to clobber a corrupt file (#78).
+ * Parse the registry file into a normalized {@link Registry}; null on missing OR invalid. This
+ * COLLAPSES a corrupt file to null on purpose, for the callers that only ask "which brains are
+ * wired" ({@link listWiredBrainDirs}, {@link getOrgBrain}, {@link loadRegistryFile},
+ * {@link importSharedRules}) — a bad file simply lists nothing there. Never throws. The one caller
+ * that must tell a corrupt file APART from a missing one is {@link resolveBrain}: it reads
+ * {@link readRegistryFile} directly so it can surface `corrupt-config` LOUDLY (#210) rather than
+ * degrading to `none`. Writers likewise use {@link readRegistryFile} to refuse clobbering a corrupt
+ * file (#78).
  */
 async function loadRegistry(registryPath: string): Promise<Registry | null> {
   const load = await readRegistryFile(registryPath);
@@ -497,8 +540,10 @@ function matchRules(
  * 3. The unified ruleset ({@link Registry.rules}) — plus the legacy scope `allow`/`deny` folded in
  *    as sugar (ADR-0024 §3/§7) — most-specific match wins, deny breaks ties; a bare allow routes to
  *    `defaultBrain`. This pass is the scope gate: `denied` = out of scope, `none` = nothing here.
- * 4. `COMMONWEALTH_BRAIN_DIR` env fallback.
- * 5. `none`.
+ *    If the config file EXISTS but does not parse, we remember that (a `corrupt-config` result) —
+ *    rather than treating it as an empty ruleset — so a hand-edit typo surfaces loudly (#210).
+ * 4. `COMMONWEALTH_BRAIN_DIR` env fallback (still wins over a corrupt config).
+ * 5. `corrupt-config` when the file was unparseable and nothing above resolved; else `none`.
  *
  * The cwd's git identity is resolved once (and only when an identity rule is present), so
  * path-only registries never pay the git cost. Never throws on missing/unreadable files.
@@ -530,8 +575,11 @@ export async function resolveBrain(
   }
 
   // 3) The unified ruleset, plus the legacy scope allow/deny folded in as sugar (ADR-0024 §3/§7):
-  //    this single pass IS the scope gate now that `isInScope` is retired.
-  const registry = await loadRegistry(registryPath);
+  //    this single pass IS the scope gate now that `isInScope` is retired. We read the file
+  //    directly (not via `loadRegistry`) so a present-but-unparseable file is distinguishable from
+  //    a missing one: we remember it and, if nothing else resolves, surface it LOUDLY (#210).
+  const load = await readRegistryFile(registryPath);
+  const registry = load.status === "ok" ? load.registry : null;
   const rules = registry
     ? dropShadowedShared([...(registry.rules ?? []), ...scopeSugarRules(registry)])
     : [];
@@ -543,20 +591,26 @@ export async function resolveBrain(
     if (result) return result;
   }
 
-  // 4) Env fallback.
+  // 4) Env fallback — an explicit pin still wins over a corrupt config (the config is broken, but
+  //    the operator told us exactly which brain to use).
   const env = opts.env ?? process.env.COMMONWEALTH_BRAIN_DIR;
   if (env && env.length > 0) return { kind: "brain", brain: path.resolve(env) };
 
-  // 5) Nothing matched.
+  // 5) Nothing above resolved. A file that EXISTS but didn't parse is a loud `corrupt-config` (so
+  //    a one-char hand-edit typo can't silently disable capture, #210); otherwise nothing is here.
+  if (load.status === "corrupt") {
+    return { kind: "corrupt-config", path: registryPath, error: load.error };
+  }
   return { kind: "none" };
 }
 
 /**
  * Like {@link resolveBrainDir}, but returns the full {@link ResolvedBrain} — the brain path AND
  * the git `remote` to clone from when it came from a registry mapping (ADR-0019). A thin wrapper
- * over {@link resolveBrain}: both `denied` and `none` collapse to `null` (no brain), preserving
- * the pre-ADR-0024 contract for callers that only care "which brain, if any". Callers that must
- * distinguish an explicit deny from an unmapped dir (the scope gate) use {@link resolveBrain}.
+ * over {@link resolveBrain}: `denied`, `none`, and `corrupt-config` all collapse to `null` (no
+ * brain), preserving the pre-ADR-0024 contract for callers that only care "which brain, if any".
+ * Callers that must distinguish an explicit deny, an unmapped dir, or a broken config file (the
+ * scope gate / the loud corrupt-config signal, #210) use {@link resolveBrain}.
  * Still side-effect-free: it never clones — that is the caller's explicit act.
  */
 export async function resolveBrainMapping(

@@ -89,27 +89,40 @@ function candidateCwds(inputCwd) {
  * Resolve the session's working directory in ONE pass that is both routing and scope (ADR-0024 §3),
  * trying each {@link candidateCwds} entry in order:
  *  - the first candidate that resolves to a `brain` wins (in scope + routed) → `{ kind: "brain", cwd, brain }`;
+ *  - else, if any candidate's config file was present-but-unparseable (`corrupt-config`, #210), report
+ *    that → `{ kind: "corrupt-config", cwd, path, error }` (so SessionEnd surfaces a "fix your config"
+ *    receipt, not the misleading "no brain mapped — add it to your registry");
  *  - else, if any candidate was an explicit `denied` (a deny rule — the privacy gate), report that
  *    → `{ kind: "denied", cwd }` (so SessionEnd surfaces an out-of-scope receipt, not "no brain");
  *  - else nothing was configured for any candidate → `{ kind: "none" }`.
  *
- * A brain-mapped fallback still wins over an earlier denied candidate (matching the pre-ADR-0024
- * behavior where a denied cwd fell through to `$CLAUDE_PROJECT_DIR` / `process.cwd()`).
+ * A brain-mapped fallback still wins over an earlier denied/corrupt candidate (matching the
+ * pre-ADR-0024 behavior where a denied cwd fell through to `$CLAUDE_PROJECT_DIR` / `process.cwd()`).
  *
  * @param {string} inputCwd  The hook-supplied cwd (already validated as a non-empty string).
  * @param {object} deps      See the contract at the top of this file.
- * @returns {Promise<{kind: "brain", cwd: string, brain: string} | {kind: "denied", cwd: string} | {kind: "none"}>}
+ * @returns {Promise<{kind: "brain", cwd: string, brain: string} | {kind: "corrupt-config", cwd: string, path: string, error: string} | {kind: "denied", cwd: string} | {kind: "none"}>}
  */
 async function resolveSessionBrain(inputCwd, deps) {
   let denied = null;
+  let corrupt = null;
   for (const cwd of candidateCwds(inputCwd)) {
     const r = await deps.resolveBrain(cwd);
     if (r && r.kind === "brain" && typeof r.brain === "string" && r.brain.length > 0) {
       return { kind: "brain", cwd, brain: r.brain };
     }
+    if (r && r.kind === "corrupt-config" && !corrupt) {
+      corrupt = {
+        kind: "corrupt-config",
+        cwd,
+        path: typeof r.path === "string" ? r.path : "",
+        error: typeof r.error === "string" ? r.error : "",
+      };
+    }
     if (r && r.kind === "denied" && !denied) denied = { kind: "denied", cwd };
   }
-  return denied ?? { kind: "none" };
+  // A broken config is a loud, actionable failure — surface it ahead of a deny/none silence.
+  return corrupt ?? denied ?? { kind: "none" };
 }
 
 /**
@@ -238,6 +251,17 @@ export async function sessionEnd(input, deps) {
     return { skipped: true, reason: "no-cwd" };
 
   const resolved = await resolveSessionBrain(inputCwd, deps);
+  if (resolved.kind === "corrupt-config") {
+    // The per-user config file exists but doesn't parse (#210). No brain resolved, so nothing was
+    // captured — but that's a BROKEN config, not "no brain here". Anchor a loud, actionable receipt
+    // to the cwd so the next SessionStart there tells the user to fix the file (never silent).
+    return await finishEnd(deps, resolved.cwd, {
+      skipped: true,
+      reason: "corrupt-config",
+      path: resolved.path,
+      error: resolved.error,
+    });
+  }
   if (resolved.kind === "denied") {
     // An explicit deny rule matched (the privacy gate) — out of scope. Anchor the receipt to the
     // denied cwd so the next SessionStart there explains the silence.
@@ -380,12 +404,22 @@ function renderCaptureReceipt(notes) {
  * WHAT was remembered (#204) — falling back to a bare count when structured notes are unavailable.
  * Pure function.
  *
- * @param {{skipped?: boolean, reason?: string, captured?: number, notes?: Array<{kind: string, title: string, promoted: boolean}>}} result
+ * @param {{skipped?: boolean, reason?: string, path?: string, error?: string, captured?: number, notes?: Array<{kind: string, title: string, promoted: boolean}>}} result
  * @returns {string | null}
  */
 export function endReceiptMessage(result) {
   if (!result || typeof result !== "object") return null;
   if (result.skipped) {
+    if (result.reason === "corrupt-config") {
+      // A broken config file (#210): a hand-edit typo makes every reader treat the brain as missing
+      // and silently disables ALL capture. Name the file and the parse error and say how to fix it —
+      // never let a one-char typo turn the flagship feature off invisibly.
+      const where =
+        typeof result.path === "string" && result.path.length > 0 ? ` (${result.path})` : "";
+      const why =
+        typeof result.error === "string" && result.error.length > 0 ? ` — ${result.error}` : "";
+      return `🧠 Commonwealth: your config file${where} is unparseable${why}, so NO brain resolved and nothing was captured. Fix the JSON (a stray trailing comma is the usual cause) or restore it from a \`.corrupt-<ts>\` backup, then run \`commonwealth doctor\` to confirm.`;
+    }
     if (result.reason === "no-brain") {
       return "🧠 Commonwealth: the last session ended in a directory with no team brain mapped, so nothing was captured. Add a rule with `commonwealth registry` (or run `commonwealth add`) to capture here.";
     }
@@ -942,22 +976,48 @@ function parseBrainField(raw) {
 }
 
 /**
- * Load the config's rules + defaultBrain (ADR-0024), with the legacy scope `allow`/`deny` folded in
- * as sugar `prefix` rules (a `deny` entry → deny rule; an `allow` entry → bare-allow rule) so this
- * single pass IS the scope gate (ADR-0024 §3, retiring `isInScope`). Sugar rules are appended AFTER
- * the authored rules so an authored `brain` route wins any exact-specificity tie. Null on
- * missing/corrupt. Mirror of core's registry parsing (kept in sync with packages/core/src/registry.ts).
+ * Turn a `JSON.parse` failure into a human message that names the failure LOCATION when the runtime
+ * supplies a byte position (deriving `line`/`column` from `raw`); otherwise the raw message. Mirror
+ * of core's `describeJsonError` (keep in sync with packages/core/src/registry.ts).
+ */
+function describeJsonError(err, raw) {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/line \d+ column \d+/i.test(msg)) return msg;
+  const posMatch = msg.match(/position (\d+)/i);
+  if (!posMatch) return msg;
+  const pos = Number.parseInt(posMatch[1], 10);
+  if (!Number.isFinite(pos)) return msg;
+  const upto = raw.slice(0, pos);
+  const line = upto.split("\n").length;
+  const column = pos - upto.lastIndexOf("\n");
+  return `${msg} (line ${line} column ${column})`;
+}
+
+/**
+ * Load + CLASSIFY the config's rules + defaultBrain (ADR-0024), with the legacy scope `allow`/`deny`
+ * folded in as sugar `prefix` rules (a `deny` entry → deny rule; an `allow` entry → bare-allow rule)
+ * so this single pass IS the scope gate (ADR-0024 §3, retiring `isInScope`). Sugar rules are appended
+ * AFTER the authored rules so an authored `brain` route wins any exact-specificity tie.
+ *
+ * Returns `{ status: "missing" }` when there is no file (safe to start empty), `{ status: "corrupt",
+ * error }` when the file EXISTS but doesn't parse as a JSON object (a hand-edit typo — must NOT be
+ * treated as empty, #210), or `{ status: "ok", rules, defaultBrain }`. Mirror of core's registry
+ * parsing (kept in sync with packages/core/src/registry.ts).
  */
 async function loadRegistryData(registryPath) {
   const raw = await readFileOrNull(registryPath);
-  if (raw === null) return null;
+  if (raw === null) return { status: "missing" };
   let parsed;
   try {
     parsed = JSON.parse(raw);
-  } catch {
-    return null;
+  } catch (err) {
+    return { status: "corrupt", error: describeJsonError(err, raw) };
   }
-  if (!parsed || typeof parsed !== "object") return null;
+  // Parsed-but-not-an-object (`[]`, `"x"`, `42`, `null`) is not a usable config — surface it loudly
+  // rather than silently degrading to "no rules" (#210). `{}` stays valid/empty.
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { status: "corrupt", error: "config must be a JSON object" };
+  }
   const rules = Array.isArray(parsed.rules)
     ? parsed.rules.filter((r) => r && typeof r === "object" && (r.repo || r.org || r.prefix))
     : [];
@@ -965,7 +1025,7 @@ async function loadRegistryData(registryPath) {
     Array.isArray(v) ? v.filter((e) => typeof e === "string" && e.length > 0) : [];
   for (const d of strList(parsed.deny)) rules.push({ prefix: d, deny: true });
   for (const a of strList(parsed.allow)) rules.push({ prefix: a });
-  return { rules, defaultBrain: parseBrainField(parsed.defaultBrain) };
+  return { status: "ok", rules, defaultBrain: parseBrainField(parsed.defaultBrain) };
 }
 
 /** Reduce a git remote URL to `owner/repo` (mirror of core's slugFromRemote, ADR-0015). */
@@ -1102,11 +1162,14 @@ function matchRulesJs(start, slug, rules, defaultBrain) {
 
 /**
  * Resolve `startDir` in ONE pass that is both routing AND scope (ADR-0024 §3), returning the
- * three-way outcome `{ kind: "brain", brain } | { kind: "denied" } | { kind: "none" }`. Order:
- * (1) nearest valid `.commonwealth/brain` marker (#68) → (2) nearest ancestor that is itself a
- * brain (#74) → (3) the unified ruleset, with the legacy scope allow/deny folded in as sugar
- * (ADR-0024 §3/§7): most-specific wins, deny → `denied` → (4) `$COMMONWEALTH_BRAIN_DIR` → (5) `none`.
- * Mirror of core's `resolveBrain`; never throws. Exported for tests so the real path is covered.
+ * outcome `{ kind: "brain", brain } | { kind: "denied" } | { kind: "none" } | { kind:
+ * "corrupt-config", path, error }`. Order: (1) nearest valid `.commonwealth/brain` marker (#68) →
+ * (2) nearest ancestor that is itself a brain (#74) → (3) the unified ruleset, with the legacy
+ * scope allow/deny folded in as sugar (ADR-0024 §3/§7): most-specific wins, deny → `denied` → (4)
+ * `$COMMONWEALTH_BRAIN_DIR` → (5) `corrupt-config` when the file existed but was unparseable and
+ * nothing above resolved (#210), else `none`. Explicit pins (marker, self-is-brain, env) still win
+ * over a corrupt config. Mirror of core's `resolveBrain`; never throws. Exported for tests so the
+ * REAL production path (not a stubbed dep) is covered.
  */
 export async function realResolveBrain(startDir) {
   if (typeof startDir !== "string" || startDir.length === 0) return { kind: "none" };
@@ -1128,21 +1191,29 @@ export async function realResolveBrain(startDir) {
     if (await isFile(path.join(dir, BRAIN_IDENTITY_REL))) return { kind: "brain", brain: dir };
   }
 
-  const reg = await loadRegistryData(resolveRegistryPath());
-  if (reg) {
-    const rules = dropShadowedSharedJs(reg.rules);
+  const registryPath = resolveRegistryPath();
+  const load = await loadRegistryData(registryPath);
+  if (load.status === "ok") {
+    const rules = dropShadowedSharedJs(load.rules);
     if (rules.length > 0) {
       // Resolve git identity once, and only when an identity rule could use it (path-only is cheap).
       const needsSlug = rules.some((r) => (r.repo && r.repo !== "*") || (r.org && r.org !== "*"));
       const slug = needsSlug ? await gitOriginSlug(start) : null;
-      const m = matchRulesJs(start, slug, rules, reg.defaultBrain);
+      const m = matchRulesJs(start, slug, rules, load.defaultBrain);
       // A matched rule STOPS resolution (brain / denied / none) — never falls through to env.
       if (m) return m;
     }
   }
 
+  // Env pin still wins over a corrupt config — the operator told us exactly which brain to use.
   const env = process.env.COMMONWEALTH_BRAIN_DIR;
   if (env && env.length > 0) return { kind: "brain", brain: path.resolve(env) };
+
+  // A file that EXISTS but didn't parse is a loud `corrupt-config` (so a one-char hand-edit typo
+  // can't silently disable capture, #210); a missing file is a plain `none`.
+  if (load.status === "corrupt") {
+    return { kind: "corrupt-config", path: registryPath, error: load.error };
+  }
   return { kind: "none" };
 }
 

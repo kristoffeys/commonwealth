@@ -1,23 +1,36 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { resolveBrainDir } from "./brain.js";
+import { resolveServerBrain } from "./brain.js";
 import { createServer } from "./server.js";
 
 /**
  * Commonwealth MCP server entry point. Resolves the brain (explicit `COMMONWEALTH_BRAIN_DIR`
- * → `@cmnwlth/core`'s registry against cwd → `null`) once at startup, builds the server
- * against it, and wires a stdio transport. When no brain resolves the server still starts,
- * but its tools report "no brain configured" rather than silently using the cwd (#64). The
- * transport owns stdout for the JSON-RPC stream, so all diagnostics go to stderr.
+ * → `@cmnwlth/core`'s registry against cwd → `none`/`corrupt-config`) once at startup, builds the
+ * server against it, and wires a stdio transport. When no brain resolves the server still starts,
+ * but its tools report why — "no brain configured" (#64), or, when the config file is broken, that
+ * it is unparseable and how to fix it (#210) — rather than silently using the cwd. The transport
+ * owns stdout for the JSON-RPC stream, so all diagnostics go to stderr.
  */
 async function main(): Promise<void> {
-  const brainDir = await resolveBrainDir();
-  const server = createServer(brainDir);
+  const resolved = await resolveServerBrain();
+  const server =
+    resolved.kind === "brain"
+      ? createServer(resolved.brain)
+      : resolved.kind === "corrupt-config"
+        ? createServer(null, {
+            kind: "corrupt-config",
+            path: resolved.path,
+            error: resolved.error,
+          })
+        : createServer(null, { kind: "none" });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(
-    brainDir
-      ? `[commonwealth-mcp] connected over stdio (brain: ${brainDir})`
-      : `[commonwealth-mcp] connected over stdio (no brain configured for ${process.cwd()}; ` +
+    resolved.kind === "brain"
+      ? `[commonwealth-mcp] connected over stdio (brain: ${resolved.brain})`
+      : resolved.kind === "corrupt-config"
+        ? `[commonwealth-mcp] connected over stdio (config at ${resolved.path} is unparseable: ` +
+          `${resolved.error}; fix or restore it — tools will report this until you do)`
+        : `[commonwealth-mcp] connected over stdio (no brain configured for ${process.cwd()}; ` +
           `tools will report this until you run \`commonwealth init\` or add a registry mapping)`,
   );
 }

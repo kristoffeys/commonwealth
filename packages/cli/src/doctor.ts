@@ -2,7 +2,12 @@ import { spawn, spawnSync } from "node:child_process";
 import { promises as fs, type Stats } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { resolveBrain, resolveBrainDir, resolveBrainMapping } from "@cmnwlth/core";
+import {
+  defaultRegistryPath,
+  resolveBrain,
+  resolveBrainDir,
+  resolveBrainMapping,
+} from "@cmnwlth/core";
 
 /**
  * `commonwealth doctor` — full-chain install/sync diagnosis (#134). The Commonwealth setup spans
@@ -70,6 +75,14 @@ export interface DoctorEnv {
    * a missing brain reads as a hard config error rather than a "not cloned yet" state.
    */
   resolveRemote?: (cwd: string) => Promise<string | null>;
+  /**
+   * Inspect the per-user config file for parseability (#210). Returns `null` when no config file
+   * exists yet (a valid pre-`init` state — nothing to report); otherwise the resolved `path`, whether
+   * it parses (`ok`), and the JSON parse `error` (with position, when V8 supplies it) when it does
+   * not. This is the check that was ABSENT during the outage: a one-char hand-edit typo made every
+   * reader treat the brain as missing and silently disabled capture, with `doctor` reporting nothing.
+   */
+  configParse: () => Promise<{ path: string; ok: boolean; error?: string } | null>;
   /** True if the `commonwealth` plugin is installed; null when it can't be determined. */
   pluginInstalled: () => boolean | null;
   /** Whether `pid` is a live process (`kill -0`). */
@@ -170,6 +183,23 @@ export function defaultDoctorEnv(cwd: string): DoctorEnv {
   const brainEnv = process.env.COMMONWEALTH_BRAIN_DIR;
   return {
     cwd,
+    // The per-user config file readers actually resolve (COMMONWEALTH_REGISTRY → COMMONWEALTH_CONFIG
+    // → ~/.commonwealth/config.json). Missing → null (fine); present-but-unparseable → the loud fail.
+    configParse: async () => {
+      const p = defaultRegistryPath();
+      let raw: string;
+      try {
+        raw = await fs.readFile(p, "utf8");
+      } catch {
+        return null; // no file yet — a valid pre-init state, nothing to report
+      }
+      try {
+        JSON.parse(raw);
+        return { path: p, ok: true };
+      } catch (err) {
+        return { path: p, ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
     // `$COMMONWEALTH_BRAIN_DIR` pins the brain (resolution layer 4); otherwise walk the registry.
     resolveBrain: (dir) =>
       brainEnv && brainEnv.length > 0
@@ -177,8 +207,13 @@ export function defaultDoctorEnv(cwd: string): DoctorEnv {
         : resolveBrainDir(dir),
     // Scope reads the ruleset directly (never env-pinned): the single ADR-0024 §3 pass that folds
     // in the legacy allow/deny. `scopeConfigPath` (→ `$COMMONWEALTH_CONFIG`) selects the file.
-    resolveScope: async (dir) =>
-      (await resolveBrain(dir, { registryPath: process.env.COMMONWEALTH_CONFIG })).kind,
+    resolveScope: async (dir) => {
+      // A corrupt config surfaces via the dedicated config-parse check (#210); for scope it just
+      // degrades to "none" (undeterminable) rather than widening this three-way result.
+      const kind = (await resolveBrain(dir, { registryPath: process.env.COMMONWEALTH_CONFIG }))
+        .kind;
+      return kind === "corrupt-config" ? "none" : kind;
+    },
     resolveRemote: async (dir) => {
       if (brainEnv && brainEnv.length > 0) return null; // env-pinned brains carry no mapping remote
       return (await resolveBrainMapping(dir))?.remote ?? null;
@@ -272,7 +307,30 @@ export async function diagnose(
           },
   );
 
-  // 2) Brain resolution for the cwd. A miss short-circuits every brain-scoped link below.
+  // 2) Config parse (#210): a present-but-unparseable per-user config makes EVERY reader treat the
+  //    brain as missing — capture silently OFF for days with zero signal. This is exactly the class
+  //    of failure `doctor` reported nothing about during the outage. It does NOT short-circuit: an
+  //    env-pinned brain can still resolve past a broken config, and the chain below stays useful.
+  const config = await env.configParse();
+  if (config && !config.ok) {
+    checks.push({
+      id: "config",
+      label: "Config",
+      status: "fail",
+      detail: `Config file ${config.path} is unparseable: ${config.error}. Every reader treats the brain as missing, so capture is OFF.`,
+      fix: `fix the JSON (a stray trailing comma is the usual cause), or restore ${config.path} from a .corrupt-<ts> backup`,
+    });
+  } else if (config) {
+    checks.push({
+      id: "config",
+      label: "Config",
+      status: "ok",
+      detail: `Config file ${config.path} parses.`,
+    });
+  }
+  // config === null → no file yet (valid pre-init state); say nothing.
+
+  // 3) Brain resolution for the cwd. A miss short-circuits every brain-scoped link below.
   const brain = await env.resolveBrain(cwd);
   if (!brain) {
     checks.push({
