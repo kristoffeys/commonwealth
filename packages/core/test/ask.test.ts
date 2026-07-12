@@ -3,7 +3,15 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { askBrain, buildIndex, initBrain, writeNote } from "../src/index.js";
+import {
+  askBrain,
+  buildIndex,
+  initBrain,
+  loadBrainConfig,
+  saveBrainConfig,
+  search,
+  writeNote,
+} from "../src/index.js";
 
 /**
  * "Ask the brain" retrieval (ADR-0020, #108). Verifies citation-anchored, budget-bounded retrieval
@@ -50,6 +58,45 @@ describe("askBrain", () => {
     expect(result.coverage.matched).toBe(false);
     expect(result.hits).toEqual([]);
     expect(result.coverage.topScore).toBe(0);
+  });
+
+  it("coverage.matched is true when only a semantic (paraphrase) hit exists (ADR-0025, #213)", async () => {
+    // A note about Shopware; the question shares only the concept, so FTS5-AND finds nothing and
+    // pre-hybrid ask would report matched:false. Hybrid (inherited from config) must flip that.
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Storefront platform",
+      body: "The commerce site runs on Shopware after last year's migration.",
+    });
+    // Configure a hosted embeddings provider and stub fetch so the keyword→axis vectors are
+    // deterministic: "shopware" → axis 0, everything else → the zero vector (no semantic match).
+    const config = await loadBrainConfig(dir);
+    config.embeddings = { provider: "hosted", threshold: 0.85, endpoint: "https://embed.test/v1" };
+    await saveBrainConfig(dir, config);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: string, init: { body: string }) => {
+      const { input } = JSON.parse(init.body) as { input: string[] };
+      const axis = (t: string) =>
+        t.toLowerCase().includes("shopware") ? [1, 0, 0, 0] : [0, 0, 0, 0];
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({ data: input.map((t) => ({ embedding: axis(t) })) }),
+      };
+    }) as unknown as typeof fetch;
+    try {
+      await buildIndex(dir); // resolves the hosted provider → vectors populated
+      const q = "did we ever use shopware before?";
+      // Lexical-only proves the gap: FTS5-AND on the stopword-heavy query matches nothing.
+      expect(await search(dir, q, { embedder: null })).toEqual([]);
+      const result = await askBrain(dir, q);
+      expect(result.coverage.matched).toBe(true);
+      expect(result.coverage.topScore).toBeGreaterThan(0);
+      expect(result.hits[0]!.title).toBe("Storefront platform");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   it("honors the character budget, keeping the most relevant hits", async () => {

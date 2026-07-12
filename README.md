@@ -285,6 +285,12 @@ commonwealth config set semanticDedup true   # smarter dedup (see below)
 - **`semanticDedup`** (default **off**) — also catch near-duplicate notes phrased differently
   ("auth uses JWT" vs "we authenticate with bearer tokens"), using embeddings. Runs on-machine by
   default (no note text leaves the box) and needs an optional model package installed on enable.
+- **`semanticSearch`** (default **on**) — hybrid retrieval: when an embeddings provider is
+  configured, `recall`/`ask`/search fuse a semantic (embedding) ranking with the lexical one, so
+  paraphrases and stopword-heavy questions ("did we use Shopware before?") still find the note.
+  Inert for brains with no provider (behaves exactly like lexical-only), and set it `false` to force
+  lexical-only even with a provider. Reuses the same vectors as `semanticDedup`, so existing brains
+  need one index rebuild to backfill vectors for notes captured before either was enabled.
 
 ## Docs
 

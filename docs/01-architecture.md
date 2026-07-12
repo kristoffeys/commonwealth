@@ -131,7 +131,11 @@ product. It runs in four stages, wired into Claude Code lifecycle hooks + MCP.
 - **Relevance-gated injection** — the genuinely novel bit: don't dump the whole brain
   into context; surface the notes relevant to _what this teammate is doing right now_
   (current project/files/task). This is the "auto push/fetch where it sees fit" from
-  the brief, made concrete.
+  the brief, made concrete. Relevance runs through core `search()`, which is **hybrid**
+  when an embeddings provider is configured (ADR-0025): a lexical BM25 list fused with a
+  semantic (cosine) list over the per-note vectors, so paraphrases and stopword-heavy
+  questions still surface. Degrades to lexical-only with no provider — same for `ask`,
+  `recall`, and the MCP `search` tool, which all inherit it.
 
 ## Components
 
