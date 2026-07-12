@@ -108,9 +108,9 @@ async function loadLocalEmbedder(model: string = DEFAULT_LOCAL_MODEL): Promise<E
     mod = (await import(pkg)) as typeof mod;
   } catch {
     throw new Error(
-      `semanticDedup is enabled with the "local" embeddings provider, but the optional model ` +
-        `package "${pkg}" is not installed. Install it on the brain host (e.g. ` +
-        `\`pnpm add ${pkg}\`), or set embeddings.provider to "hosted"/"none" in ` +
+      `a semantic feature (semanticDedup / semanticSearch) is enabled with the "local" embeddings ` +
+        `provider, but the optional model package "${pkg}" is not installed. Install it on the ` +
+        `brain host (e.g. \`pnpm add ${pkg}\`), or set embeddings.provider to "hosted"/"none" in ` +
         `.commonwealth/config.json.`,
     );
   }

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Embedder } from "../src/embed.js";
+import { saveBrainConfig, defaultBrainConfig } from "../src/config.js";
 import { buildIndex, loadVectors, search } from "../src/index-db.js";
 import { writeNote } from "../src/notes.js";
 
@@ -68,6 +69,47 @@ describe("buildIndex vectors table (ADR-0021)", () => {
 
   it("returns an empty map when no index has been built yet", async () => {
     expect((await loadVectors(dir)).size).toBe(0);
+  });
+
+  it("populates vectors when only semanticSearch is on (not just semanticDedup) (ADR-0025)", async () => {
+    await writeNote(dir, { kind: "memory", title: "One", body: "a durable fact" });
+    await writeNote(dir, { kind: "memory", title: "Two", body: "another durable fact" });
+
+    // A resolvable-without-a-package provider: point at a "hosted" endpoint and stub global fetch,
+    // so buildIndex's CONFIG-resolution branch (no explicit embedder) actually runs embedProvider.
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: string, init: { body: string }) => {
+      const { input } = JSON.parse(init.body) as { input: string[] };
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({ data: input.map(() => ({ embedding: [1, 0, 0, 0] })) }),
+      };
+    }) as unknown as typeof fetch;
+    try {
+      // semanticDedup OFF, semanticSearch ON → the widened predicate must still want vectors.
+      const config = defaultBrainConfig("test");
+      config.features.semanticDedup = false;
+      config.features.semanticSearch = true;
+      config.embeddings = {
+        provider: "hosted",
+        threshold: 0.85,
+        endpoint: "https://embed.test/v1",
+      };
+      await saveBrainConfig(dir, config);
+
+      const result = await buildIndex(dir); // no explicit embedder → resolve from config
+      expect(result.embedded).toBe(2);
+      expect((await loadVectors(dir)).size).toBe(2);
+
+      // Control: with BOTH flags off, the same provider is never resolved → vector-free build.
+      config.features.semanticSearch = false;
+      await saveBrainConfig(dir, config);
+      expect((await buildIndex(dir)).embedded).toBe(0);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   it("is idempotent: rebuilding yields the same vectors, and lexical search still works", async () => {

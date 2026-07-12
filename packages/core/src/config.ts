@@ -109,6 +109,16 @@ export const FEATURE_FLAGS: ReadonlyArray<{
       "model package installed on the host.",
     default: false,
   },
+  {
+    name: "semanticSearch",
+    description:
+      "Hybrid semantic retrieval in search() when an embeddings provider is configured (ADR-0025, " +
+      "reusing the ADR-0021 vectors): rank query embeddings alongside the lexical BM25 list and " +
+      "fuse them, so ask/recall/search/injection become paraphrase-proof. Default ON, but inert " +
+      "unless embeddings.provider resolves — so unconfigured brains are unchanged; set false to " +
+      "force lexical-only even with a provider.",
+    default: true,
+  },
 ];
 
 /** Default embeddings config (ADR-0021): local provider, inert until `semanticDedup` is on. */

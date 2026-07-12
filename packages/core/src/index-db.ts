@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { loadBrainConfig } from "./config.js";
-import { embedProvider, type Embedder } from "./embed.js";
+import { cosineSimilarity, embedProvider, type Embedder } from "./embed.js";
 import { listNotes } from "./notes.js";
 import { type Note, type NoteKind } from "./schema.js";
 
@@ -17,6 +17,18 @@ export interface SearchOptions {
    * versions the consolidation/supersede path replaced (#133). Set true for history/audit views.
    */
   includeSuperseded?: boolean;
+  /**
+   * Embedder for hybrid semantic retrieval (ADR-0025), mirroring {@link BuildIndexOptions}: pass
+   * `null` to force lexical-only, an explicit {@link Embedder} (tests) to bypass config, or omit
+   * to resolve from the brain config IFF the `semanticSearch` flag is on. Independent of
+   * `semanticDedup`.
+   */
+  embedder?: Embedder | null;
+  /**
+   * Hard timeout (ms) for embedding the query before falling back to lexical-only. Default
+   * {@link EMBED_QUERY_TIMEOUT_MS}; exposed mainly so tests can exercise the timeout path.
+   */
+  embedTimeoutMs?: number;
 }
 
 export interface SearchResult {
@@ -192,12 +204,16 @@ async function computeVectors(
       embedder = opts.embedder ?? null;
     } else {
       const config = await loadBrainConfig(brainDir);
-      embedder = config.features.semanticDedup ? await embedProvider(config.embeddings) : null;
+      // Vectors back BOTH the dedup gate (ADR-0021) and hybrid retrieval (ADR-0025), so populate
+      // them when EITHER feature is on and a provider resolves.
+      const wantsVectors = config.features.semanticDedup || config.features.semanticSearch;
+      embedder = wantsVectors ? await embedProvider(config.embeddings) : null;
     }
   } catch (err) {
-    console.error(
-      `[commonwealth] semantic index skipped (embedder unavailable): ${errMessage(err)}`,
-    );
+    // With semanticSearch default-on, an unconfigured brain (default `local` provider, model
+    // package absent) would otherwise log this on EVERY rebuild/sync. Warn once per process so a
+    // genuine misconfiguration stays visible without spamming the common not-installed case.
+    warnEmbedderUnavailableOnce(errMessage(err));
     return [];
   }
   if (!embedder || notes.length === 0) return [];
@@ -221,6 +237,16 @@ async function computeVectors(
 /** Message text of an unknown thrown value. */
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Distinct "embedder unavailable" messages already logged this process (dedupe the noise). */
+const embedderWarned = new Set<string>();
+
+/** Log an "embedder unavailable" warning at most once per distinct message per process. */
+function warnEmbedderUnavailableOnce(message: string): void {
+  if (embedderWarned.has(message)) return;
+  embedderWarned.add(message);
+  console.error(`[commonwealth] semantic index skipped (embedder unavailable): ${message}`);
 }
 
 /**
@@ -285,11 +311,119 @@ function toMatchQuery(query: string): string {
     .join(" ");
 }
 
+/** Hard cap on how long we wait for the query embedding before falling back to lexical (ADR-0025). */
+const EMBED_QUERY_TIMEOUT_MS = 3000;
+/** How many cosine candidates to fuse with the lexical list (full scan is fine at brain scale). */
+const SEMANTIC_CANDIDATE_CAP = 50;
+/** Standard reciprocal-rank-fusion constant (k=60): score += 1/(k + rank). */
+const RRF_K = 60;
+
+/** Per-note metadata read from the FTS table, used to filter and label semantic candidates. */
+interface NoteMeta {
+  kind: NoteKind;
+  title: string;
+  path: string;
+  source: string;
+  status: string;
+  superseded: boolean;
+}
+
 /**
- * Lexical (FTS5) search over title, body, and tags. Builds the index on first use if it
- * is missing, but does NOT detect subsequent note additions/edits/removals — the index
- * refreshes only when {@link buildIndex} is called. Callers that need fresh results after
- * writes should rebuild first.
+ * Resolve the ingredients for hybrid semantic retrieval, or `null` to fall back to lexical-only.
+ * Returns null (never throws) for every degradation path (ADR-0025): flag off, no provider,
+ * no/empty vectors table, or an embed call that throws OR exceeds the timeout — so semantic search
+ * can only ever *add* to the lexical result, never break or slow it past a bounded cliff.
+ */
+async function resolveSemantic(
+  brainDir: string,
+  query: string,
+  opts: SearchOptions | undefined,
+): Promise<{ queryVec: Float32Array; vectors: Map<string, Float32Array> } | null> {
+  let embedder: Embedder | null;
+  if (opts && "embedder" in opts) {
+    // Explicit injection (tests) bypasses config entirely, mirroring buildIndex: null = force off.
+    embedder = opts.embedder ?? null;
+  } else {
+    embedder = await resolveConfiguredEmbedder(brainDir);
+  }
+  if (!embedder) return null;
+
+  const vectors = await loadVectors(brainDir);
+  if (vectors.size === 0) return null;
+
+  const timeoutMs = opts?.embedTimeoutMs ?? EMBED_QUERY_TIMEOUT_MS;
+  try {
+    const vecs = await withTimeout(embedder.embed([query]), timeoutMs);
+    const queryVec = vecs[0];
+    if (!queryVec || queryVec.length === 0) return null;
+    return { queryVec, vectors };
+  } catch {
+    // embed() threw, or the timeout won the race → lexical-only.
+    return null;
+  }
+}
+
+/**
+ * Per-process cache of the config-resolved query embedder, keyed by brain + embeddings config.
+ * Loading the `local` provider imports and warms a model pipeline (seconds) — without this, a
+ * long-lived host (the MCP server) would pay that on every search. Failures resolve to `null` so a
+ * missing model package degrades to lexical-only without re-attempting the costly import each call.
+ */
+const configuredEmbedderCache = new Map<string, Promise<Embedder | null>>();
+
+/** Resolve the query embedder from a brain's config when `semanticSearch` is on (cached). */
+async function resolveConfiguredEmbedder(brainDir: string): Promise<Embedder | null> {
+  let config;
+  try {
+    config = await loadBrainConfig(brainDir);
+  } catch {
+    return null;
+  }
+  if (!config.features.semanticSearch) return null;
+  const key = `${path.resolve(brainDir)}::${JSON.stringify(config.embeddings)}`;
+  let resolved = configuredEmbedderCache.get(key);
+  if (!resolved) {
+    // Convert any resolution error (e.g. local model package absent) to null and cache it, so the
+    // expensive/failing import runs at most once per process per config.
+    resolved = embedProvider(config.embeddings).catch(() => null);
+    configuredEmbedderCache.set(key, resolved);
+  }
+  return resolved;
+}
+
+/** Resolve `p`, or reject once `ms` elapses — bounds the semantic path's added latency. */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("embed timeout")), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      },
+    );
+  });
+}
+
+/**
+ * Lexical + semantic hybrid search over the derived index (ADR-0025). Builds the index on first
+ * use if it is missing, but does NOT detect subsequent note additions/edits/removals — the index
+ * refreshes only when {@link buildIndex} is called. Callers that need fresh results after writes
+ * should rebuild first.
+ *
+ * When an embeddings provider is configured and the `semanticSearch` flag is on, the BM25 list is
+ * fused with a cosine-ranked list (over the per-note `vectors` table) via reciprocal-rank fusion,
+ * so paraphrases and stopword-heavy questions that FTS5's implicit-AND misses still retrieve. All
+ * degradation paths (no provider, no vectors, embed failure/timeout) return exactly the lexical
+ * result. Semantic candidates are filtered by the SAME note metadata (kind/source/superseded) as
+ * lexical hits, and stale notes stay demoted below fresh ones after fusion.
+ *
+ * NOTE: with the semantic path active, `score` is the RRF value (Σ 1/(60+rank) over the lists a
+ * note appears in), NOT the negated BM25 of the lexical-only path. It remains strictly ordinal —
+ * higher = better — which is all callers rely on (coverage checks `> 0`, never its magnitude).
  */
 export async function search(
   brainDir: string,
@@ -321,56 +455,225 @@ export async function search(
   if (match === "") return [];
 
   const limit = opts?.limit ?? 20;
+  // Resolve the semantic ingredients BEFORE opening the search db (loadVectors uses its own
+  // connection). Any failure yields null → the untouched lexical path below.
+  const semantic = await resolveSemantic(brainDir, query, opts);
+
   const db = new Database(dbPath(brainDir), { readonly: true });
   try {
-    // snippet(): excerpt of the body column (index 4) with matches marked by [ ].
-    // bm25() returns a negative-ish score where lower = more relevant, so we negate
-    // it to expose a positive score where higher = better.
-    const params: (string | number)[] = [match];
-    let sql =
-      "SELECT id, kind, title, path, source, " +
-      "snippet(notes_fts, 4, '[', ']', '…', 12) AS snippet, " +
-      "-bm25(notes_fts) AS score " +
-      "FROM notes_fts WHERE notes_fts MATCH ?";
-    if (opts?.kind) {
-      sql += " AND kind = ?";
-      params.push(opts.kind);
-    }
-    if (opts?.source) {
-      sql += " AND source = ?";
-      params.push(opts.source);
-    }
-    // Canon, not archaeology (#133): drop superseded notes unless explicitly asked for. Because a
-    // note is superseded iff its OWN status/superseded_by says so, filtering per-note collapses a
-    // whole supersede chain to its head (every non-head link is itself superseded) — cycle-safe,
-    // no graph walk needed.
-    if (!opts?.includeSuperseded) sql += " AND superseded = 0";
-    // Demote stale notes below fresh ones; relevance (bm25) orders within each tier.
-    sql += " ORDER BY (status = 'stale'), bm25(notes_fts) LIMIT ?";
-    params.push(limit);
-
-    const rows = db.prepare(sql).all(...params) as Array<{
-      id: string;
-      kind: NoteKind;
-      title: string;
-      path: string;
-      source: string;
-      snippet: string;
-      score: number;
-    }>;
-
-    return rows.map((r) => ({
-      id: r.id,
-      kind: r.kind,
-      title: r.title,
-      path: r.path,
-      ...(r.source ? { source: r.source } : {}),
-      snippet: r.snippet,
-      score: r.score,
-    }));
+    if (!semantic) return lexicalSearch(db, match, opts, limit);
+    return hybridSearch(db, match, opts, limit, semantic);
   } finally {
     db.close();
   }
+}
+
+/**
+ * The lexical-only (FTS5) result — the pre-ADR-0025 behaviour, kept byte-identical for brains
+ * with no embeddings provider (or `semanticSearch` off). `score` is negated BM25 (higher = better).
+ */
+function lexicalSearch(
+  db: Database.Database,
+  match: string,
+  opts: SearchOptions | undefined,
+  limit: number,
+): SearchResult[] {
+  // snippet(): excerpt of the body column (index 4) with matches marked by [ ].
+  // bm25() returns a negative-ish score where lower = more relevant, so we negate
+  // it to expose a positive score where higher = better.
+  const params: (string | number)[] = [match];
+  let sql =
+    "SELECT id, kind, title, path, source, " +
+    "snippet(notes_fts, 4, '[', ']', '…', 12) AS snippet, " +
+    "-bm25(notes_fts) AS score " +
+    "FROM notes_fts WHERE notes_fts MATCH ?";
+  if (opts?.kind) {
+    sql += " AND kind = ?";
+    params.push(opts.kind);
+  }
+  if (opts?.source) {
+    sql += " AND source = ?";
+    params.push(opts.source);
+  }
+  // Canon, not archaeology (#133): drop superseded notes unless explicitly asked for. Because a
+  // note is superseded iff its OWN status/superseded_by says so, filtering per-note collapses a
+  // whole supersede chain to its head (every non-head link is itself superseded) — cycle-safe,
+  // no graph walk needed.
+  if (!opts?.includeSuperseded) sql += " AND superseded = 0";
+  // Demote stale notes below fresh ones; relevance (bm25) orders within each tier.
+  sql += " ORDER BY (status = 'stale'), bm25(notes_fts) LIMIT ?";
+  params.push(limit);
+
+  const rows = db.prepare(sql).all(...params) as Array<{
+    id: string;
+    kind: NoteKind;
+    title: string;
+    path: string;
+    source: string;
+    snippet: string;
+    score: number;
+  }>;
+
+  return rows.map((r) => ({
+    id: r.id,
+    kind: r.kind,
+    title: r.title,
+    path: r.path,
+    ...(r.source ? { source: r.source } : {}),
+    snippet: r.snippet,
+    score: r.score,
+  }));
+}
+
+/** One ranked lexical candidate for fusion: relevance-ordered (bm25), pre-stale-demotion. */
+interface LexCandidate {
+  id: string;
+  snippet: string;
+}
+
+/**
+ * Hybrid retrieval (ADR-0025): fuse the BM25-ordered lexical candidates with the cosine-ordered
+ * semantic candidates via RRF, apply stale demotion after fusion, and cap at `limit`.
+ */
+function hybridSearch(
+  db: Database.Database,
+  match: string,
+  opts: SearchOptions | undefined,
+  limit: number,
+  semantic: { queryVec: Float32Array; vectors: Map<string, Float32Array> },
+): SearchResult[] {
+  const includeSuperseded = opts?.includeSuperseded ?? false;
+  const kind = opts?.kind;
+  const source = opts?.source;
+
+  // Metadata for every indexed note — the single source of truth for filtering the semantic
+  // candidates identically to the lexical ones, and for labelling the fused output.
+  const meta = loadNoteMeta(db);
+
+  // Lexical candidates: relevance-ordered (bm25 only, no stale demotion — that is applied once,
+  // after fusion), filtered like the lexical path, capped at max(limit, CAP) to feed the fusion.
+  const cap = Math.max(limit, SEMANTIC_CANDIDATE_CAP);
+  const lexParams: (string | number)[] = [match];
+  let lexSql =
+    "SELECT id, snippet(notes_fts, 4, '[', ']', '…', 12) AS snippet " +
+    "FROM notes_fts WHERE notes_fts MATCH ?";
+  if (kind) {
+    lexSql += " AND kind = ?";
+    lexParams.push(kind);
+  }
+  if (source) {
+    lexSql += " AND source = ?";
+    lexParams.push(source);
+  }
+  if (!includeSuperseded) lexSql += " AND superseded = 0";
+  lexSql += " ORDER BY bm25(notes_fts) LIMIT ?";
+  lexParams.push(cap);
+  const lexRows = db.prepare(lexSql).all(...lexParams) as LexCandidate[];
+
+  // Semantic candidates: cosine over every vector, filtered by the SAME note metadata so a
+  // superseded / wrong-kind / wrong-source note can never resurface through the vector side.
+  const scored: Array<{ id: string; sim: number }> = [];
+  for (const [id, vec] of semantic.vectors) {
+    const m = meta.get(id);
+    if (!m) continue; // vector for a note no longer in the index
+    if (!includeSuperseded && m.superseded) continue;
+    if (kind && m.kind !== kind) continue;
+    if (source && m.source !== source) continue;
+    const sim = cosineSimilarity(semantic.queryVec, vec);
+    if (sim <= 0) continue;
+    scored.push({ id, sim });
+  }
+  scored.sort((a, b) => b.sim - a.sim || compareId(a.id, b.id));
+  const semRows = scored.slice(0, SEMANTIC_CANDIDATE_CAP);
+
+  // Reciprocal-rank fusion: a note's score is the sum of 1/(k + rank) over each list it appears
+  // in (rank is 1-based). RRF sidesteps normalising BM25's and cosine's incomparable scales.
+  const rrf = new Map<string, number>();
+  lexRows.forEach((r, i) => rrf.set(r.id, (rrf.get(r.id) ?? 0) + 1 / (RRF_K + i + 1)));
+  semRows.forEach((r, i) => rrf.set(r.id, (rrf.get(r.id) ?? 0) + 1 / (RRF_K + i + 1)));
+
+  const lexById = new Map(lexRows.map((r) => [r.id, r]));
+  // Bodies only for the semantic-only hits (no FTS snippet) that will actually be returned.
+  const bodies = loadBodies(
+    db,
+    [...rrf.keys()].filter((id) => !lexById.has(id)),
+  );
+
+  const fused = [...rrf.keys()].map((id) => {
+    const m = meta.get(id)!;
+    const snippet = lexById.get(id)?.snippet ?? plainSnippet(bodies.get(id) ?? "");
+    const result: SearchResult = {
+      id,
+      kind: m.kind,
+      title: m.title,
+      path: m.path,
+      ...(m.source ? { source: m.source } : {}),
+      snippet,
+      score: rrf.get(id)!,
+    };
+    return { result, stale: m.status === "stale" };
+  });
+
+  // Stale tier first (fresh above stale, matching the lexical ORDER BY), then RRF desc, then id
+  // for a deterministic, stable order.
+  fused.sort((a, b) => {
+    if (a.stale !== b.stale) return a.stale ? 1 : -1;
+    if (a.result.score !== b.result.score) return b.result.score - a.result.score;
+    return compareId(a.result.id, b.result.id);
+  });
+
+  return fused.slice(0, limit).map((f) => f.result);
+}
+
+/** Load id→metadata for every indexed note (cheap: no body). */
+function loadNoteMeta(db: Database.Database): Map<string, NoteMeta> {
+  const rows = db
+    .prepare("SELECT id, kind, title, path, source, status, superseded FROM notes_fts")
+    .all() as Array<{
+    id: string;
+    kind: NoteKind;
+    title: string;
+    path: string;
+    source: string;
+    status: string;
+    superseded: number | string;
+  }>;
+  const map = new Map<string, NoteMeta>();
+  for (const r of rows) {
+    map.set(r.id, {
+      kind: r.kind,
+      title: r.title,
+      path: r.path,
+      source: r.source,
+      status: r.status,
+      // FTS5 stores UNINDEXED columns as text, so the 0/1 flag round-trips as "0"/"1".
+      superseded: Number(r.superseded) === 1,
+    });
+  }
+  return map;
+}
+
+/** Fetch note bodies for `ids` (used to build a plain excerpt for semantic-only hits). */
+function loadBodies(db: Database.Database, ids: string[]): Map<string, string> {
+  const map = new Map<string, string>();
+  if (ids.length === 0) return map;
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = db
+    .prepare(`SELECT id, body FROM notes_fts WHERE id IN (${placeholders})`)
+    .all(...ids) as Array<{ id: string; body: string }>;
+  for (const r of rows) map.set(r.id, r.body);
+  return map;
+}
+
+/** A plain (unhighlighted) leading excerpt of a note body, for semantic hits with no FTS match. */
+function plainSnippet(body: string): string {
+  const text = body.replace(/\s+/g, " ").trim();
+  return text.length > 240 ? `${text.slice(0, 240)}…` : text;
+}
+
+/** Deterministic id comparator for stable tie-breaking. */
+function compareId(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /**
