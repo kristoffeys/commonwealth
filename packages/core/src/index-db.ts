@@ -188,10 +188,12 @@ export async function buildIndex(
 }
 
 /**
- * Embed every note for the `vectors` table, or return `[]` when semantic dedup is off / no
- * embedder is available. Resolution and embedding are best-effort: any failure (flag off,
- * provider absent, model error, count mismatch) logs and yields a vector-free build so a rebuild
- * — and therefore search and sync — never crashes on an embeddings misconfiguration.
+ * Embed every note for the `vectors` table, or return `[]` when no semantic feature is on / no
+ * embedder is available. Resolution and embedding are best-effort: any failure (flag off, provider
+ * absent, model error, count mismatch) yields a vector-free build so a rebuild — and therefore
+ * search and sync — never crashes on an embeddings misconfiguration. Provider-resolution failures
+ * warn ONLY for an explicitly-chosen provider (`hosted`); the factory-default `local` provider with
+ * the optional model package absent is the untouched default state and stays silent.
  */
 async function computeVectors(
   brainDir: string,
@@ -199,22 +201,38 @@ async function computeVectors(
   opts?: BuildIndexOptions,
 ): Promise<VectorRow[]> {
   let embedder: Embedder | null;
-  try {
-    if (opts && "embedder" in opts) {
-      embedder = opts.embedder ?? null;
-    } else {
-      const config = await loadBrainConfig(brainDir);
-      // Vectors back BOTH the dedup gate (ADR-0021) and hybrid retrieval (ADR-0025), so populate
-      // them when EITHER feature is on and a provider resolves.
-      const wantsVectors = config.features.semanticDedup || config.features.semanticSearch;
-      embedder = wantsVectors ? await embedProvider(config.embeddings) : null;
+  if (opts && "embedder" in opts) {
+    embedder = opts.embedder ?? null;
+  } else {
+    let config;
+    try {
+      config = await loadBrainConfig(brainDir);
+    } catch {
+      return [];
     }
-  } catch (err) {
-    // With semanticSearch default-on, an unconfigured brain (default `local` provider, model
-    // package absent) would otherwise log this on EVERY rebuild/sync. Warn once per process so a
-    // genuine misconfiguration stays visible without spamming the common not-installed case.
-    warnEmbedderUnavailableOnce(errMessage(err));
-    return [];
+    // Vectors back BOTH the dedup gate (ADR-0021) and hybrid retrieval (ADR-0025), so populate
+    // them when EITHER feature is on and a provider resolves.
+    const wantsVectors = config.features.semanticDedup || config.features.semanticSearch;
+    if (!wantsVectors) {
+      embedder = null;
+    } else {
+      try {
+        embedder = await embedProvider(config.embeddings);
+      } catch (err) {
+        // semanticSearch is default-ON and the FACTORY-DEFAULT provider is `local`, which scaffold
+        // writes into every brain's config. With the optional model package absent, resolution
+        // throws — but that is the untouched default state, not a misconfiguration, and firing on
+        // every rebuild/sync (a fresh short-lived process each time) would be ambient noise for
+        // teams that opted into nothing. So: `local` resolution failures are SILENT. A provider the
+        // team explicitly switched to (`hosted`) failing to resolve IS a real, opted-in problem —
+        // keep it loud. (Surfacing "you enabled semanticSearch but the local model package is
+        // missing" belongs in a future `commonwealth doctor`, not on the hot rebuild path.)
+        if (config.embeddings.provider !== "local") {
+          warnEmbedderUnavailableOnce(errMessage(err));
+        }
+        return [];
+      }
+    }
   }
   if (!embedder || notes.length === 0) return [];
 

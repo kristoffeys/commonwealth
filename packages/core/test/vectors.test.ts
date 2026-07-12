@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Embedder } from "../src/embed.js";
 import { saveBrainConfig, defaultBrainConfig } from "../src/config.js";
 import { buildIndex, loadVectors, search } from "../src/index-db.js";
@@ -131,5 +131,48 @@ describe("buildIndex vectors table (ADR-0021)", () => {
     // The FTS table coexists with vectors — lexical search is unaffected.
     const hits = await search(dir, "deployment");
     expect(hits).toHaveLength(1);
+  });
+});
+
+describe("buildIndex embedder-unavailable warning (ADR-0025 noise discipline)", () => {
+  it("is SILENT for a default, unconfigured brain (factory local provider, package absent)", async () => {
+    // No config file at all → schema defaults (provider `local`, semanticSearch ON). The optional
+    // model package is not installed in this repo, so provider resolution throws — but this is the
+    // default state teams never opted into, so buildIndex must not print to stderr.
+    await writeNote(dir, { kind: "memory", title: "One", body: "a durable fact" });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await buildIndex(dir); // resolves from config → local provider throws
+      expect(result.embedded).toBe(0); // degraded to a vector-free build
+      expect(err).not.toHaveBeenCalled();
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("WARNS when the team explicitly configured a provider that then fails (hosted endpoint down)", async () => {
+    await writeNote(dir, { kind: "memory", title: "One", body: "a durable fact" });
+    // Explicit `embeddings` block → an opted-in provider; a failing endpoint IS a real problem.
+    const config = defaultBrainConfig("test");
+    config.embeddings = { provider: "hosted", threshold: 0.85, endpoint: "https://embed.test/v1" };
+    await saveBrainConfig(dir, config);
+
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      ok: false,
+      status: 500,
+      statusText: "Server Error",
+      json: async () => ({}),
+    })) as unknown as typeof fetch;
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await buildIndex(dir);
+      expect(result.embedded).toBe(0);
+      expect(err).toHaveBeenCalled();
+      expect(err.mock.calls.flat().join(" ")).toMatch(/semantic index skipped/);
+    } finally {
+      err.mockRestore();
+      globalThis.fetch = realFetch;
+    }
   });
 });
