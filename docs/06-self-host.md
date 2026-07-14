@@ -69,9 +69,20 @@ The brain's `.commonwealth/config.json` is committed, so these apply to everyone
 Toggle feature flags with `commonwealth config` / `commonwealth-curate feature enable <name>`;
 edit `secretScan` directly in the committed config file.
 
-## Mixed-tool teams — `commonwealth emit`
+## Codex and mixed-tool teams
 
-Not everyone is on Claude Code. `commonwealth emit` writes the current project's team-brain slice
+Codex can use the live Commonwealth MCP server through the plugin:
+
+```bash
+commonwealth init --agent codex   # or --agent both
+```
+
+This also refreshes the project's `AGENTS.md` brain snapshot as a read-only fallback. Automatic
+Codex lifecycle capture is tracked separately in #225.
+
+### Zero-runtime fallback — `commonwealth emit`
+
+For agents without the plugin, `commonwealth emit` writes the current project's team-brain slice
 into the generated context files Cursor, Copilot, and Codex already honor — so those teammates read
 the brain with **zero runtime integration** (no MCP server, no plugin):
 
@@ -130,9 +141,10 @@ with `--dry-run` (ADR-0017).
 
 ## When something's off — `commonwealth doctor`
 
-The setup spans five parts that fail silently: the plugin install, brain resolution for your cwd,
-a dangling `.commonwealth/brain` marker, a dead sync daemon (→ a stale brain), and remote lag /
-review-queue depth / index freshness / scope. `commonwealth doctor` walks the whole chain and
+The setup spans several parts that can fail silently: the plugin install, the plugin's live curate
+runtime (vendored or npx fallback), brain resolution for your cwd, a dangling
+`.commonwealth/brain` marker, a dead sync daemon (→ a stale brain), and remote lag / review-queue
+depth / index freshness / scope. `commonwealth doctor` walks the whole chain and
 prints pass/fail with the exact one-line fix per failed link:
 
 ```bash

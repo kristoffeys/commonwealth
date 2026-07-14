@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { promises as fs, type Stats } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   defaultRegistryPath,
   resolveBrain,
@@ -55,6 +56,16 @@ export interface DoctorReport {
 /** Git working-copy state relative to its last-fetched upstream (no network is performed). */
 type GitState = { kind: "no-repo" } | { kind: "no-upstream" } | { kind: "tracked"; behind: number };
 
+/** Result of executing `--version` through the installed plugin hook's live curate path. */
+export interface CurateRuntimeProbe {
+  kind: "entry" | "vendored" | "npx" | "unsupported" | "unknown";
+  command: string;
+  ok: boolean;
+  code: number | null;
+  version?: string;
+  error?: string;
+}
+
 /**
  * Ambient surfaces the diagnosis reads, all injectable so tests run against a fixture brain with
  * no `claude`/`git`/real home directory. {@link defaultDoctorEnv} wires the real ones.
@@ -85,6 +96,8 @@ export interface DoctorEnv {
   configParse: () => Promise<{ path: string; ok: boolean; error?: string } | null>;
   /** True if the `commonwealth` plugin is installed; null when it can't be determined. */
   pluginInstalled: () => boolean | null;
+  /** Probe curate through the exact runtime resolution exported by the installed plugin (#222). */
+  curateRuntime?: () => Promise<CurateRuntimeProbe | null>;
   /** Whether `pid` is a live process (`kill -0`). */
   pidAlive: (pid: number) => boolean;
   /** Git state of the brain relative to its upstream. */
@@ -181,6 +194,25 @@ async function countStaged(brainDir: string): Promise<number> {
 /** The real ambient surfaces: registry resolution, `claude`/`git` probes, PID liveness, daemon start. */
 export function defaultDoctorEnv(cwd: string): DoctorEnv {
   const brainEnv = process.env.COMMONWEALTH_BRAIN_DIR;
+  type PluginListEntry = { id?: string; enabled?: boolean; installPath?: string };
+  let pluginList: PluginListEntry[] | null | undefined;
+  const installedPlugin = (): PluginListEntry | null | undefined => {
+    if (pluginList === undefined) {
+      const probe = spawnSync("claude", ["plugin", "list", "--json"], { encoding: "utf8" });
+      if (probe.error || probe.status !== 0) {
+        pluginList = null;
+      } else {
+        try {
+          const parsed: unknown = JSON.parse(probe.stdout);
+          pluginList = Array.isArray(parsed) ? (parsed as PluginListEntry[]) : null;
+        } catch {
+          pluginList = null;
+        }
+      }
+    }
+    if (pluginList === null) return null; // CLI unavailable / output unknown
+    return pluginList.find((p) => p.id === "commonwealth@commonwealth" && p.enabled !== false);
+  };
   return {
     cwd,
     // The per-user config file readers actually resolve (COMMONWEALTH_REGISTRY → COMMONWEALTH_CONFIG
@@ -219,11 +251,41 @@ export function defaultDoctorEnv(cwd: string): DoctorEnv {
       return (await resolveBrainMapping(dir))?.remote ?? null;
     },
     pluginInstalled: () => {
-      // Inferred from `claude plugin list` (the same surface `init` installs into). Null when
-      // there is no `claude` on PATH — we present plugin state as inferred, never assert it.
-      const probe = spawnSync("claude", ["plugin", "list"], { encoding: "utf8" });
-      if (probe.error || probe.status !== 0) return null;
-      return `${probe.stdout}\n${probe.stderr}`.toLowerCase().includes("commonwealth");
+      // JSON includes installPath, which the runtime probe below needs. Null means the Claude CLI
+      // is absent/too old to expose the install surface; undefined means it is healthy but the
+      // Commonwealth plugin is not installed.
+      const plugin = installedPlugin();
+      return plugin === null ? null : plugin !== undefined;
+    },
+    curateRuntime: async () => {
+      const plugin = installedPlugin();
+      if (!plugin || typeof plugin.installPath !== "string") return null;
+      const hookLib = path.join(plugin.installPath, "hooks", "lib.mjs");
+      try {
+        // Import the installed hook's exported probe. This deliberately shares resolution code
+        // with capture itself: vendor presence, npx pin, and future strategies cannot drift.
+        const mod = (await import(pathToFileURL(hookLib).href)) as {
+          probeCurateRuntime?: () => Promise<CurateRuntimeProbe>;
+        };
+        if (typeof mod.probeCurateRuntime !== "function") {
+          return {
+            kind: "unsupported",
+            command: hookLib,
+            ok: false,
+            code: null,
+            error: "installed plugin predates curate runtime diagnostics; update it",
+          };
+        }
+        return await mod.probeCurateRuntime();
+      } catch (err) {
+        return {
+          kind: "unknown",
+          command: hookLib,
+          ok: false,
+          code: null,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
     },
     pidAlive: (pid) => {
       try {
@@ -307,7 +369,57 @@ export async function diagnose(
           },
   );
 
-  // 2) Config parse (#210): a present-but-unparseable per-user config makes EVERY reader treat the
+  // 2) Curate runtime (#222): execute `--version` through the installed hook's own resolver. The
+  //    current portable marketplace install uses npx (warn, because registry/cache are live deps);
+  //    a non-zero exit is a hard failure because capture would otherwise lose every candidate.
+  if (env.curateRuntime) {
+    const runtime = await env.curateRuntime();
+    if (runtime === null) {
+      checks.push({
+        id: "curate-runtime",
+        label: "Curate runtime",
+        status: "skip",
+        detail: "Can't locate the installed plugin runtime path.",
+      });
+    } else if (runtime.kind === "unsupported") {
+      checks.push({
+        id: "curate-runtime",
+        label: "Curate runtime",
+        status: "warn",
+        detail: `${runtime.error ?? "The installed plugin cannot expose its live curate path."} Capture status was not inferred.`,
+        fix: "commonwealth update   (install the current plugin diagnostics)",
+      });
+    } else if (!runtime.ok) {
+      const exit =
+        typeof runtime.code === "number" ? `exit ${runtime.code}` : "spawn/import failure";
+      checks.push({
+        id: "curate-runtime",
+        label: "Curate runtime",
+        status: "fail",
+        detail: `Live path ${runtime.command} failed (${exit}): ${runtime.error ?? "no diagnostic output"}. Capture is OFF.`,
+        fix:
+          runtime.kind === "npx"
+            ? `clear the broken npm npx cache, then run: ${runtime.command} --version`
+            : "commonwealth update   (reinstall the plugin runtime)",
+      });
+    } else if (runtime.kind === "npx") {
+      checks.push({
+        id: "curate-runtime",
+        label: "Curate runtime",
+        status: "warn",
+        detail: `Live path is ${runtime.command} (${runtime.version || "version OK"}); capture depends on the npm registry/cache fallback.`,
+      });
+    } else {
+      checks.push({
+        id: "curate-runtime",
+        label: "Curate runtime",
+        status: "ok",
+        detail: `Live ${runtime.kind} path is healthy: ${runtime.command} (${runtime.version || "version OK"}).`,
+      });
+    }
+  }
+
+  // 3) Config parse (#210): a present-but-unparseable per-user config makes EVERY reader treat the
   //    brain as missing — capture silently OFF for days with zero signal. This is exactly the class
   //    of failure `doctor` reported nothing about during the outage. It does NOT short-circuit: an
   //    env-pinned brain can still resolve past a broken config, and the chain below stays useful.
@@ -330,7 +442,7 @@ export async function diagnose(
   }
   // config === null → no file yet (valid pre-init state); say nothing.
 
-  // 3) Brain resolution for the cwd. A miss short-circuits every brain-scoped link below.
+  // 4) Brain resolution for the cwd. A miss short-circuits every brain-scoped link below.
   const brain = await env.resolveBrain(cwd);
   if (!brain) {
     checks.push({

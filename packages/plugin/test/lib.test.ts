@@ -420,6 +420,21 @@ describe("endReceiptMessage (#96)", () => {
     expect(endReceiptMessage({ captured: 0 })).toContain("no durable knowledge");
     expect(endReceiptMessage({ captured: 3 })).toContain("3 note(s)");
   });
+  it("reports a curate child failure as lost capture, never zero durable knowledge (#222)", () => {
+    const msg = endReceiptMessage({
+      captured: 0,
+      failed: true,
+      reason: "curate-runtime",
+      runtime: "npx -y @cmnwlth/curate@0.1.12",
+      code: 254,
+      error: "package.json missing",
+    });
+    expect(msg).toContain("capture FAILED");
+    expect(msg).toContain("exited 254");
+    expect(msg).toContain("NOT saved");
+    expect(msg).toContain("commonwealth doctor");
+    expect(msg).not.toContain("no durable knowledge");
+  });
   it("returns null for junk input", () => {
     expect(endReceiptMessage(null)).toBe(null);
     expect(endReceiptMessage({})).toBe(null);

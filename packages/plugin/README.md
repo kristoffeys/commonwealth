@@ -1,17 +1,18 @@
-# @cmnwlth/plugin — the Commonwealth Claude Code plugin
+# @cmnwlth/plugin — the Commonwealth agent plugin
 
-The glue that makes Commonwealth "just happen" inside Claude Code. It bundles everything a
-teammate needs and wires the auto-bridge (docs/03-distribution.md):
+The glue that connects Commonwealth to Claude Code and Codex. Both hosts share the same brain,
+registry, sync daemon, and MCP server:
 
 - **MCP server** `commonwealth` — the `@cmnwlth/mcp` server (`search / ask / read / remember /
-work-state / people`), auto-started by declaring it in the manifest (no manual
-  `claude mcp add`). `ask` returns citation-anchored context; the agent writes the cited answer
+  work-state / people`), auto-started by declaring it in the manifest (no manual MCP
+  registration). `ask` returns citation-anchored context; the agent writes the cited answer
   (ADR-0020) — Commonwealth never embeds an LLM.
-- **Lifecycle hooks** — `SessionStart` injects session-wide context (active work-state, recent
-  decisions); `UserPromptSubmit` injects the notes relevant to *this turn's* prompt and, throttled,
-  also captures long-session knowledge in the background (#194); `SessionEnd` extracts learnings
-  from the transcript and stages them; `PreCompact` runs the same extraction before a long session
-  compacts, so knowledge that scrolls out of context isn't lost if the session is abandoned (#195).
+- **Claude Code lifecycle hooks** — `SessionStart` injects session-wide context (active
+  work-state, recent decisions); `UserPromptSubmit` injects the notes relevant to *this turn's*
+  prompt and, throttled, also captures long-session knowledge in the background (#194);
+  `SessionEnd` extracts learnings from the transcript and stages them; `PreCompact` runs the same
+  extraction before a long session compacts, so knowledge that scrolls out of context isn't lost
+  if the session is abandoned (#195).
 - **Brain registry** — resolves the current project directory → its brain repo
   (`@cmnwlth/core`'s `resolveBrainDir`, issue #14).
 - **`/commonwealth` commands** — manual `remember`, `decide`, `recall`, `ask`, `promote`, `status`.
@@ -26,6 +27,7 @@ brain repo stays the source of truth.
 
 ```
 .claude-plugin/plugin.json   manifest (name, mcpServers, hooks)
+.codex-plugin/plugin.json    Codex manifest (shared MCP; lifecycle hooks land in #225)
 hooks/hooks.json             SessionStart + SessionEnd → node <script>.mjs
 hooks/lib.mjs                testable, dependency-injected hook core
 hooks/session-start.mjs      thin stdin→lib→stdout entry (prints session-wide context)
@@ -36,22 +38,28 @@ commands/*.md                /commonwealth remember|decide|recall|promote|status
 agents/curator.md            @commonwealth:curator advisory review/consolidation subagent
 ```
 
-## Runtime (published packages via npx)
+## Runtime (vendored when present; portable npx fallback)
 
-The plugin ships **no bundled runtime**. Claude Code copies plugin files but never runs
-`npm install`, so the MCP server and hooks invoke the **published** packages on demand with
-`npx` (#62): `.mcp.json` runs `npx -y @cmnwlth/mcp@<version>`, and the hooks run
-`npx -y @cmnwlth/curate@<version>`. `npx` fetches from npm on first use (pulling
-`better-sqlite3`'s per-platform prebuilt binary transitively) and caches thereafter — so a bare
-git-clone install works on any platform, with nothing platform-locked committed.
+The hooks first use `vendor/curate/index.js` when a same-platform bundle is present. Git
+marketplace installs do not currently include that platform-local tree: it contains
+`better-sqlite3`'s native binary, so committing one release runner's build would break other
+operating systems/architectures. They therefore use the published package via
+`npx -y @cmnwlth/curate@<version>`; `.mcp.json` similarly runs the published MCP package. See
+[ADR-0026](../../docs/adr/0026-portable-plugin-runtime-fallback.md).
+
+The fallback is deliberately visible. `commonwealth doctor` imports the installed hook's own
+runtime resolver, prints the exact live path, and runs curate's brain-independent `--version`
+through it. A broken npx cache is a failed diagnostic. If capture's curate child exits non-zero,
+the next-session receipt reports **capture failed** with the runtime and exit code; it is never
+reported as “no durable knowledge.”
 
 The pinned version tracks the plugin's own version; bump both together on release.
 
 > Local development: pass `overrides.curateEntry` (or run against a locally-built curate) to
 > exercise the hooks without hitting the registry — that's how the tests run.
 
-(A legacy `scripts/bundle.mjs` still builds + vendors the runtime for parts of the local test
-suite; removing it is tracked with the packaging spike, #131.)
+`scripts/bundle.mjs` builds the same-platform vendored runtime used by local smoke tests and
+development. It is not a cross-platform distribution artifact.
 
 ## Install (git plugin marketplace)
 
@@ -61,12 +69,16 @@ plugin marketplace. Add it and install (user scope / global — ADR-0012):
 ```bash
 claude plugin marketplace add kristoffeys/commonwealth
 claude plugin install commonwealth@commonwealth
+
+codex plugin marketplace add kristoffeys/commonwealth
+codex plugin add commonwealth@commonwealth
 ```
 
 (Or point the marketplace at a local path / your fork / an internal mirror of this repo.)
 
-The plugin installs globally, so the `commonwealth` MCP server + hooks work in **every**
-session. Per-repo routing is dynamic: the SessionStart hook resolves the real session cwd → its
+The plugin installs globally, so the `commonwealth` MCP server works in **every** selected host
+session. Claude Code also loads the lifecycle hooks. Per-repo routing is dynamic: the SessionStart
+hook resolves the real session cwd → its
 brain via the registry, and the MCP server resolves its brain via `@cmnwlth/core`'s
 `resolveBrainDir` — no brain is pinned into the registration. This replaced the old raw
 local-scope `claude mcp add`, which was invisible outside its install dir and pinned one brain.

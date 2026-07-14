@@ -8,7 +8,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // The REAL production wiring — not the injected fakes the other tests use. These guard the
 // two silent-failure bugs the M4b verifier caught: an unresolvable core import and a broken
 // `capture --from -` invocation.
-import { realDeps, realResolveBrain, realResolveBrainDir, sessionEnd } from "../hooks/lib.mjs";
+import {
+  probeCurateRuntime,
+  realDeps,
+  realResolveBrain,
+  realResolveBrainDir,
+  sessionEnd,
+} from "../hooks/lib.mjs";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const curateEntry = path.join(repoRoot, "packages", "curate", "dist", "index.js");
@@ -476,6 +482,20 @@ describe("UserPromptSubmit throttled capture (#194)", () => {
 
 describe("realDeps().capture (real curate binary over stdin)", () => {
   // The curate binary + its deps are built once in vitest globalSetup (#111).
+  it("probes --version through the same explicit runtime path capture uses (#222)", async () => {
+    const pkg = JSON.parse(
+      await fs.readFile(path.join(repoRoot, "packages", "curate", "package.json"), "utf8"),
+    ) as { version: string };
+    const probe = await probeCurateRuntime({ curateEntry });
+    expect(probe).toMatchObject({
+      kind: "entry",
+      ok: true,
+      code: 0,
+      version: pkg.version,
+    });
+    expect(probe.command).toContain(curateEntry);
+  });
+
   it("captures a candidate through the real binary (proves stdin, not --from -)", async () => {
     const brain = path.join(tmp, "brain");
     await initBrain(brain);
@@ -492,6 +512,55 @@ describe("realDeps().capture (real curate binary over stdin)", () => {
     expect(canon.filter((n) => n.frontmatter.kind === "memory")).toHaveLength(1);
     const staged = await fs.readdir(path.join(brain, "staging", "memory")).catch(() => []);
     expect(staged.filter((f) => f.endsWith(".md"))).toHaveLength(0);
+  });
+
+  it("turns a non-zero curate child exit into a loud deferred failure receipt (#222)", async () => {
+    const brain = path.join(tmp, "broken-runtime-brain");
+    await initBrain(brain);
+
+    // Model the corrupted npx entry from the incident: the resolved child starts, emits npm's
+    // useful diagnostic, then exits 254 without stdout.
+    const brokenNpx = path.join(tmp, "npx");
+    await fs.writeFile(
+      brokenNpx,
+      "#!/usr/bin/env node\nprocess.stderr.write('package.json missing'); process.exit(254);\n",
+    );
+    await fs.chmod(brokenNpx, 0o755);
+    const deps = realDeps({
+      curateEntry: null, // force the fallback even though globalSetup built local vendor/
+      curatePackage: "@cmnwlth/curate@0.1.12",
+      npxBin: brokenNpx,
+    });
+    const result = await deps.capture(brain, brain, [
+      { kind: "memory", title: "Would be lost", body: "must produce a failure receipt" },
+    ]);
+
+    expect(result).toMatchObject({
+      captured: 0,
+      failed: true,
+      reason: "curate-runtime",
+      code: 254,
+      error: "package.json missing",
+    });
+    expect(result.runtime).toContain("@cmnwlth/curate@0.1.12");
+    expect(result.notes).toBeUndefined();
+
+    // Drive the result through the real SessionEnd receipt path (candidate extraction is injected
+    // here only to isolate the broken curate child from the unrelated Claude extractor).
+    const saved: Array<{ message: string }> = [];
+    const endDeps = {
+      resolveBrain: async () => ({ kind: "brain", brain }),
+      extractCandidates: async () => [
+        { kind: "memory", title: "Would be lost", body: "must produce a failure receipt" },
+      ],
+      capture: deps.capture,
+      refreshStatus: async () => {},
+      saveReceipt: async (receipt: { message: string }) => saved.push(receipt),
+    };
+    const end = await sessionEnd({ cwd: brain, transcript_path: "/unused" }, endDeps);
+    expect(end).toMatchObject({ failed: true, reason: "curate-runtime", code: 254 });
+    expect(saved[0]?.message).toContain("capture FAILED");
+    expect(saved[0]?.message).not.toContain("no durable knowledge");
   });
 
   it("extracts from a multi-MB transcript without E2BIG — transcript goes on stdin, not argv (#84)", async () => {

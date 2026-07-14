@@ -29,14 +29,21 @@ import {
   uninstallStatusLine,
 } from "./statusline.js";
 import { defaultBrainDir } from "./init.js";
-import { runOnboard, runWizard, type OnboardOptions, type WizardDefaults } from "./onboard.js";
+import {
+  parseAgentTarget,
+  runOnboard,
+  runWizard,
+  type OnboardOptions,
+  type WizardDefaults,
+} from "./onboard.js";
 import { createReadlinePrompter, isInteractive, type Prompter } from "./prompt.js";
 
 export { runInit, findRepoRoot, defaultBrainDir } from "./init.js";
 export type { InitOptions, InitDeps, InitResult, InitBySource } from "./init.js";
 export { defaultInitDeps, defaultOnboardDeps } from "./deps.js";
-export { runOnboard, runWizard } from "./onboard.js";
+export { parseAgentTarget, runOnboard, runWizard } from "./onboard.js";
 export type {
+  AgentTarget,
   OnboardOptions,
   OnboardDeps,
   OnboardResult,
@@ -142,12 +149,13 @@ function printUsage(): void {
       "",
       "init flags: [--brain <dir>] [--yes] [--reseed] [--auto-adr] [--remote <url>]",
       "            [--sync <dir,dir,...>] [--seed-repo <dir,dir,...>]",
+      "            [--agent <claude|codex|both>]",
       "            [--no-scope] [--no-seed] [--no-plugin] [--no-daemon] [--no-build]",
       "",
       "`init` is a single idempotent command: it builds the workspace (if needed), creates or",
       "joins the brain, syncs one or more folders into it (allowlist + a global routing rule",
       "with a ~/.commonwealth/brains/<name> symlink), seeds it from one or more repos, installs",
-      "the Commonwealth plugin (global MCP + session hooks), and starts the sync daemon. Run in a",
+      "the Commonwealth plugin for the selected agent(s), and starts the sync daemon. Run in a",
       "terminal without --yes for an interactive wizard that scans for and lets you multi-select",
       "folders/repos; with --yes (or non-interactively) it uses defaults + flags and never prompts.",
       "",
@@ -159,6 +167,7 @@ function printUsage(): void {
       "  --remote <url>         Add <url> as the brain's git origin remote",
       "  --sync <dir,dir,...>   Folders to sync into the brain (default: this repo)",
       "  --seed-repo <dir,...>  Repos to seed from now (default: the --sync folders)",
+      "  --agent <target>        Install for claude, codex, or both (default: claude)",
       "  --no-scope             Skip adding folders to the capture allowlist",
       "  --no-seed       Create the brain but skip gathering/staging seed candidates",
       "  --no-plugin     Skip installing the Commonwealth plugin",
@@ -463,6 +472,7 @@ async function cmdInit(rest: string[]): Promise<number> {
     remote?: string;
     sync?: string;
     "seed-repo"?: string;
+    agent?: string;
   };
   try {
     ({ values } = parseArgs({
@@ -475,6 +485,7 @@ async function cmdInit(rest: string[]): Promise<number> {
         remote: { type: "string" },
         sync: { type: "string" },
         "seed-repo": { type: "string" },
+        agent: { type: "string" },
       },
       allowPositionals: false,
     }));
@@ -487,6 +498,11 @@ async function cmdInit(rest: string[]): Promise<number> {
   const cwd = process.cwd();
   // The scope/registry/brain-name base is the invocation dir, not the git root (#61).
   const projectDir = path.resolve(cwd);
+  const agent = parseAgentTarget(values.agent);
+  if (agent === null) {
+    process.stderr.write("Invalid --agent value. Expected claude, codex, or both.\n");
+    return 2;
+  }
 
   // Non-interactive without --yes: do NOTHING but point the user at a terminal. This runs BEFORE
   // any executable probe (`hasExecutable`) or dep resolution (`defaultOnboardDeps`), so the path
@@ -499,6 +515,7 @@ async function cmdInit(rest: string[]): Promise<number> {
   }
 
   const claudePresent = hasExecutable("claude");
+  const codexPresent = hasExecutable("codex");
   const deps = defaultOnboardDeps({ curateEntry: process.env.COMMONWEALTH_CURATE_BIN });
 
   // Parse a comma-separated dir list into resolved absolute paths (blanks dropped).
@@ -522,7 +539,13 @@ async function cmdInit(rest: string[]): Promise<number> {
         projectDir,
         scope: true,
         seed: true,
-        plugin: claudePresent,
+        plugin:
+          agent === "claude"
+            ? claudePresent
+            : agent === "codex"
+              ? codexPresent
+              : claudePresent || codexPresent,
+        agent,
         daemon: true,
         autoAdr: true,
       };
@@ -534,6 +557,7 @@ async function cmdInit(rest: string[]): Promise<number> {
       }
       // The wizard already confirmed; runOnboard must not prompt again (opts.yes is true).
       opts = outcome.opts;
+      opts.agent = agent;
     } else {
       // --yes (interactive or not): defaults + explicit flags, non-interactive. The
       // non-interactive-without-yes case already returned above.
@@ -545,6 +569,7 @@ async function cmdInit(rest: string[]): Promise<number> {
         reseed: values.reseed,
         seed,
         plugin,
+        agent,
         daemon,
         build,
         scope,
@@ -562,7 +587,8 @@ async function cmdInit(rest: string[]): Promise<number> {
         `staged=${result.staged} scopedFolders=${result.scopedFolders} ` +
         `mappedFolders=${result.mappedFolders} seededRepos=${result.seededRepos} ` +
         `scope=${result.scope} autoAdr=${result.autoAdr} ` +
-        `remote=${result.remote} plugin=${result.plugin} daemon=${result.daemon} ` +
+        `remote=${result.remote} agent=${agent} plugin=${result.plugin} context=${result.context} ` +
+        `daemon=${result.daemon} ` +
         `scopeConfig=${result.scopeConfigPath}\n`,
     );
     return 0;

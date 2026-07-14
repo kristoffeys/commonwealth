@@ -27,6 +27,14 @@ afterAll(async () => {
 });
 
 describe("built binary", () => {
+  it("prints its package version without requiring a brain (#222)", async () => {
+    const pkg = JSON.parse(
+      await fs.readFile(path.join(repoRoot, "packages", "curate", "package.json"), "utf8"),
+    ) as { version: string };
+    const out = execFileSync("node", [distEntry, "--version"], { cwd: repoRoot, stdio: "pipe" });
+    expect(out.toString().trim()).toBe(pkg.version);
+  });
+
   it("runs `list` against an empty brain with exit 0", () => {
     const out = execFileSync("node", [distEntry, "list", "--dir", brainDir], {
       cwd: repoRoot,

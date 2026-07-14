@@ -46,6 +46,11 @@ function versionTargets() {
       make: (v) => `"version": "${v}"`,
     },
     {
+      file: path.join(ROOT, "packages", "plugin", ".codex-plugin", "plugin.json"),
+      pattern: /"version":\s*"[^"]*"/,
+      make: (v) => `"version": "${v}"`,
+    },
+    {
       file: path.join(ROOT, ".claude-plugin", "marketplace.json"),
       pattern: /"version":\s*"[^"]*"/,
       make: (v) => `"version": "${v}"`,

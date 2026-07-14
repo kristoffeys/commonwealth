@@ -3,6 +3,20 @@ import type { InitOptions, InitResult } from "./init.js";
 import type { Prompter } from "./prompt.js";
 import { findGitRepos } from "./discover.js";
 
+/** Agent hosts Commonwealth can provision during onboarding. */
+export type AgentTarget = "claude" | "codex" | "both";
+
+/** Parse the public `--agent` value without silently accepting misspellings. */
+export function parseAgentTarget(value: string | undefined): AgentTarget | null {
+  if (value === undefined) return "claude";
+  return value === "claude" || value === "codex" || value === "both" ? value : null;
+}
+
+/** True when a target includes Codex and therefore needs an AGENTS.md fallback emission. */
+function includesCodex(target: AgentTarget): boolean {
+  return target === "codex" || target === "both";
+}
+
 /**
  * Flags that shape a full `commonwealth init` orchestration. The step gates (`seed`, `plugin`,
  * `daemon`, `build`, `scope`) default to `true` when omitted; pass `false` to skip that step. This
@@ -23,6 +37,8 @@ export type OnboardOptions = {
    * pinned.
    */
   plugin?: boolean;
+  /** Agent integration(s) to provision. Default: `claude` for backward compatibility. */
+  agent?: AgentTarget;
   /** Start the sync daemon for the brain. Default: true. */
   daemon?: boolean;
   /** Build/bundle the workspace if dist artifacts are missing. Default: true. */
@@ -84,7 +100,14 @@ export interface OnboardDeps {
    * hook resolve the brain per repo dynamically (ADR-0012). Never throws. `installed` is true
    * when the plugin is present after the step; `skipped` carries a reason when it is not.
    */
-  installPlugin(): Promise<{ installed: boolean; skipped?: string }>;
+  installPlugin(agent: AgentTarget): Promise<{
+    installed: boolean;
+    skipped?: string;
+    /** Host-aware status for `both` and Codex-only installs. */
+    detail?: string;
+  }>;
+  /** Emit the shared brain slice into AGENTS.md for Codex's read-only fallback. */
+  emitContext(cwd: string): Promise<{ written: string[]; skipped?: string }>;
   /** Start the sync daemon for `brainDir`, or report it already running. */
   startDaemon(
     brainDir: string,
@@ -121,6 +144,8 @@ export interface OnboardResult {
   remote: string;
   /** Short plugin-install status string (e.g. `installed`, `skipped`). */
   plugin: string;
+  /** Codex AGENTS.md context emission status. */
+  context: string;
   /** Short daemon status string (e.g. `started`, `already running`, `skipped`). */
   daemon: string;
 }
@@ -152,6 +177,8 @@ export async function runOnboard(
   const doRemote = typeof opts.remote === "string" && opts.remote.trim().length > 0;
   // Install the plugin unless explicitly disabled.
   const doPlugin = opts.plugin !== false;
+  const agent = opts.agent ?? "claude";
+  const doContext = includesCodex(agent);
   const doDaemon = opts.daemon !== false;
 
   // Default the sync/scope target to the INVOCATION dir, not the git root — `findRepoRoot`
@@ -172,7 +199,8 @@ export async function runOnboard(
     seedRepos.length > 0 ? `seed from ${seedRepos.length} repo(s)` : null,
     doAutoAdr ? "enable auto-ADR" : null,
     doRemote ? `set brain remote to ${opts.remote}` : null,
-    doPlugin ? "install the Commonwealth plugin (global MCP + session hooks)" : null,
+    doPlugin ? `install the Commonwealth plugin for ${agent}` : null,
+    doContext ? "emit the shared brain slice into AGENTS.md for Codex" : null,
     doDaemon ? "start the sync daemon" : null,
     "ensure the per-user scope config exists",
   ].filter((step): step is string => step !== null);
@@ -195,6 +223,7 @@ export async function runOnboard(
         autoAdr: "skipped",
         remote: "skipped",
         plugin: "skipped",
+        context: "skipped",
         daemon: "skipped",
       };
     }
@@ -278,13 +307,25 @@ export async function runOnboard(
 
   let plugin = "skipped";
   if (doPlugin) {
-    const res = await deps.installPlugin();
+    const res = await deps.installPlugin(agent);
     if (res.skipped) {
       deps.log(`WARNING: plugin step skipped: ${res.skipped}`);
       plugin = res.skipped;
     } else {
-      plugin = res.installed ? "installed" : "not installed";
+      plugin = res.detail ?? (res.installed ? "installed" : "not installed");
       deps.log(`Plugin: ${plugin}`);
+    }
+  }
+
+  let context = "skipped";
+  if (doContext) {
+    const res = await deps.emitContext(cwd);
+    if (res.skipped) {
+      context = res.skipped;
+      deps.log(`WARNING: Codex context emission skipped: ${res.skipped}`);
+    } else {
+      context = res.written.includes("AGENTS.md") ? "AGENTS.md emitted" : "emitted";
+      deps.log(`Codex context: ${context}`);
     }
   }
 
@@ -305,13 +346,20 @@ export async function runOnboard(
 
   // Always ensure the per-user scope config exists, regardless of scope choices above.
   const { path: scopeConfigPath } = await deps.ensureUserConfig();
+  const nextSession =
+    agent === "claude"
+      ? "Open a Claude Code session"
+      : agent === "codex"
+        ? "Open a new Codex thread"
+        : "Open a Claude Code session or new Codex thread";
 
   deps.log(
     `Done. mode=${initResult.mode} brain=${brainDir} staged=${staged} ` +
       `scopedFolders=${scopedFolders} mappedFolders=${mappedFolders} seededRepos=${seededRepos} ` +
-      `scope=${scope} autoAdr=${autoAdr} remote=${remote} plugin=${plugin} daemon=${daemon}. ` +
+      `scope=${scope} autoAdr=${autoAdr} remote=${remote} agent=${agent} plugin=${plugin} ` +
+      `context=${context} daemon=${daemon}. ` +
       `Scope config: ${scopeConfigPath}. ` +
-      "Open a Claude session here and ask it something your team knows.",
+      `${nextSession} here and ask it something your team knows.`,
   );
 
   return {
@@ -327,6 +375,7 @@ export async function runOnboard(
     autoAdr,
     remote,
     plugin,
+    context,
     daemon,
   };
 }
@@ -356,6 +405,8 @@ export interface WizardDefaults {
   plugin: boolean;
   daemon: boolean;
   autoAdr: boolean;
+  /** Agent target selected by the CLI before the wizard starts. Default: `claude`. */
+  agent?: AgentTarget;
 }
 
 /** What {@link runWizard} produces: the assembled options, or an abort signal. */
@@ -416,8 +467,9 @@ export async function runWizard(
     seedRepos = [defaults.projectDir];
   }
 
+  const agent = defaults.agent ?? "claude";
   const plugin = await prompter.confirm(
-    "Install the Commonwealth plugin (global MCP + session hooks)?",
+    `Install the Commonwealth plugin for ${agent}?`,
     defaults.plugin,
   );
   const daemon = await prompter.confirm("Start the sync daemon?", defaults.daemon);
@@ -429,6 +481,7 @@ export async function runWizard(
     yes: true,
     seed: seedRepos.length > 0,
     plugin,
+    agent,
     daemon,
     scope: true,
     autoAdr,

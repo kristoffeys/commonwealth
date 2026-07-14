@@ -404,11 +404,20 @@ function renderCaptureReceipt(notes) {
  * WHAT was remembered (#204) — falling back to a bare count when structured notes are unavailable.
  * Pure function.
  *
- * @param {{skipped?: boolean, reason?: string, path?: string, error?: string, captured?: number, notes?: Array<{kind: string, title: string, promoted: boolean}>}} result
+ * @param {{skipped?: boolean, failed?: boolean, reason?: string, path?: string, error?: string, runtime?: string, code?: number | null, captured?: number, notes?: Array<{kind: string, title: string, promoted: boolean}>}} result
  * @returns {string | null}
  */
 export function endReceiptMessage(result) {
   if (!result || typeof result !== "object") return null;
+  if (result.failed && result.reason === "curate-runtime") {
+    const runtime =
+      typeof result.runtime === "string" && result.runtime.length > 0 ? ` (${result.runtime})` : "";
+    const exit = typeof result.code === "number" ? ` exited ${result.code}` : " failed to start";
+    const rawDetail =
+      typeof result.error === "string" && result.error.length > 0 ? result.error : "";
+    const detail = rawDetail ? `: ${rawDetail}${/[.!?]$/.test(rawDetail) ? "" : "."}` : ".";
+    return `🧠 Commonwealth: capture FAILED because the curate runtime${runtime}${exit}${detail} Extracted knowledge was NOT saved. Run \`commonwealth doctor\` to diagnose the live runtime path.`;
+  }
   if (result.skipped) {
     if (result.reason === "corrupt-config") {
       // A broken config file (#210): a hand-edit typo makes every reader treat the brain as missing
@@ -691,8 +700,69 @@ function resolveVendoredCurate() {
   }
 }
 
-export function realDeps(overrides = {}) {
+/**
+ * Resolve the exact curate command the production hooks will run. Exported so `commonwealth
+ * doctor` can import the installed hook and probe the SAME decision rather than maintaining a
+ * second, drift-prone approximation (#222).
+ *
+ * @param {object} [overrides]
+ * @returns {{kind: "entry" | "vendored" | "npx", command: string, args: string[], display: string}}
+ */
+export function resolveCurateRuntime(overrides = {}) {
   const nodeBin = overrides.nodeBin ?? process.execPath;
+  const hasExplicitEntry = Object.prototype.hasOwnProperty.call(overrides, "curateEntry");
+  const explicitEntry = overrides.curateEntry;
+  // An explicit null disables vendor resolution in tests that exercise the npx fallback.
+  const vendoredEntry = hasExplicitEntry ? explicitEntry : resolveVendoredCurate();
+  if (vendoredEntry) {
+    const kind = hasExplicitEntry ? "entry" : "vendored";
+    return {
+      kind,
+      command: nodeBin,
+      args: [vendoredEntry],
+      display: `${nodeBin} ${vendoredEntry}`,
+    };
+  }
+
+  const curatePackage = overrides.curatePackage ?? "@cmnwlth/curate@0.1.11";
+  const npxBin = overrides.npxBin ?? "npx";
+  return {
+    kind: "npx",
+    command: npxBin,
+    args: ["-y", curatePackage],
+    display: `${npxBin} -y ${curatePackage}`,
+  };
+}
+
+/** Keep a child-process diagnostic short enough for a one-line deferred receipt. */
+function processFailureDetail(res) {
+  const text = `${res?.stderr ?? ""}`.trim().replace(/\s+/g, " ");
+  if (text.length > 0) return text.slice(0, 300);
+  if (res?.error) return String(res.error).trim().replace(/\s+/g, " ").slice(0, 300);
+  return "no diagnostic output";
+}
+
+/**
+ * Execute `--version` through the hook's live curate resolution (#222). This is intentionally in
+ * the plugin hook module: `doctor` imports it from the installed plugin, guaranteeing that its
+ * report names and exercises the exact vendored-or-npx path capture will use.
+ */
+export async function probeCurateRuntime(overrides = {}) {
+  const runtime = resolveCurateRuntime(overrides);
+  const res = await run(runtime.command, [...runtime.args, "--version"], {
+    timeoutMs: overrides.timeoutMs ?? 30_000,
+  });
+  return {
+    kind: runtime.kind,
+    command: runtime.display,
+    ok: res.code === 0,
+    code: res.code,
+    version: res.code === 0 ? res.stdout.trim() : undefined,
+    error: res.code === 0 ? undefined : processFailureDetail(res),
+  };
+}
+
+export function realDeps(overrides = {}) {
   const claudeBin = overrides.claudeBin ?? "claude";
   const extractionTimeoutMs = overrides.extractionTimeoutMs ?? EXTRACTION_TIMEOUT_MS;
 
@@ -703,12 +773,9 @@ export function realDeps(overrides = {}) {
   //   3. else the PUBLISHED `@cmnwlth/curate` via `npx -y` (#62) — a bare git-clone install has no
   //      vendor/, and npx pulls `better-sqlite3`'s prebuild transitively. Fine once-per-session,
   //      slower per-turn.
-  const curateEntry = overrides.curateEntry ?? resolveVendoredCurate();
-  const curatePackage = overrides.curatePackage ?? "@cmnwlth/curate@0.1.11";
+  const curateRuntime = resolveCurateRuntime(overrides);
   const runCurate = (args, runOpts) =>
-    curateEntry
-      ? run(nodeBin, [curateEntry, ...args], runOpts)
-      : run("npx", ["-y", curatePackage, ...args], runOpts);
+    run(curateRuntime.command, [...curateRuntime.args, ...args], runOpts);
 
   async function getContext(brain, cwd) {
     const res = await runCurate(["context", "--cwd", cwd], {
@@ -743,7 +810,17 @@ export function realDeps(overrides = {}) {
     // `capture` prints one line per note to stdout, each carrying its kind + title (and a
     // `promoted` prefix when autoPromote landed it in canon). Parse them into structured notes so
     // the receipt can show WHAT was remembered, not just a count (#204).
-    const notes = res.code === 0 ? parseCaptureLines(res.stdout) : [];
+    if (res.code !== 0) {
+      return {
+        captured: 0,
+        failed: true,
+        reason: "curate-runtime",
+        runtime: curateRuntime.display,
+        code: res.code,
+        error: processFailureDetail(res),
+      };
+    }
+    const notes = parseCaptureLines(res.stdout);
     return { captured: notes.length, notes };
   }
 

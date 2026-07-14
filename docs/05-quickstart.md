@@ -5,7 +5,7 @@ Get a Commonwealth brain running for one project in a couple of minutes, from np
 ## Prerequisites
 
 - **Node ≥ 22** and **git** on your `PATH` (a brain _is_ a git repo).
-- Optionally, the `claude` CLI (Claude Code) for automatic session capture via the plugin.
+- Optionally, the `claude` CLI, the `codex` CLI, or both for agent integration.
 
 ## 0. Try it with no setup (optional)
 
@@ -34,15 +34,26 @@ commonwealth init
 One idempotent command does the whole setup: creates a brain repo (a separate git repo under
 `~/.commonwealth/brains/<project>`), registers this project → that brain, seeds it by mining your
 git history / ADRs / agent config into the review queue, installs the Commonwealth plugin (MCP +
-session hooks), starts the sync daemon, and ensures your per-user scope config exists. Re-run it
-anytime — it only does what's still missing. See the flags in `commonwealth init --help` (e.g.
-`--yes`, `--no-daemon`, `--no-seed`, `--brain <dir>`, `--remote <url>`).
+Claude Code session hooks, or Codex MCP + `AGENTS.md` fallback), starts the sync daemon, and
+ensures your per-user scope config exists. Re-run it anytime — it only does what's still missing.
+See the flags in `commonwealth init --help` (e.g.
+`--yes`, `--agent codex`, `--no-daemon`, `--no-seed`, `--brain <dir>`, `--remote <url>`).
 
-Prefer to install just the Claude Code plugin (the repo is its own plugin marketplace)?
+The default agent target is `claude`. Choose Codex or install both integrations with:
+
+```bash
+commonwealth init --agent codex
+commonwealth init --agent both
+```
+
+Prefer to install a plugin directly (the repo is a marketplace both clients understand)?
 
 ```bash
 claude plugin marketplace add kristoffeys/commonwealth
 claude plugin install commonwealth@commonwealth
+
+codex plugin marketplace add kristoffeys/commonwealth
+codex plugin add commonwealth@commonwealth
 ```
 
 ## 3. Use it
@@ -50,6 +61,8 @@ claude plugin install commonwealth@commonwealth
 - **In a Claude Code session** in this project, the plugin injects relevant team-brain context at
   session start and captures durable knowledge at session end (subject to the scope + curation
   gates). Ask it something your project already knows.
+- **In Codex**, the plugin exposes the same MCP read/write tools and onboarding emits the project's
+  canon slice into `AGENTS.md`. Automatic Codex lifecycle capture is the next parity slice (#225).
 - **From the CLI**:
 
   ```bash
