@@ -13,6 +13,10 @@ registry, sync daemon, and MCP server:
   `SessionEnd` extracts learnings from the transcript and stages them; `PreCompact` runs the same
   extraction before a long session compacts, so knowledge that scrolls out of context isn't lost
   if the session is abandoned (#195).
+- **Codex lifecycle hooks** — the matching `SessionStart`, `UserPromptSubmit`, and `PreCompact`
+  events use the same context and capture pipeline. Codex has no `SessionEnd`; its `Stop` event is
+  a **turn boundary**, so Commonwealth performs throttled, best-effort capture after completed
+  turns without describing that event as a session end (ADR-0028).
 - **Brain registry** — resolves the current project directory → its brain repo
   (`@cmnwlth/core`'s `resolveBrainDir`, issue #14).
 - **`/commonwealth` commands** — manual `remember`, `decide`, `recall`, `ask`, `promote`, `status`.
@@ -27,13 +31,15 @@ brain repo stays the source of truth.
 
 ```
 .claude-plugin/plugin.json   manifest (name, mcpServers, hooks)
-.codex-plugin/plugin.json    Codex manifest (shared MCP; lifecycle hooks land in #225)
-hooks/hooks.json             SessionStart + SessionEnd → node <script>.mjs
+.codex-plugin/plugin.json    Codex manifest (shared MCP + Codex-specific lifecycle config)
+hooks/hooks.json             Claude: SessionStart + UserPromptSubmit + PreCompact + SessionEnd
+hooks/codex-hooks.json       Codex: SessionStart + UserPromptSubmit + PreCompact + Stop
 hooks/lib.mjs                testable, dependency-injected hook core
 hooks/session-start.mjs      thin stdin→lib→stdout entry (prints session-wide context)
 hooks/user-prompt-submit.mjs thin entry: per-turn prompt-scoped context + throttled capture (#194)
 hooks/session-end.mjs        thin stdin→lib entry (stages candidates)
 hooks/pre-compact.mjs        thin stdin→worker entry (captures before compaction, #195)
+hooks/codex-hook.mjs         Codex dispatcher for context + throttled capture events
 commands/*.md                /commonwealth remember|decide|recall|promote|status
 agents/curator.md            @commonwealth:curator advisory review/consolidation subagent
 ```
@@ -83,6 +89,34 @@ session. Both adapters use the same hard timeout and `COMMONWEALTH_DISABLE_HOOKS
 so their nested agent process cannot recursively capture itself. See
 [ADR-0027](../../docs/adr/0027-host-neutral-extraction-runtime.md).
 
+## Lifecycle parity and host differences
+
+The two plugin manifests intentionally select different hook files. Claude Code auto-loads the
+standard `hooks/hooks.json`; the Codex manifest explicitly selects `hooks/codex-hooks.json` so
+Codex never sees Claude's unsupported `SessionEnd` declaration. The brain registry, scope gate,
+curation path, and detached capture worker remain shared.
+
+| Commonwealth behavior | Claude Code event | Codex event | Semantics |
+| --- | --- | --- | --- |
+| Load session-wide context | `SessionStart` | `SessionStart` | Equivalent; startup, resume, clear, and post-compact starts are supported. |
+| Load prompt-relevant context | `UserPromptSubmit` | `UserPromptSubmit` | Equivalent and synchronous; an irrelevant prompt injects nothing. |
+| Preserve context before compaction | `PreCompact` | `PreCompact` | Equivalent; capture is detached so compaction is not blocked. |
+| Capture completed work | `SessionEnd` | `Stop` | Different: Claude ends a session; Codex finishes one turn. Codex capture is throttled and best-effort. |
+
+Codex's `Stop` hook is not an end-of-process signal. The Codex dispatcher skips recursive
+stop-hook turns and uses host-prefixed throttle state for `Stop` and `PreCompact`, so a recent
+pre-compaction capture does not immediately trigger the same turn-boundary work. The existing
+`COMMONWEALTH_PROMPT_CAPTURE_MS` interval controls opportunistic/turn capture (`0` disables it).
+`PreCompact` remains the safety boundary before context is discarded, and curation still
+deduplicates the resulting candidates. A stop capture reviews the accumulated Codex transcript
+available at that turn boundary, not only the latest turn.
+
+Only command hooks run in Codex today. Do **not** add `"async": true`: Codex parses that option but
+skips asynchronous handlers. Commonwealth gets non-blocking behavior by having the short command
+hook launch its capture worker as a detached child. Hook stdout is reserved for the documented
+context payload; diagnostics go to stderr, and hook entries exit successfully so an unavailable
+brain or extractor never blocks the host.
+
 ## Install (git plugin marketplace)
 
 The repo root ships `.claude-plugin/marketplace.json` declaring this plugin, so the repo IS a
@@ -99,11 +133,17 @@ codex plugin add commonwealth@commonwealth
 (Or point the marketplace at a local path / your fork / an internal mirror of this repo.)
 
 The plugin installs globally, so the `commonwealth` MCP server works in **every** selected host
-session. Claude Code also loads the lifecycle hooks. Per-repo routing is dynamic: the SessionStart
+session. Both hosts also load their lifecycle hooks. Per-repo routing is dynamic: the SessionStart
 hook resolves the real session cwd → its
 brain via the registry, and the MCP server resolves its brain via `@cmnwlth/core`'s
 `resolveBrainDir` — no brain is pinned into the registration. This replaced the old raw
 local-scope `claude mcp add`, which was invisible outside its install dir and pinned one brain.
+
+Codex command hooks require an explicit trust review. After installing or updating the plugin,
+open Codex, run `/hooks`, review the Commonwealth definitions, and trust their current hash. Codex
+skips unreviewed plugin hooks; it asks again when an update changes their definitions. Do not work
+around this product trust boundary in normal use. Automated smoke tests that already vet the
+plugin may use Codex's one-run hook-trust bypass.
 
 ## Auto-provisioning via team-managed settings (issue #13)
 
@@ -151,7 +191,9 @@ sibling `registry.json` is also consulted).
 
 - Every session is filtered by the **per-user scope** config (`~/.commonwealth/config.json`,
   allow/deny). Out-of-scope directories (personal projects) do **nothing**: no context is
-  injected and no learnings are captured. Manage it with `commonwealth-curate scope
+  injected, no transcript is sent to either host's recursive extractor, and no learnings are
+  captured. The same gate is applied to Claude session-end capture, Codex turn capture, and both
+  hosts' pre-compaction capture. Manage it with `commonwealth-curate scope
 allow|deny|show|check`.
 - **Decisions** are only ever staged when the team enables the `autoAdr` feature flag
   (`commonwealth-curate feature enable autoAdr`), enforced by curate — the plugin doesn't
@@ -159,8 +201,7 @@ allow|deny|show|check`.
 
 ## Manual live smoke test
 
-Real Claude Code hook firing can't be exercised by the unit tests, so verify end-to-end by
-hand:
+Real host hook firing needs a live smoke test, so verify end-to-end by hand:
 
 1. **Ensure the runtime is reachable:** the plugin uses the published `@cmnwlth/mcp` /
    `@cmnwlth/curate` via `npx` (a first run fetches them). For local changes, publish a dev
@@ -173,15 +214,19 @@ hand:
    ```
 3. **Register the brain** so it resolves: either drop a `.commonwealth/brain` marker in your
    project, add a `~/.commonwealth/registry.json` mapping, or `export COMMONWEALTH_BRAIN_DIR=/tmp/acme-brain`.
-4. **Install the plugin** (`claude plugin marketplace add <this repo>` → `claude plugin install
-commonwealth@commonwealth`) and open Claude Code in an **in-scope** project directory.
+4. **Install the plugin** in Claude Code, Codex, or both using the commands above. For Codex, open
+   `/hooks`, review Commonwealth, and trust the current hook definitions. Then open the selected
+   host in an **in-scope** project directory.
 5. **SessionStart:** confirm the "Relevant from the team brain" block appears in context.
    In an **out-of-scope** dir (add it via `commonwealth-curate scope deny <dir>`), confirm
    nothing is injected.
 6. **`/commonwealth` commands:** run `/commonwealth status` (pending + sync), `/commonwealth remember
 <fact>` (stages a note), `/commonwealth promote` (approve it), `/commonwealth recall <query>`.
-7. **SessionEnd:** end the session; if `claude` is on PATH the SessionEnd hook extracts
-   candidates and stages them — check `/commonwealth status` shows new pending notes. If `claude`
-   is unavailable, the hook logs to stderr and stages nothing (never breaks the session).
+7. **Capture:** in Claude Code, end the session and confirm `SessionEnd` stages candidates. In
+   Codex, complete a turn and confirm the throttled `Stop` capture stages candidates; remember that
+   this is a turn boundary, not `SessionEnd`. Run a manual compaction in either host to exercise
+   `PreCompact`. Check `/commonwealth status` for pending notes or the next-start receipt.
+8. **Privacy check:** deny a test directory in the per-user scope config and confirm neither host
+   injects context or launches transcript extraction there.
 
 Hook errors always go to **stderr** and exit 0 — a hook must never break the session.

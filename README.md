@@ -63,12 +63,14 @@ commonwealth init
 1. Creates a brain for this project — or **joins** the one it already belongs to.
 2. Lets you multi-select which folders to sync into the brain and which repos to **seed** from
    (mining git history, ADRs, and agent config like `CLAUDE.md` / `.cursorrules` / `AGENTS.md`).
-3. Installs the Commonwealth **plugin** for the selected agent. Claude Code gets MCP + session
-   hooks; Codex gets MCP plus a generated `AGENTS.md` brain snapshot.
+3. Installs the Commonwealth **plugin** for the selected agent. Claude Code and Codex both get MCP
+   plus host-specific lifecycle hooks; Codex also gets a generated `AGENTS.md` brain snapshot.
 4. Starts the background **sync daemon** and sets up your capture scope.
 
 > After install, restart the selected agent and open a new session/thread so it loads the plugin.
 > In Claude Code, `/mcp` should list the `commonwealth` server.
+> In Codex, run `/hooks`, review Commonwealth, and trust the current hook definitions; unreviewed
+> plugin hooks are skipped.
 
 The default remains Claude Code for backward compatibility. Select Codex or both explicitly:
 
@@ -94,8 +96,9 @@ commonwealth init --yes --agent both --sync ~/work/app --seed-repo ~/work/app --
 ```
 
 Then open a Claude Code session or Codex thread in the project and ask it something your team
-already knows. Codex automatic lifecycle capture is tracked in #225; MCP reads/writes and the
-`AGENTS.md` fallback work in this first integration slice.
+already knows. Both hosts inject relevant brain context and capture before compaction. Claude Code
+captures at `SessionEnd`; Codex has no session-end event, so it performs throttled capture when an
+agent turn reaches `Stop`. In Codex, `Stop` is a turn boundary, not the end of the thread.
 
 ## Everyday use
 

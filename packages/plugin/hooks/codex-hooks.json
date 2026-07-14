@@ -1,0 +1,56 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/codex-hook.mjs\" SessionStart",
+            "commandWindows": "node \"%PLUGIN_ROOT%\\hooks\\codex-hook.mjs\" SessionStart",
+            "timeout": 30,
+            "statusMessage": "Loading Commonwealth context"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/codex-hook.mjs\" UserPromptSubmit",
+            "commandWindows": "node \"%PLUGIN_ROOT%\\hooks\\codex-hook.mjs\" UserPromptSubmit",
+            "timeout": 15,
+            "statusMessage": "Searching the Commonwealth brain"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/codex-hook.mjs\" PreCompact",
+            "commandWindows": "node \"%PLUGIN_ROOT%\\hooks\\codex-hook.mjs\" PreCompact",
+            "timeout": 10,
+            "statusMessage": "Preserving Commonwealth knowledge"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/codex-hook.mjs\" Stop",
+            "commandWindows": "node \"%PLUGIN_ROOT%\\hooks\\codex-hook.mjs\" Stop",
+            "timeout": 10,
+            "statusMessage": "Capturing Commonwealth knowledge"
+          }
+        ]
+      }
+    ]
+  }
+}
