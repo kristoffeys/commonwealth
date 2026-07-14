@@ -295,6 +295,16 @@ describe("realDeps() receipt IO (#96) — saveReceipt / takeReceipt round-trip",
     expect(await realDeps().takeReceipt("/anything")).toBeNull();
   });
 
+  it("keeps Claude session and Codex turn receipts independent (#225)", async () => {
+    const claude = realDeps({ host: "claude" });
+    const codex = realDeps({ host: "codex" });
+    await claude.saveReceipt({ cwd: "/work/app", message: "Claude session", ts: 1 });
+    await codex.saveReceipt({ cwd: "/work/app", message: "Codex turn", ts: 2 });
+
+    expect(await codex.takeReceipt("/work/app")).toBe("Codex turn");
+    expect(await claude.takeReceipt("/work/app")).toBe("Claude session");
+  });
+
   it("prompt-capture mark round-trips per session key (#194)", async () => {
     const deps = realDeps();
     // Unseen key → null (never captured → the throttle fires on first prompt).

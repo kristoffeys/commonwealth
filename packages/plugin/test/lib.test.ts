@@ -367,6 +367,21 @@ describe("sessionEnd", () => {
     );
   });
 
+  it("propagates a Codex turn boundary into the deferred receipt (#225)", async () => {
+    const deps = makeDeps();
+    await sessionEnd(
+      {
+        cwd: "/work/acme/app",
+        transcript_path: "/tmp/codex.jsonl",
+        commonwealth_capture_boundary: "turn",
+      },
+      deps,
+    );
+    expect(deps.saveReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("latest turn boundary") }),
+    );
+  });
+
   it("does not save a receipt when there is no cwd", async () => {
     const deps = makeDeps();
     const result = await sessionEnd({}, deps);
@@ -484,6 +499,13 @@ describe("endReceiptMessage (#96)", () => {
   it("reports zero and non-zero capture counts", () => {
     expect(endReceiptMessage({ captured: 0 })).toContain("no durable knowledge");
     expect(endReceiptMessage({ captured: 3 })).toContain("3 note(s)");
+  });
+  it("names Codex Stop and PreCompact boundaries honestly (#225)", () => {
+    expect(endReceiptMessage({ captured: 2 }, "turn")).toContain("latest turn boundary");
+    expect(endReceiptMessage({ captured: 0 }, "compaction")).toContain("pre-compaction history");
+    expect(endReceiptMessage({ skipped: true, reason: "no-brain" }, "turn")).toContain(
+      "latest turn boundary",
+    );
   });
   it("reports a curate child failure as lost capture, never zero durable knowledge (#222)", () => {
     const msg = endReceiptMessage({

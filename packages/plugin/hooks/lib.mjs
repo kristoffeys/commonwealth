@@ -243,12 +243,13 @@ export function shouldCaptureNow({ lastMark, now, intervalMs }) {
  * falls back to `$CLAUDE_PROJECT_DIR` / `process.cwd()` (see {@link candidateCwds}); scope,
  * capture, and the receipt then use whichever candidate actually resolved.
  *
- * @param {{ cwd: string, transcript_path?: string }} input  Parsed SessionEnd hook stdin.
+ * @param {{ cwd: string, transcript_path?: string, commonwealth_capture_boundary?: "turn" | "compaction" }} input  Parsed capture hook stdin.
  * @param {object} deps                                       See the contract above.
  * @returns {Promise<object>}  A small result object for the hook to log to stderr.
  */
 export async function sessionEnd(input, deps) {
   const inputCwd = input?.cwd;
+  const boundary = input?.commonwealth_capture_boundary;
   // No cwd: nothing to say and nowhere to anchor a receipt — skip silently.
   if (typeof inputCwd !== "string" || inputCwd.length === 0)
     return { skipped: true, reason: "no-cwd" };
@@ -258,17 +259,22 @@ export async function sessionEnd(input, deps) {
     // The per-user config file exists but doesn't parse (#210). No brain resolved, so nothing was
     // captured — but that's a BROKEN config, not "no brain here". Anchor a loud, actionable receipt
     // to the cwd so the next SessionStart there tells the user to fix the file (never silent).
-    return await finishEnd(deps, resolved.cwd, {
-      skipped: true,
-      reason: "corrupt-config",
-      path: resolved.path,
-      error: resolved.error,
-    });
+    return await finishEnd(
+      deps,
+      resolved.cwd,
+      {
+        skipped: true,
+        reason: "corrupt-config",
+        path: resolved.path,
+        error: resolved.error,
+      },
+      boundary,
+    );
   }
   if (resolved.kind === "denied") {
     // An explicit deny rule matched (the privacy gate) — out of scope. Anchor the receipt to the
     // denied cwd so the next SessionStart there explains the silence.
-    return await finishEnd(deps, resolved.cwd, { skipped: true, reason: "out-of-scope" });
+    return await finishEnd(deps, resolved.cwd, { skipped: true, reason: "out-of-scope" }, boundary);
   }
   if (resolved.kind !== "brain") {
     // A synthetic launcher cwd (e.g. Orca's rate-limit PTY) never maps to a brain and isn't a
@@ -277,7 +283,7 @@ export async function sessionEnd(input, deps) {
     if (isSyntheticLauncherCwd(inputCwd)) return { skipped: true, reason: "synthetic-cwd" };
     // No brain for the hook cwd or any fallback. Anchor the receipt to the hook cwd so the next
     // SessionStart there can explain the silence.
-    return await finishEnd(deps, inputCwd, { skipped: true, reason: "no-brain" });
+    return await finishEnd(deps, inputCwd, { skipped: true, reason: "no-brain" }, boundary);
   }
   const { cwd, brain } = resolved;
 
@@ -289,22 +295,27 @@ export async function sessionEnd(input, deps) {
   // before curate so a missing/auth-failed/timed-out host CLI can never be reported as "nothing
   // worth capturing" (or accidentally invoke capture with an invalid payload).
   if (!extracted || extracted.ok !== true || !Array.isArray(extracted.candidates)) {
-    return await finishEnd(deps, cwd, {
-      captured: 0,
-      failed: true,
-      reason: "extractor-failure",
-      host: extracted?.host,
-      runtime: extracted?.runtime,
-      code: extracted?.code,
-      signal: extracted?.signal,
-      timedOut: extracted?.timedOut === true || extracted?.reason === "extractor-timeout",
-      error:
-        typeof extracted?.error === "string"
-          ? extracted.error
-          : extracted?.error
-            ? String(extracted.error)
-            : "extractor returned an invalid result",
-    });
+    return await finishEnd(
+      deps,
+      cwd,
+      {
+        captured: 0,
+        failed: true,
+        reason: "extractor-failure",
+        host: extracted?.host,
+        runtime: extracted?.runtime,
+        code: extracted?.code,
+        signal: extracted?.signal,
+        timedOut: extracted?.timedOut === true || extracted?.reason === "extractor-timeout",
+        error:
+          typeof extracted?.error === "string"
+            ? extracted.error
+            : extracted?.error
+              ? String(extracted.error)
+              : "extractor returned an invalid result",
+      },
+      boundary,
+    );
   }
   const candidates = extracted.candidates;
   const result =
@@ -317,7 +328,7 @@ export async function sessionEnd(input, deps) {
   // work is free to run. Best-effort — the dep swallows its own errors; a hook must never break.
   if (typeof deps.refreshStatus === "function") await deps.refreshStatus(brain, cwd);
 
-  return await finishEnd(deps, cwd, result);
+  return await finishEnd(deps, cwd, result, boundary);
 }
 
 /**
@@ -327,8 +338,8 @@ export async function sessionEnd(input, deps) {
  * captured" must be deferred to the next start. Best-effort via `deps.saveReceipt`; returns the
  * result unchanged so the hook's stderr summary is untouched.
  */
-async function finishEnd(deps, cwd, result) {
-  const message = endReceiptMessage(result);
+async function finishEnd(deps, cwd, result, boundary) {
+  const message = endReceiptMessage(result, boundary);
   if (message && typeof deps.saveReceipt === "function") {
     await deps.saveReceipt({ cwd, message, ts: Date.now() });
   }
@@ -419,7 +430,8 @@ const RECEIPT_TITLE_LIMIT = 3;
  * @param {Array<{kind: string, title: string, promoted: boolean}>} notes
  * @returns {string}
  */
-function renderCaptureReceipt(notes) {
+function renderCaptureReceipt(notes, boundary) {
+  const source = captureBoundaryLabel(boundary);
   const shown = notes.slice(0, RECEIPT_TITLE_LIMIT).map((n) => `• "${n.title}"`);
   const extra = notes.length - shown.length;
   const list = [...shown, ...(extra > 0 ? [`(+${extra} more)`] : [])].join("\n");
@@ -427,9 +439,16 @@ function renderCaptureReceipt(notes) {
   // belt-and-suspenders read in case a line ever fails to parse its prefix.
   const promoted = notes.some((n) => n.promoted);
   if (promoted) {
-    return `🧠 Commonwealth remembered from the last session:\n${list}\nRun \`commonwealth status\` to review.`;
+    return `🧠 Commonwealth remembered from ${source}:\n${list}\nRun \`commonwealth status\` to review.`;
   }
-  return `🧠 Commonwealth staged ${notes.length} note(s) from the last session for review:\n${list}\nRun \`/commonwealth:promote\` to approve.`;
+  return `🧠 Commonwealth staged ${notes.length} note(s) from ${source} for review:\n${list}\nRun \`/commonwealth:promote\` to approve.`;
+}
+
+/** Describe which transcript boundary a capture worker reviewed. */
+function captureBoundaryLabel(boundary) {
+  if (boundary === "turn") return "the Codex transcript at the latest turn boundary";
+  if (boundary === "compaction") return "the pre-compaction history";
+  return "the last session";
 }
 
 /**
@@ -440,10 +459,12 @@ function renderCaptureReceipt(notes) {
  * Pure function.
  *
  * @param {{skipped?: boolean, failed?: boolean, reason?: string, path?: string, error?: string, runtime?: string, host?: string, code?: number | null, signal?: string | null, timedOut?: boolean, captured?: number, notes?: Array<{kind: string, title: string, promoted: boolean}>}} result
+ * @param {"turn" | "compaction" | undefined} boundary
  * @returns {string | null}
  */
-export function endReceiptMessage(result) {
+export function endReceiptMessage(result, boundary) {
   if (!result || typeof result !== "object") return null;
+  const source = captureBoundaryLabel(boundary);
   if (result.failed && result.reason === "extractor-failure") {
     const host = typeof result.host === "string" && result.host.length > 0 ? ` ${result.host}` : "";
     const runtime =
@@ -481,23 +502,23 @@ export function endReceiptMessage(result) {
       return `🧠 Commonwealth: your config file${where} is unparseable${why}, so NO brain resolved and nothing was captured. Fix the JSON (a stray trailing comma is the usual cause) or restore it from a \`.corrupt-<ts>\` backup, then run \`commonwealth doctor\` to confirm.`;
     }
     if (result.reason === "no-brain") {
-      return "🧠 Commonwealth: the last session ended in a directory with no team brain mapped, so nothing was captured. Add a rule with `commonwealth registry` (or run `commonwealth add`) to capture here.";
+      return `🧠 Commonwealth: ${source} was in a directory with no team brain mapped, so nothing was captured. Add a rule with \`commonwealth registry\` (or run \`commonwealth add\`) to capture here.`;
     }
     if (result.reason === "out-of-scope") {
-      return "🧠 Commonwealth: the last session's directory is outside your Commonwealth capture scope, so nothing was captured.";
+      return `🧠 Commonwealth: ${source}'s directory is outside your Commonwealth capture scope, so nothing was captured.`;
     }
     return null; // no-cwd / unknown — nothing useful to surface
   }
   // Prefer the legible, titled receipt when we have structured notes (#204).
   if (Array.isArray(result.notes) && result.notes.length > 0) {
-    return renderCaptureReceipt(result.notes);
+    return renderCaptureReceipt(result.notes, boundary);
   }
   if (typeof result.captured === "number") {
     if (result.captured === 0) {
-      return "🧠 Commonwealth: reviewed the last session but found no durable knowledge worth capturing.";
+      return `🧠 Commonwealth: reviewed ${source} but found no durable knowledge worth capturing.`;
     }
     const n = result.captured;
-    return `🧠 Commonwealth: captured ${n} note(s) from the last session. Run \`commonwealth status\` to review.`;
+    return `🧠 Commonwealth: captured ${n} note(s) from ${source}. Run \`commonwealth status\` to review.`;
   }
   return null;
 }
@@ -789,9 +810,10 @@ export async function probeCurateRuntime(overrides = {}) {
 }
 
 export function realDeps(overrides = {}) {
+  const host = overrides.host ?? "claude";
   const extractorFactory = overrides.createExtractor ?? createExtractor;
   const extractor = extractorFactory({
-    host: overrides.host ?? "claude",
+    host,
     run,
     claudeBin: overrides.claudeBin,
     codexBin: overrides.codexBin,
@@ -879,10 +901,11 @@ export function realDeps(overrides = {}) {
    */
   function receiptPath() {
     if (process.env.COMMONWEALTH_RECEIPT) return process.env.COMMONWEALTH_RECEIPT;
+    const filename = host === "codex" ? "last-codex-turn.json" : "last-session.json";
     if (process.env.COMMONWEALTH_CONFIG) {
-      return path.join(path.dirname(process.env.COMMONWEALTH_CONFIG), "last-session.json");
+      return path.join(path.dirname(process.env.COMMONWEALTH_CONFIG), filename);
     }
-    return path.join(os.homedir(), ".commonwealth", "last-session.json");
+    return path.join(os.homedir(), ".commonwealth", filename);
   }
 
   /** Persist the SessionEnd receipt (best-effort; a hook must never break the session). */

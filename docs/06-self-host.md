@@ -77,8 +77,11 @@ Codex can use the live Commonwealth MCP server through the plugin:
 commonwealth init --agent codex   # or --agent both
 ```
 
-This also refreshes the project's `AGENTS.md` brain snapshot as a read-only fallback. Automatic
-Codex lifecycle capture is tracked separately in #225.
+This also refreshes the project's `AGENTS.md` brain snapshot as a read-only fallback. The Codex
+plugin injects context at session and prompt boundaries, captures before compaction, and performs
+throttled capture when an agent turn reaches `Stop`. Codex has no `SessionEnd`; `Stop` is a turn
+boundary, not the end of the thread. After plugin install or update, run `/hooks` in Codex and
+trust the reviewed Commonwealth hook definitions.
 
 ### Zero-runtime fallback — `commonwealth emit`
 
@@ -215,6 +218,15 @@ That's the whole export story — no proprietary format, no `export` command to 
 The `@cmnwlth/*` packages are published to npm, so no build step is needed:
 
 - **CLI:** `npm i -g @cmnwlth/cli` (or `npx @cmnwlth/cli init`).
-- **Plugin:** installing it from the marketplace works from a bare clone — its MCP server and hooks
-  run the published packages on demand via `npx` (`@cmnwlth/mcp`, `@cmnwlth/curate`), which pull
-  `better-sqlite3`'s per-platform prebuilt binary transitively. Nothing platform-locked to commit.
+- **Plugin:** installing it from the marketplace works from a bare clone in Claude Code, Codex, or
+  both. The host-specific manifests share the MCP server and brain registry but select different
+  lifecycle files: Claude uses `SessionEnd`; Codex uses throttled, turn-scoped `Stop` because Codex
+  has no session-end event. The MCP server and hooks run the published packages on demand via
+  `npx` (`@cmnwlth/mcp`, `@cmnwlth/curate`), which pull `better-sqlite3`'s per-platform prebuilt
+  binary transitively. Nothing platform-locked is committed.
+
+  Codex users must run `/hooks` after install or update and trust the reviewed Commonwealth hook
+  definitions; unreviewed plugin hooks are skipped. Scope remains local to each teammate: denied
+  projects neither receive injected context nor send transcripts to the extractor, regardless of
+  which host is installed. Codex's asynchronous hook option is not supported, so Commonwealth's
+  command hook returns quickly after launching its own detached capture worker.

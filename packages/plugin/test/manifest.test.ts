@@ -53,9 +53,10 @@ describe(".codex-plugin/plugin.json", () => {
     expect(manifest.mcpServers).toBe("./.mcp.json");
     expect(existsSync(path.join(pluginRoot, manifest.mcpServers as string))).toBe(true);
 
-    // Codex lifecycle capture is tracked separately (#225); this first slice must not advertise
-    // Claude's SessionEnd semantics as if they already worked in Codex.
-    expect(manifest.hooks).toBeUndefined();
+    // Explicitly naming the Codex hook file prevents Codex from auto-loading Claude's standard
+    // hooks/hooks.json as well (which would duplicate shared events and includes SessionEnd).
+    expect(manifest.hooks).toBe("./hooks/codex-hooks.json");
+    expect(existsSync(path.join(pluginRoot, manifest.hooks as string))).toBe(true);
   });
 });
 
@@ -155,5 +156,42 @@ describe("hooks/hooks.json", () => {
     expect(prompt?.command).toContain("hooks/user-prompt-submit.mjs");
     expect(prompt?.command).toContain("${CLAUDE_PLUGIN_ROOT}");
     expect(existsSync(path.join(pluginRoot, "hooks", "user-prompt-submit.mjs"))).toBe(true);
+  });
+});
+
+describe("hooks/codex-hooks.json", () => {
+  it("maps exactly the four supported Codex lifecycle events through PLUGIN_ROOT", () => {
+    const config = readJson("hooks/codex-hooks.json") as {
+      hooks: Record<
+        string,
+        Array<{
+          hooks: Array<{
+            type: string;
+            command: string;
+            commandWindows?: string;
+            async?: boolean;
+            timeout?: number;
+          }>;
+        }>
+      >;
+    };
+
+    expect(Object.keys(config.hooks).sort()).toEqual(
+      ["SessionStart", "UserPromptSubmit", "PreCompact", "Stop"].sort(),
+    );
+    expect(config.hooks.SessionEnd).toBeUndefined();
+
+    for (const [event, groups] of Object.entries(config.hooks)) {
+      expect(groups).toHaveLength(1);
+      expect(groups[0].hooks).toHaveLength(1);
+      const hook = groups[0].hooks[0];
+      expect(hook.type).toBe("command");
+      expect(hook.command).toContain('"${PLUGIN_ROOT}/hooks/codex-hook.mjs"');
+      expect(hook.command).toContain(event);
+      expect(hook.commandWindows).toContain('"%PLUGIN_ROOT%\\hooks\\codex-hook.mjs"');
+      expect(hook.commandWindows).toContain(event);
+      expect(hook.async).toBeUndefined();
+      expect(hook.timeout).toBeGreaterThan(0);
+    }
   });
 });

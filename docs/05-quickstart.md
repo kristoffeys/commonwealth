@@ -34,7 +34,8 @@ commonwealth init
 One idempotent command does the whole setup: creates a brain repo (a separate git repo under
 `~/.commonwealth/brains/<project>`), registers this project → that brain, seeds it by mining your
 git history / ADRs / agent config into the review queue, installs the Commonwealth plugin (MCP +
-Claude Code session hooks, or Codex MCP + `AGENTS.md` fallback), starts the sync daemon, and
+host-specific lifecycle hooks; Codex also receives an `AGENTS.md` canon slice), starts the sync
+daemon, and
 ensures your per-user scope config exists. Re-run it anytime — it only does what's still missing.
 See the flags in `commonwealth init --help` (e.g.
 `--yes`, `--agent codex`, `--no-daemon`, `--no-seed`, `--brain <dir>`, `--remote <url>`).
@@ -56,13 +57,19 @@ codex plugin marketplace add kristoffeys/commonwealth
 codex plugin add commonwealth@commonwealth
 ```
 
+After installing or updating in Codex, run `/hooks`, review the Commonwealth command hooks, and
+trust their current hash. Codex skips unreviewed plugin hooks. The MCP tools do not need this hook
+approval.
+
 ## 3. Use it
 
 - **In a Claude Code session** in this project, the plugin injects relevant team-brain context at
   session start and captures durable knowledge at session end (subject to the scope + curation
   gates). Ask it something your project already knows.
-- **In Codex**, the plugin exposes the same MCP read/write tools and onboarding emits the project's
-  canon slice into `AGENTS.md`. Automatic Codex lifecycle capture is the next parity slice (#225).
+- **In Codex**, the plugin exposes the same MCP read/write tools, injects context at session and
+  prompt boundaries, captures before compaction, and performs throttled capture at `Stop`. Codex
+  `Stop` means **one agent turn completed**, not that the session ended. Onboarding also emits the
+  project's canon slice into `AGENTS.md`.
 - **From the CLI**:
 
   ```bash
@@ -83,5 +90,8 @@ MCP client.
   derived and rebuildable.
 - Captured knowledge passes the **scope + dedup + secret gates** before it lands. By default
   (`autoPromote`) it goes straight to canon; set the flag off to require manual review.
+- Out-of-scope projects inject nothing and never send their transcript to either host's recursive
+  extractor. Codex capture uses short command hooks plus a detached worker; Codex does not support
+  asynchronous command hooks, so `async` hook configuration is intentionally not used.
 
 Next: [Self-host guide](./06-self-host.md) — share a brain across a team with a git remote.
