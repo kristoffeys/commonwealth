@@ -27,6 +27,7 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 | [0023](0023-org-brain-graduation.md)          | Org-brain graduation: cross-brain recurrence → org-brain, opt-in | Accepted |
 | [0024](0024-rule-based-brain-resolution.md)   | Rule-based brain resolution: match by git identity or path      | Accepted |
 | [0026](0026-portable-plugin-runtime-fallback.md) | Portable plugin runtime: observable, fail-loud npx fallback  | Accepted |
+| [0027](0027-host-neutral-extraction-runtime.md) | Host-neutral session extraction: Claude Code and Codex adapters | Accepted |
 
 ## Process
 

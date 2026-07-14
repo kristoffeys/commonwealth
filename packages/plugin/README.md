@@ -61,6 +61,28 @@ The pinned version tracks the plugin's own version; bump both together on releas
 `scripts/bundle.mjs` builds the same-platform vendored runtime used by local smoke tests and
 development. It is not a cross-platform distribution artifact.
 
+## Host-neutral extraction
+
+Lifecycle hooks hand session transcripts to one shared extraction contract; host adapters own the
+unstable edges around that contract:
+
+- The **Claude Code adapter** compacts Claude transcript JSONL and invokes `claude -p`.
+- The **Codex adapter** invokes the supported non-interactive `codex exec` surface with a candidate
+  output schema from a fresh empty working directory, preventing project `AGENTS.md` or config from
+  influencing the recursive extractor. Codex does not promise a stable on-disk transcript format,
+  so the adapter compacts recognized events but falls back to bounded raw transcript data when the
+  event shape changes.
+- Both produce only schema-validated `{ kind, title, body, tags? }` candidates. The downstream
+  capture path — not the model — derives project provenance from the trusted session cwd and then
+  applies scope, secret, deduplication, review, and promotion gates.
+
+A successful, schema-valid `[]` means the extractor genuinely found no durable knowledge. A
+missing CLI, authentication failure, timeout, non-zero exit, unreadable transcript, or malformed
+output is a loud extraction failure and gets a failure receipt; it is never reported as an empty
+session. Both adapters use the same hard timeout and `COMMONWEALTH_DISABLE_HOOKS` recursion guard,
+so their nested agent process cannot recursively capture itself. See
+[ADR-0027](../../docs/adr/0027-host-neutral-extraction-runtime.md).
+
 ## Install (git plugin marketplace)
 
 The repo root ships `.claude-plugin/marketplace.json` declaring this plugin, so the repo IS a

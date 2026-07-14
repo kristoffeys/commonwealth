@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { initBrain, listNotes } from "@cmnwlth/core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // The REAL production wiring — not the injected fakes the other tests use. These guard the
 // two silent-failure bugs the M4b verifier caught: an unresolvable core import and a broken
 // `capture --from -` invocation.
@@ -310,7 +310,7 @@ describe("realDeps() receipt IO (#96) — saveReceipt / takeReceipt round-trip",
 });
 
 describe("realDeps().extractCandidates hardening (#104)", () => {
-  it("hard-kills a wedged extraction child and returns [] (timeout)", async () => {
+  it("hard-kills a wedged extraction child and reports a loud timeout failure", async () => {
     // A `claude` stub that hangs forever: without the timeout, extractCandidates would never
     // resolve and SessionEnd would block indefinitely.
     const stub = path.join(tmp, "hang.sh");
@@ -321,11 +321,39 @@ describe("realDeps().extractCandidates hardening (#104)", () => {
 
     const deps = realDeps({ claudeBin: stub, extractionTimeoutMs: 500 });
     const start = process.hrtime.bigint();
-    const out = await deps.extractCandidates(transcript);
+    const out = await deps.extractCandidates({ transcriptPath: transcript, cwd: tmp });
     const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
 
-    expect(out).toEqual([]);
+    expect(out).toMatchObject({ ok: false, host: "claude" });
     expect(elapsedMs).toBeLessThan(5000); // killed at ~500ms, not left hanging
+  });
+
+  it("selects the requested host once and delegates the exact extraction request", async () => {
+    const extract = vi.fn(async () => ({ ok: true, candidates: [] }));
+    const extractorFactory = vi.fn(() => ({ extract }));
+    const schemaPath = path.join(tmp, "schema.json");
+    const deps = realDeps({
+      host: "codex",
+      codexBin: "/opt/bin/codex",
+      extractionTimeoutMs: 321,
+      schemaPath,
+      createExtractor: extractorFactory,
+    });
+
+    expect(extractorFactory).toHaveBeenCalledOnce();
+    expect(extractorFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: "codex",
+        codexBin: "/opt/bin/codex",
+        timeoutMs: 321,
+        schemaPath,
+        run: expect.any(Function),
+      }),
+    );
+    const request = { transcriptPath: "/tmp/codex-session.jsonl", cwd: "/work/app" };
+    expect(await deps.extractCandidates(request)).toEqual({ ok: true, candidates: [] });
+    expect(extract).toHaveBeenCalledOnce();
+    expect(extract).toHaveBeenCalledWith(request);
   });
 });
 
@@ -550,9 +578,12 @@ describe("realDeps().capture (real curate binary over stdin)", () => {
     const saved: Array<{ message: string }> = [];
     const endDeps = {
       resolveBrain: async () => ({ kind: "brain", brain }),
-      extractCandidates: async () => [
-        { kind: "memory", title: "Would be lost", body: "must produce a failure receipt" },
-      ],
+      extractCandidates: async () => ({
+        ok: true,
+        candidates: [
+          { kind: "memory", title: "Would be lost", body: "must produce a failure receipt" },
+        ],
+      }),
       capture: deps.capture,
       refreshStatus: async () => {},
       saveReceipt: async (receipt: { message: string }) => saved.push(receipt),
@@ -589,10 +620,11 @@ describe("realDeps().capture (real curate binary over stdin)", () => {
     await fs.chmod(stubBin, 0o755);
 
     const deps = realDeps({ claudeBin: stubBin });
-    const candidates = await deps.extractCandidates(transcriptPath);
+    const extracted = await deps.extractCandidates({ transcriptPath, cwd: tmp });
 
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0].title).toBe("from stdin");
+    expect(extracted.ok).toBe(true);
+    expect(extracted.candidates).toHaveLength(1);
+    expect(extracted.candidates[0].title).toBe("from stdin");
   });
 });
 

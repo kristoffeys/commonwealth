@@ -4,6 +4,7 @@ import {
   attachReceipt,
   buildSessionStartOutput,
   buildUserPromptSubmitOutput,
+  captureWorkerHost,
   compactTranscript,
   deriveReceipt,
   endReceiptMessage,
@@ -29,7 +30,10 @@ function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
     getContextQuery: vi.fn(
       async () => "## Team brain — 2 relevant note(s)\n- **JWT** (memory) — 15m expiry",
     ),
-    extractCandidates: vi.fn(async () => [{ kind: "memory", title: "T", body: "B" }]),
+    extractCandidates: vi.fn(async () => ({
+      ok: true,
+      candidates: [{ kind: "memory", title: "T", body: "B" }],
+    })),
     capture: vi.fn(async (_brain: string, _cwd: string, candidates: { title?: string }[]) => ({
       captured: candidates.length,
       // Mirror the real dep's shape (#204): structured notes carrying kind + title + promoted
@@ -196,7 +200,10 @@ describe("sessionEnd", () => {
       { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
       deps,
     );
-    expect(deps.extractCandidates).toHaveBeenCalledWith("/tmp/t.jsonl");
+    expect(deps.extractCandidates).toHaveBeenCalledWith({
+      transcriptPath: "/tmp/t.jsonl",
+      cwd: "/work/acme/app",
+    });
     expect(deps.capture).toHaveBeenCalledWith("/brains/acme", "/work/acme/app", [
       { kind: "memory", title: "T", body: "B" },
     ]);
@@ -209,7 +216,9 @@ describe("sessionEnd", () => {
   });
 
   it("refreshes the status cache even when nothing was captured (#197)", async () => {
-    const deps = makeDeps({ extractCandidates: vi.fn(async () => []) });
+    const deps = makeDeps({
+      extractCandidates: vi.fn(async () => ({ ok: true, candidates: [] })),
+    });
     await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" }, deps);
     expect(deps.capture).not.toHaveBeenCalled();
     // Brain resolved → status still refreshed (pending count / freshness may have changed).
@@ -278,7 +287,9 @@ describe("sessionEnd", () => {
   });
 
   it("reports captured:0, does not call capture, and leaves a 'nothing worth capturing' receipt", async () => {
-    const deps = makeDeps({ extractCandidates: vi.fn(async () => []) });
+    const deps = makeDeps({
+      extractCandidates: vi.fn(async () => ({ ok: true, candidates: [] })),
+    });
     const result = await sessionEnd(
       { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
       deps,
@@ -288,6 +299,60 @@ describe("sessionEnd", () => {
     expect(deps.saveReceipt).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("no durable knowledge") }),
     );
+  });
+
+  it("stops before curate and leaves a loud receipt when extraction fails", async () => {
+    const deps = makeDeps({
+      extractCandidates: vi.fn(async () => ({
+        ok: false,
+        reason: "extractor-timeout",
+        host: "codex",
+        runtime: "codex exec",
+        code: null,
+        error: "timed out after 120000ms",
+      })),
+    });
+    const result = await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/codex.jsonl" },
+      deps,
+    );
+
+    expect(result).toMatchObject({
+      captured: 0,
+      failed: true,
+      reason: "extractor-failure",
+      host: "codex",
+      runtime: "codex exec",
+      timedOut: true,
+      error: "timed out after 120000ms",
+    });
+    expect(deps.capture).not.toHaveBeenCalled();
+    expect(deps.refreshStatus).not.toHaveBeenCalled();
+    expect(deps.saveReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/work/acme/app",
+        message: expect.stringContaining("capture FAILED"),
+      }),
+    );
+    expect(deps.saveReceipt.mock.calls[0][0].message).toContain("curate was NOT run");
+    expect(deps.saveReceipt.mock.calls[0][0].message).toContain("timed out");
+    expect(deps.saveReceipt.mock.calls[0][0].message).not.toContain("no durable knowledge");
+  });
+
+  it("treats an invalid successful extractor payload as failure, never as zero candidates", async () => {
+    const deps = makeDeps({
+      extractCandidates: vi.fn(async () => ({ ok: true, candidates: "not-an-array" })),
+    });
+
+    const result = await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
+      deps,
+    );
+
+    expect(result).toMatchObject({ failed: true, reason: "extractor-failure", captured: 0 });
+    expect(deps.capture).not.toHaveBeenCalled();
+    expect(deps.saveReceipt.mock.calls[0][0].message).toContain("capture FAILED");
+    expect(deps.saveReceipt.mock.calls[0][0].message).not.toContain("no durable knowledge");
   });
 
   it("leaves a titled receipt naming what was remembered after a real capture (#204)", async () => {
@@ -433,6 +498,22 @@ describe("endReceiptMessage (#96)", () => {
     expect(msg).toContain("exited 254");
     expect(msg).toContain("NOT saved");
     expect(msg).toContain("commonwealth doctor");
+    expect(msg).not.toContain("no durable knowledge");
+  });
+  it("reports an extractor failure loudly and says curate never ran (#227)", () => {
+    const msg = endReceiptMessage({
+      captured: 0,
+      failed: true,
+      reason: "extractor-failure",
+      host: "codex",
+      runtime: "codex exec",
+      code: 1,
+      error: "authentication required",
+    });
+    expect(msg).toContain("capture FAILED");
+    expect(msg).toContain("codex exec");
+    expect(msg).toContain("exited 1");
+    expect(msg).toContain("curate was NOT run");
     expect(msg).not.toContain("no durable knowledge");
   });
   it("returns null for junk input", () => {
@@ -646,6 +727,12 @@ describe("compactTranscript (#84)", () => {
 });
 
 describe("launchCaptureWorker (#190 — detached so `/clear` teardown can't kill capture)", () => {
+  it("selects the payload host and defaults legacy hook payloads to Claude", () => {
+    expect(captureWorkerHost({ commonwealth_host: "codex" })).toBe("codex");
+    expect(captureWorkerHost({ commonwealth_host: "claude" })).toBe("claude");
+    expect(captureWorkerHost({})).toBe("claude");
+  });
+
   it("spawns a detached, unref'd worker with the hook JSON as a single argv element", async () => {
     const fakeChild = { unref: vi.fn() };
     const spawnFn = vi.fn(() => fakeChild);
@@ -678,9 +765,16 @@ describe("launchCaptureWorker (#190 — detached so `/clear` teardown can't kill
 
   it("serializes a non-string input to JSON for the worker argv", async () => {
     const spawnFn = vi.fn(() => ({ unref: vi.fn() }));
-    await launchCaptureWorker({ cwd: "/w", reason: "clear" }, { workerPath: "/w.mjs", spawnFn });
+    await launchCaptureWorker(
+      { cwd: "/w", reason: "clear", commonwealth_host: "codex" },
+      { workerPath: "/w.mjs", spawnFn },
+    );
     const argv = spawnFn.mock.calls[0][1] as string[];
-    expect(JSON.parse(argv[1])).toEqual({ cwd: "/w", reason: "clear" });
+    expect(JSON.parse(argv[1])).toEqual({
+      cwd: "/w",
+      reason: "clear",
+      commonwealth_host: "codex",
+    });
   });
 
   it("returns null instead of throwing when the spawn fails (a hook must never break)", async () => {

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["candidates"],
+  "properties": {
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "title", "body", "tags"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["memory", "work-state", "decision", "person"]
+          },
+          "title": { "type": "string", "minLength": 1 },
+          "body": { "type": "string", "minLength": 1 },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}
