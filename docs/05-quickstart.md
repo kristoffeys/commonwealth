@@ -61,6 +61,17 @@ After installing or updating in Codex, run `/hooks`, review the Commonwealth com
 trust their current hash. Codex skips unreviewed plugin hooks. The MCP tools do not need this hook
 approval.
 
+Check or refresh the selected integration at any time:
+
+```bash
+commonwealth doctor
+commonwealth update --agent codex   # or claude / both
+```
+
+Doctor reports each installed host's plugin, hook, MCP, and extractor health plus the live
+plugin/extraction runtime path. It cannot inspect Codex's interactive trust decision, so `/hooks`
+remains an explicit step.
+
 ## 3. Use it
 
 - **In a Claude Code session** in this project, the plugin injects relevant team-brain context at

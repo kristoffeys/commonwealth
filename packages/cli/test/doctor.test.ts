@@ -201,6 +201,37 @@ describe("commonwealth doctor — diagnose()", () => {
     expect(check(report, "plugin").status).toBe("skip");
   });
 
+  it("adds optional host-prefixed diagnostics without changing the legacy checks/API (#226)", async () => {
+    await fs.mkdir(path.join(brain, ".commonwealth"), { recursive: true });
+    await fs.writeFile(path.join(brain, ".commonwealth", "sync.pid"), "4242\n");
+    const report = await diagnose(
+      healthyEnv({
+        hostIntegrations: () =>
+          Promise.resolve([
+            {
+              id: "claude-plugin",
+              label: "Claude plugin",
+              status: "ok",
+              detail: "healthy",
+            },
+            {
+              id: "codex-hooks",
+              label: "Codex hooks",
+              status: "warn",
+              detail: "trust cannot be verified noninteractively",
+              fix: "run /hooks",
+            },
+          ]),
+      }),
+    );
+
+    expect(check(report, "plugin").status).toBe("ok");
+    expect(check(report, "curate-runtime").status).toBe("ok");
+    expect(check(report, "claude-plugin").status).toBe("ok");
+    expect(check(report, "codex-hooks").fix).toContain("/hooks");
+    expect(report.ok).toBe(true); // warnings preserve the existing critical-failure contract
+  });
+
   it("names a healthy npx fallback as the live path and warns that cache is in-path (#222)", async () => {
     const report = await diagnose(
       healthyEnv({
@@ -210,13 +241,15 @@ describe("commonwealth doctor — diagnose()", () => {
             command: "npx -y @cmnwlth/curate@0.1.12",
             ok: true,
             code: 0,
-            version: "0.1.12",
+            version: "0.1.12\nTOKEN=must-not-render",
           }),
       }),
     );
     const runtime = check(report, "curate-runtime");
     expect(runtime.status).toBe("warn");
     expect(runtime.detail).toContain("npx -y @cmnwlth/curate@0.1.12");
+    expect(runtime.detail).toContain("(0.1.12)");
+    expect(runtime.detail).not.toContain("must-not-render");
     expect(runtime.detail).toContain("npm registry/cache fallback");
   });
 
@@ -259,6 +292,8 @@ describe("commonwealth doctor — diagnose()", () => {
     expect(runtime.status).toBe("fail");
     expect(runtime.detail).toContain("exit 254");
     expect(runtime.detail).toContain("Capture is OFF");
+    expect(runtime.detail).not.toContain("package.json missing");
+    expect(runtime.detail).toContain("diagnostics were redacted");
     expect(runtime.fix).toContain("npx cache");
   });
 

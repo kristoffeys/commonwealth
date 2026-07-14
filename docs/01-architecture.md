@@ -2,8 +2,8 @@
 title: Architecture
 type: decision
 status: draft
-updated: 2026-07-01
-tags: [architecture, concurrency, sync, mcp]
+updated: 2026-07-14
+tags: [architecture, concurrency, sync, mcp, claude-code, codex]
 ---
 
 # Architecture
@@ -93,7 +93,7 @@ reviewable task rather than data loss.
 
 Storage is solved; the unsolved problem (per the research) is the _auto_ pipeline:
 turning session learnings into shared, curated, propagated knowledge. This is the
-product. It runs in four stages, wired into Claude Code lifecycle hooks + MCP.
+product. It runs in four stages, wired into host-specific Claude Code/Codex lifecycle hooks + MCP.
 
 ```
  session ──▶ CAPTURE ──▶ CURATE ──▶ COMMIT ──▶ PROPAGATE ──▶ next session
@@ -102,11 +102,13 @@ product. It runs in four stages, wired into Claude Code lifecycle hooks + MCP.
                          gate)      queue)     review)        context)
 ```
 
-### Capture (Stop / SessionEnd hook + MCP write tools)
+### Capture (host lifecycle hook + MCP write tools)
 
 - The agent proposes candidate memories from the session (decisions made, gotchas
   learned, work-state changes). Two paths: explicit MCP `remember` calls during the
-  session, and an end-of-session sweep that drafts notes.
+  session, and a lifecycle sweep that drafts notes. Claude Code sweeps at `SessionEnd`; Codex has
+  no session-end event, so it reviews the accumulated thread transcript at throttled `Stop` turn
+  boundaries. Both hosts also capture before `PreCompact`.
 - Candidates land in a **staging area** (`staging/`), not straight into canon.
 
 ### Curate (curation gate, runs on staging + nightly)
@@ -143,9 +145,9 @@ product. It runs in four stages, wired into Claude Code lifecycle hooks + MCP.
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Brain repo(s)**      | Git repo(s) of markdown — the substrate & source of truth                                                                                                 |
 | **Sync daemon**        | Per-machine: pull on session start, commit+push on write, run the write queue, rebuild the index. Long-lived, one per user.                               |
-| **MCP server**         | Exposes `search / read / remember / list-workstate / whoami`-style tools to Claude Code (and any MCP client). Reads local copy + index.                   |
+| **MCP server**         | Exposes `search / read / remember / list-workstate / whoami`-style tools to Claude Code, Codex, and other MCP clients. Reads local copy + index.         |
 | **Curation agent**     | Runs dedupe/verify/contradiction/relevance on staging + nightly (cron), opens review PRs. Can reuse Claude via the Agent SDK.                             |
-| **Claude Code plugin** | Bundles MCP server config + lifecycle hooks (SessionStart pull+inject, Stop capture) + the brain registry. The auto-provisioning unit (see distribution). |
+| **Agent plugin**       | One payload with Claude Code and Codex manifests, shared MCP/runtime assets, and host-specific lifecycle declarations. The provisioning unit.          |
 | **Brain registry**     | Maps a working directory / project → its brain repo(s), so the plugin mounts the right brain automatically.                                               |
 
 ## Decisions of record

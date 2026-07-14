@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { promises as fs, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,10 +11,18 @@ import {
   detectInstallKind,
   isNewer,
   maybeNotifyUpdate,
+  parseCodexInstalledPlugin,
+  parseCodexMarketplaceKind,
   runUpdate,
+  updateClaudePlugin,
+  updateCodexPlugin,
+  type UpdateCommandResult,
   type UpdateDeps,
+  type UpdateHost,
   type UpdateNoticeDeps,
 } from "../src/update.js";
+
+const distEntry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 
 describe("cliVersion", () => {
   it("matches this package's package.json version", () => {
@@ -60,14 +69,14 @@ function fakeUpdateDeps(overrides: Partial<UpdateDeps> = {}): {
   deps: UpdateDeps;
   calls: {
     installs: Array<{ pm: string; spec: string }>;
-    pluginUpdates: number;
+    pluginUpdates: UpdateHost[];
     serviceRestarts: number;
     logs: string[];
   };
 } {
   const calls = {
     installs: [] as Array<{ pm: string; spec: string }>,
-    pluginUpdates: 0,
+    pluginUpdates: [] as UpdateHost[],
     serviceRestarts: 0,
     logs: [] as string[],
   };
@@ -79,8 +88,8 @@ function fakeUpdateDeps(overrides: Partial<UpdateDeps> = {}): {
       calls.installs.push({ pm, spec });
       return { ok: true };
     },
-    updatePlugin: () => {
-      calls.pluginUpdates += 1;
+    updatePlugin: (host = "claude") => {
+      calls.pluginUpdates.push(host);
       return { ran: true, ok: true };
     },
     restartService: async () => {
@@ -146,15 +155,15 @@ describe("runUpdate", () => {
     });
     expect(await runUpdate(deps)).toBe(1);
     expect(calls.logs.join("\n")).toContain("install failed (npm exited with code 1)");
-    // A failed CLI install short-circuits — the plugin refresh is not attempted.
-    expect(calls.pluginUpdates).toBe(0);
+    // CLI + host integrations are independent: a failed package install must not skip the host.
+    expect(calls.pluginUpdates).toEqual(["claude"]);
   });
 
   it("also refreshes the plugin after a successful global CLI update", async () => {
     const { deps, calls } = fakeUpdateDeps();
     expect(await runUpdate(deps)).toBe(0);
     expect(calls.installs).toEqual([{ pm: "npm", spec: `${CLI_PACKAGE}@0.2.0` }]);
-    expect(calls.pluginUpdates).toBe(1);
+    expect(calls.pluginUpdates).toEqual(["claude"]);
     expect(calls.logs.join("\n")).toContain("refreshed the Claude Code plugin");
     expect(calls.logs.join("\n")).toContain("restart Claude Code");
   });
@@ -163,7 +172,7 @@ describe("runUpdate", () => {
     const { deps, calls } = fakeUpdateDeps({ fetchLatest: async () => "0.1.4" });
     expect(await runUpdate(deps)).toBe(0);
     expect(calls.installs).toEqual([]);
-    expect(calls.pluginUpdates).toBe(1);
+    expect(calls.pluginUpdates).toEqual(["claude"]);
   });
 
   it("treats a plugin refresh skip (no claude / not installed) as non-fatal", async () => {
@@ -191,8 +200,234 @@ describe("runUpdate", () => {
   it("prints the plugin-update command (does not auto-run) for a workspace checkout", async () => {
     const { deps, calls } = fakeUpdateDeps({ installKind: () => "workspace" });
     expect(await runUpdate(deps)).toBe(0);
-    expect(calls.pluginUpdates).toBe(0);
+    expect(calls.pluginUpdates).toEqual([]);
     expect(calls.logs.join("\n")).toContain("claude plugin update commonwealth@commonwealth");
+  });
+
+  it("defaults to Claude but can refresh Codex or both explicitly", async () => {
+    const one = fakeUpdateDeps({ fetchLatest: async () => "0.1.4" });
+    expect(await runUpdate(one.deps)).toBe(0);
+    expect(one.calls.pluginUpdates).toEqual(["claude"]);
+
+    const codex = fakeUpdateDeps({ fetchLatest: async () => "0.1.4" });
+    expect(await runUpdate(codex.deps, { agent: "codex" })).toBe(0);
+    expect(codex.calls.pluginUpdates).toEqual(["codex"]);
+
+    const both = fakeUpdateDeps({ fetchLatest: async () => "0.1.4" });
+    expect(await runUpdate(both.deps, { agent: "both" })).toBe(0);
+    expect(both.calls.pluginUpdates).toEqual(["claude", "codex"]);
+  });
+
+  it("attempts every selected host even when the CLI install and one host fail", async () => {
+    const { deps, calls } = fakeUpdateDeps({
+      install: () => ({ ok: false, detail: "npm exited with code 1" }),
+      updatePlugin: (host = "claude") => {
+        calls.pluginUpdates.push(host);
+        return host === "claude"
+          ? { ran: true, ok: false, detail: "claude update failed", repair: "repair claude" }
+          : { ran: true, ok: true };
+      },
+    });
+    expect(await runUpdate(deps, { agent: "both" })).toBe(1);
+    expect(calls.pluginUpdates).toEqual(["claude", "codex"]);
+    expect(calls.logs.join("\n")).toContain("repair claude");
+  });
+
+  it("continues to Codex when the Claude updater throws without leaking its message", async () => {
+    const { deps, calls } = fakeUpdateDeps({
+      fetchLatest: async () => "0.1.4",
+      updatePlugin: (host = "claude") => {
+        calls.pluginUpdates.push(host);
+        if (host === "claude") throw new Error("TOKEN=secret raw diagnostic");
+        return { ran: true, ok: true };
+      },
+    });
+    expect(await runUpdate(deps, { agent: "both" })).toBe(1);
+    expect(calls.pluginUpdates).toEqual(["claude", "codex"]);
+    expect(calls.logs.join("\n")).not.toContain("TOKEN=secret");
+  });
+
+  it("renders independent workspace repair guidance for both hosts", async () => {
+    const { deps, calls } = fakeUpdateDeps({ installKind: () => "workspace" });
+    expect(await runUpdate(deps, { agent: "both" })).toBe(0);
+    const logs = calls.logs.join("\n");
+    expect(logs).toContain("claude plugin update commonwealth@commonwealth");
+    expect(logs).toContain("codex plugin marketplace upgrade commonwealth");
+    expect(logs).toContain("codex plugin add commonwealth@commonwealth");
+    expect(calls.pluginUpdates).toEqual([]);
+  });
+});
+
+describe("host plugin update commands", () => {
+  type Call = { command: string; args: string[] };
+
+  function codexRunner(
+    options: {
+      sourceType?: "git" | "local";
+      upgradeStatus?: number;
+      addStatus?: number;
+      installedStdout?: string;
+      marketplaceStdout?: string;
+    } = {},
+  ): { run: (command: string, args: string[]) => UpdateCommandResult; calls: Call[] } {
+    const calls: Call[] = [];
+    const run = (command: string, args: string[]): UpdateCommandResult => {
+      calls.push({ command, args });
+      const joined = args.join(" ");
+      if (joined === "plugin list --json") {
+        return {
+          status: 0,
+          stdout:
+            options.installedStdout ??
+            JSON.stringify({
+              installed: [
+                {
+                  pluginId: "commonwealth@team-market",
+                  name: "commonwealth",
+                  marketplaceName: "team-market",
+                },
+              ],
+            }),
+        };
+      }
+      if (joined === "plugin marketplace list --json") {
+        return {
+          status: 0,
+          stdout:
+            options.marketplaceStdout ??
+            JSON.stringify({
+              marketplaces: [
+                {
+                  name: "team-market",
+                  marketplaceSource: { sourceType: options.sourceType ?? "git" },
+                },
+              ],
+            }),
+        };
+      }
+      if (joined === "plugin marketplace upgrade team-market") {
+        return { status: options.upgradeStatus ?? 0 };
+      }
+      if (joined === "plugin add commonwealth@team-market") {
+        return { status: options.addStatus ?? 0 };
+      }
+      throw new Error(`unexpected command: ${command} ${joined}`);
+    };
+    return { run, calls };
+  }
+
+  it("upgrades the exact installed Git marketplace then idempotently adds the plugin", () => {
+    const { run, calls } = codexRunner();
+    expect(updateCodexPlugin(run)).toEqual({ ran: true, ok: true });
+    expect(calls).toEqual([
+      { command: "codex", args: ["plugin", "list", "--json"] },
+      { command: "codex", args: ["plugin", "marketplace", "list", "--json"] },
+      { command: "codex", args: ["plugin", "marketplace", "upgrade", "team-market"] },
+      { command: "codex", args: ["plugin", "add", "commonwealth@team-market"] },
+    ]);
+    expect(calls.flatMap((call) => call.args)).not.toContain("remove");
+  });
+
+  it("skips marketplace upgrade for a local source but still performs idempotent plugin add", () => {
+    const { run, calls } = codexRunner({ sourceType: "local" });
+    expect(updateCodexPlugin(run)).toEqual({ ran: true, ok: true });
+    expect(calls.map((call) => call.args.join(" "))).not.toContain(
+      "plugin marketplace upgrade team-market",
+    );
+    expect(calls.at(-1)?.args).toEqual(["plugin", "add", "commonwealth@team-market"]);
+  });
+
+  it("attempts plugin add even when the Git marketplace upgrade fails", () => {
+    const { run, calls } = codexRunner({ upgradeStatus: 9 });
+    const result = updateCodexPlugin(run);
+    expect(result).toMatchObject({ ran: true, ok: false });
+    expect(result.detail).toContain("marketplace upgrade failed");
+    expect(calls.at(-1)?.args).toEqual(["plugin", "add", "commonwealth@team-market"]);
+  });
+
+  it("returns a non-fatal install repair when Commonwealth is not installed", () => {
+    const { run, calls } = codexRunner({ installedStdout: '{"installed":[]}' });
+    expect(updateCodexPlugin(run)).toMatchObject({
+      ran: false,
+      repair: "codex plugin add commonwealth@commonwealth",
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("rejects unsafe structured identities and never leaks raw command output", () => {
+    const secret = "TOKEN=super-secret";
+    const { run, calls } = codexRunner({
+      installedStdout: JSON.stringify({
+        installed: [
+          {
+            pluginId: "commonwealth@team;cat",
+            name: "commonwealth",
+            marketplaceName: "team;cat",
+            diagnostic: secret,
+          },
+        ],
+      }),
+    });
+    const result = updateCodexPlugin(run);
+    expect(result).toMatchObject({ ran: false, ok: false });
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("parses only exact Codex plugin and marketplace identities", () => {
+    expect(
+      parseCodexInstalledPlugin(
+        JSON.stringify({
+          installed: [
+            {
+              pluginId: "commonwealth@team-market",
+              name: "commonwealth",
+              marketplaceName: "team-market",
+            },
+          ],
+        }),
+      ),
+    ).toEqual({ marketplace: "team-market", selector: "commonwealth@team-market" });
+    expect(
+      parseCodexMarketplaceKind(
+        JSON.stringify({
+          marketplaces: [{ name: "team-market", marketplaceSource: { sourceType: "git" } }],
+        }),
+        "team-market",
+      ),
+    ).toBe("git");
+  });
+
+  it("uses Claude's direct plugin update command after exact structured discovery", () => {
+    const calls: Call[] = [];
+    const run = (command: string, args: string[]): UpdateCommandResult => {
+      calls.push({ command, args });
+      if (args.includes("list")) {
+        return { status: 0, stdout: JSON.stringify([{ id: "commonwealth@commonwealth" }]) };
+      }
+      return { status: 0 };
+    };
+    expect(updateClaudePlugin(run)).toEqual({ ran: true, ok: true });
+    expect(calls).toEqual([
+      { command: "claude", args: ["plugin", "list", "--json"] },
+      { command: "claude", args: ["plugin", "update", "commonwealth@commonwealth"] },
+    ]);
+  });
+});
+
+describe("update CLI agent parsing", () => {
+  it("accepts help without touching the registry and rejects invalid or missing targets", () => {
+    const help = spawnSync(process.execPath, [distEntry, "update", "--help"], { encoding: "utf8" });
+    expect(help.status).toBe(0);
+    expect(help.stderr).toContain("--agent claude|codex|both");
+
+    for (const args of [["--agent", "cursor"], ["--agent"]]) {
+      const result = spawnSync(process.execPath, [distEntry, "update", ...args], {
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toMatch(/Invalid --agent|usage: commonwealth update/);
+    }
   });
 });
 

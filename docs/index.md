@@ -19,7 +19,7 @@ the door with whoever wrote it. Commonwealth is that layer, made multiplayer.
 - **Plain markdown, git-backed.** Your knowledge is files you own — diffable, portable, no
   proprietary store to be locked into.
 - **Per-project brains.** Each project gets its own brain (one git repo). Everyone reads and
-  writes it through their existing AI (Claude Code first).
+  writes it through Claude Code or Codex.
 - **Agent-native.** Exposed over MCP, so a teammate's agent reads the brain before acting and
   writes back what it learns.
 - **Conflict-free by design.** One fact per file with collision-proof names, so concurrent
@@ -45,6 +45,9 @@ the door with whoever wrote it. Commonwealth is that layer, made multiplayer.
 
 - :material-server: **[Self-host](06-self-host.md)**
   Run the whole thing on infrastructure you control.
+
+- :material-compare: **[Agent parity](07-agent-parity.md)**
+  Exact Claude Code/Codex capabilities, lifecycle mapping, diagnostics, and updates.
 
 - :material-map-marker-path: **[Roadmap](04-roadmap.md)**
   The phased plan (M0–M5), mapped to GitHub milestones.

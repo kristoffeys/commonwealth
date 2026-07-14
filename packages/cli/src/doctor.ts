@@ -9,6 +9,7 @@ import {
   resolveBrainDir,
   resolveBrainMapping,
 } from "@cmnwlth/core";
+import { defaultHostIntegrationEnv, diagnoseHostIntegrations } from "./host-integration.js";
 
 /**
  * `commonwealth doctor` — full-chain install/sync diagnosis (#134). The Commonwealth setup spans
@@ -66,6 +67,11 @@ export interface CurateRuntimeProbe {
   error?: string;
 }
 
+/** Render only the version token from child stdout; never pass arbitrary subprocess text through. */
+function safeRuntimeVersion(value: string | undefined): string {
+  return value?.match(/\b\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?\b/)?.[0] ?? "version OK";
+}
+
 /**
  * Ambient surfaces the diagnosis reads, all injectable so tests run against a fixture brain with
  * no `claude`/`git`/real home directory. {@link defaultDoctorEnv} wires the real ones.
@@ -98,6 +104,8 @@ export interface DoctorEnv {
   pluginInstalled: () => boolean | null;
   /** Probe curate through the exact runtime resolution exported by the installed plugin (#222). */
   curateRuntime?: () => Promise<CurateRuntimeProbe | null>;
+  /** Optional host-specific Claude/Codex diagnostics (#226); absent preserves the legacy report. */
+  hostIntegrations?: () => Promise<DoctorCheck[]>;
   /** Whether `pid` is a live process (`kill -0`). */
   pidAlive: (pid: number) => boolean;
   /** Git state of the brain relative to its upstream. */
@@ -287,6 +295,7 @@ export function defaultDoctorEnv(cwd: string): DoctorEnv {
         };
       }
     },
+    hostIntegrations: () => diagnoseHostIntegrations(defaultHostIntegrationEnv(cwd)),
     pidAlive: (pid) => {
       try {
         process.kill(pid, 0); // signal 0 = existence check
@@ -386,7 +395,8 @@ export async function diagnose(
         id: "curate-runtime",
         label: "Curate runtime",
         status: "warn",
-        detail: `${runtime.error ?? "The installed plugin cannot expose its live curate path."} Capture status was not inferred.`,
+        detail:
+          "The installed plugin cannot expose its live curate path. Child diagnostics were redacted. Capture status was not inferred.",
         fix: "commonwealth update   (install the current plugin diagnostics)",
       });
     } else if (!runtime.ok) {
@@ -396,7 +406,7 @@ export async function diagnose(
         id: "curate-runtime",
         label: "Curate runtime",
         status: "fail",
-        detail: `Live path ${runtime.command} failed (${exit}): ${runtime.error ?? "no diagnostic output"}. Capture is OFF.`,
+        detail: `Live path ${runtime.command} failed (${exit}); child diagnostics were redacted. Capture is OFF.`,
         fix:
           runtime.kind === "npx"
             ? `clear the broken npm npx cache, then run: ${runtime.command} --version`
@@ -407,17 +417,22 @@ export async function diagnose(
         id: "curate-runtime",
         label: "Curate runtime",
         status: "warn",
-        detail: `Live path is ${runtime.command} (${runtime.version || "version OK"}); capture depends on the npm registry/cache fallback.`,
+        detail: `Live path is ${runtime.command} (${safeRuntimeVersion(runtime.version)}); capture depends on the npm registry/cache fallback.`,
       });
     } else {
       checks.push({
         id: "curate-runtime",
         label: "Curate runtime",
         status: "ok",
-        detail: `Live ${runtime.kind} path is healthy: ${runtime.command} (${runtime.version || "version OK"}).`,
+        detail: `Live ${runtime.kind} path is healthy: ${runtime.command} (${safeRuntimeVersion(runtime.version)}).`,
       });
     }
   }
+
+  // Host parity diagnostics (#226) are additive and optional. Existing API consumers that build
+  // a DoctorEnv keep the legacy report unchanged; the real environment inspects Claude and Codex
+  // independently, including plugin/MCP/hooks/extractor health and Codex's emitted fallback.
+  if (env.hostIntegrations) checks.push(...(await env.hostIntegrations()));
 
   // 3) Config parse (#210): a present-but-unparseable per-user config makes EVERY reader treat the
   //    brain as missing — capture silently OFF for days with zero signal. This is exactly the class

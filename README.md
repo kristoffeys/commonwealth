@@ -122,7 +122,7 @@ commonwealth map                          # brain-at-a-glance: per-kind counts +
 commonwealth statusline [install]         # ambient status line for Claude Code (see below)
 commonwealth graduate [--suggest]         # propose facts recurring across ≥2 brains to the org-brain
 commonwealth doctor [--fix]               # diagnose (and optionally fix) the setup
-commonwealth update                       # update the CLI + refresh the Claude Code plugin (hooks + MCP)
+commonwealth update --agent both          # update the CLI + refresh both host integrations
 commonwealth --version                    # print the installed CLI version
 ```
 
@@ -312,10 +312,12 @@ commonwealth config set semanticDedup true   # smarter dedup (see below)
 | ---------------------------------------------------- | ------------------------------------------------------- |
 | [`docs/05-quickstart.md`](docs/05-quickstart.md)     | Get a brain running for one project in minutes          |
 | [`docs/06-self-host.md`](docs/06-self-host.md)       | Share a brain across a team over your own git remote    |
+| [`docs/07-agent-parity.md`](docs/07-agent-parity.md) | Claude Code/Codex parity, lifecycle mapping, and health |
 | [`docs/01-architecture.md`](docs/01-architecture.md) | How it works: git substrate, concurrency, the auto-bridge |
 | [`docs/02-data-model.md`](docs/02-data-model.md)     | The markdown schema: memory / decisions / work-state / people |
-| [`docs/03-distribution.md`](docs/03-distribution.md) | Distribution & auto-provisioning into Claude Code       |
+| [`docs/03-distribution.md`](docs/03-distribution.md) | Distribution into Claude Code and Codex                 |
 | [`docs/04-roadmap.md`](docs/04-roadmap.md)           | What's shipped and what's next                          |
+| [`docs/release-checklist.md`](docs/release-checklist.md) | Fresh-marketplace release proof for both hosts       |
 
 ## License
 

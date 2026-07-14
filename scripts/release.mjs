@@ -14,7 +14,7 @@
 // edited and left for you to review/commit. `--dry-run` prints the plan and writes nothing.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,6 +22,28 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** The workspace packages whose package.json `version` moves in lockstep. */
 const PACKAGES = ["cli", "core", "curate", "mcp", "plugin", "seed", "sync"];
+
+/**
+ * Portable files that a git-marketplace install needs at runtime. `vendor/` is deliberately not
+ * in this list: it contains a platform-local better-sqlite3 build and is only a same-platform
+ * development/smoke fallback. Marketplace installs use the version-pinned npx runtimes instead.
+ */
+export const PLUGIN_RUNTIME_FILES = [
+  ".claude-plugin/plugin.json",
+  ".codex-plugin/plugin.json",
+  ".mcp.json",
+  "hooks/hooks.json",
+  "hooks/codex-hooks.json",
+  "hooks/session-start.mjs",
+  "hooks/session-end.mjs",
+  "hooks/user-prompt-submit.mjs",
+  "hooks/pre-compact.mjs",
+  "hooks/codex-hook.mjs",
+  "hooks/capture-worker.mjs",
+  "hooks/lib.mjs",
+  "hooks/extraction.mjs",
+  "hooks/extraction-schema.json",
+];
 
 /**
  * Every file that carries the release version, and how to rewrite it. Each entry replaces the
@@ -132,6 +154,57 @@ export function applyVersion(version, { dryRun = false } = {}) {
   return changed;
 }
 
+/**
+ * Fail when a release would publish mismatched package/plugin versions or an incomplete portable
+ * plugin payload. Exported so both CI and the authenticated fresh-marketplace smoke share the
+ * same release contract.
+ */
+export function verifyRelease() {
+  const expected = currentVersion();
+  const versions = new Map();
+  for (const pkg of PACKAGES) {
+    const file = path.join(ROOT, "packages", pkg, "package.json");
+    versions.set(path.relative(ROOT, file), JSON.parse(readFileSync(file, "utf8")).version);
+  }
+
+  const pluginRoot = path.join(ROOT, "packages", "plugin");
+  for (const manifest of [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"]) {
+    versions.set(
+      path.join("packages", "plugin", manifest),
+      JSON.parse(readFileSync(path.join(pluginRoot, manifest), "utf8")).version,
+    );
+  }
+  const marketplace = JSON.parse(
+    readFileSync(path.join(ROOT, ".claude-plugin", "marketplace.json"), "utf8"),
+  );
+  const marketplaceEntry = marketplace.plugins?.find((entry) => entry.name === "commonwealth");
+  if (!marketplaceEntry) throw new Error("marketplace is missing the commonwealth plugin entry");
+  versions.set(".claude-plugin/marketplace.json", marketplaceEntry.version);
+
+  const mismatches = [...versions].filter(([, version]) => version !== expected);
+  if (mismatches.length > 0) {
+    throw new Error(
+      `release version mismatch (expected ${expected}): ` +
+        mismatches.map(([file, version]) => `${file}=${String(version)}`).join(", "),
+    );
+  }
+
+  const mcpConfig = readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8");
+  const hookRuntime = readFileSync(path.join(pluginRoot, "hooks", "lib.mjs"), "utf8");
+  if (!mcpConfig.includes(`@cmnwlth/mcp@${expected}`)) {
+    throw new Error(`.mcp.json does not pin @cmnwlth/mcp@${expected}`);
+  }
+  if (!hookRuntime.includes(`@cmnwlth/curate@${expected}`)) {
+    throw new Error(`hooks/lib.mjs does not pin @cmnwlth/curate@${expected}`);
+  }
+
+  const missing = PLUGIN_RUNTIME_FILES.filter((file) => !existsSync(path.join(pluginRoot, file)));
+  if (missing.length > 0)
+    throw new Error(`plugin runtime payload is incomplete: ${missing.join(", ")}`);
+
+  return { version: expected, runtimeFiles: [...PLUGIN_RUNTIME_FILES] };
+}
+
 function git(args) {
   return execFileSync("git", args, { cwd: ROOT, stdio: ["ignore", "pipe", "inherit"] })
     .toString()
@@ -147,9 +220,19 @@ function main() {
   if (!bump || bump.startsWith("--")) {
     console.error(
       "usage: node scripts/release.mjs <patch|minor|major|X.Y.Z> [--commit] [--dry-run]\n" +
-        "       node scripts/release.mjs sync [--dry-run]",
+        "       node scripts/release.mjs sync [--dry-run]\n" +
+        "       node scripts/release.mjs verify",
     );
     process.exit(1);
+  }
+
+  if (bump === "verify") {
+    const verified = verifyRelease();
+    console.error(
+      `release v${verified.version} verified (${verified.runtimeFiles.length} portable plugin assets)`,
+    );
+    console.log(verified.version);
+    return;
   }
 
   const current = currentVersion();
