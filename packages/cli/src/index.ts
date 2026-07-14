@@ -100,14 +100,28 @@ export {
   isNewer,
   fetchLatestVersion,
   detectInstallKind,
+  parseCodexInstalledPlugin,
+  parseCodexMarketplaceKind,
   runUpdate,
   defaultUpdateDeps,
+  updateClaudePlugin,
+  updateCodexPlugin,
   maybeNotifyUpdate,
   defaultUpdateCachePath,
   defaultUpdateNoticeDeps,
   CLI_PACKAGE,
 } from "./update.js";
-export type { UpdateDeps, UpdateNoticeDeps, InstallKind } from "./update.js";
+export type {
+  UpdateCommandResult,
+  UpdateCommandRunner,
+  UpdateDeps,
+  UpdateHost,
+  UpdateNoticeDeps,
+  UpdateOptions,
+  UpdateTarget,
+  InstallKind,
+  PluginUpdateResult,
+} from "./update.js";
 
 /** Print `commonwealth` usage to stderr. */
 function printUsage(): void {
@@ -142,7 +156,7 @@ function printUsage(): void {
       "  commonwealth scope     <show | allow <p> | deny <p> | check>   per-user capture scope",
       "  commonwealth recall    <query>                 search the brain",
       "  commonwealth ask       <question>              cited retrieval for a question (agent synthesizes)",
-      "  commonwealth update                            update the CLI + refresh the Claude Code plugin",
+      "  commonwealth update [--agent claude|codex|both] update the CLI + selected agent plugin(s)",
       "  commonwealth --version                         print the installed CLI version",
       "",
       "All commands resolve the brain from the registry for the current directory — no --dir needed.",
@@ -220,7 +234,7 @@ export async function run(argv: string[]): Promise<number> {
     case "service":
       return cmdService(rest);
     case "update":
-      return runUpdate(defaultUpdateDeps());
+      return cmdUpdate(rest);
     case "reseed":
       return cmdReseed(rest);
     case "config":
@@ -267,6 +281,33 @@ export async function run(argv: string[]): Promise<number> {
       printUsage();
       return 2;
   }
+}
+
+/** `commonwealth update [--agent claude|codex|both]` — independently refresh CLI + integrations. */
+async function cmdUpdate(rest: string[]): Promise<number> {
+  if (rest.includes("--help") || rest.includes("-h")) {
+    process.stderr.write("usage: commonwealth update [--agent claude|codex|both]\n");
+    return 0;
+  }
+  let agentValue: string | undefined;
+  try {
+    const parsed = parseArgs({
+      args: rest,
+      options: { agent: { type: "string" } },
+      allowPositionals: false,
+    });
+    agentValue = parsed.values.agent;
+  } catch (err) {
+    process.stderr.write(`${(err as Error).message}\n`);
+    process.stderr.write("usage: commonwealth update [--agent claude|codex|both]\n");
+    return 2;
+  }
+  const agent = parseAgentTarget(agentValue);
+  if (agent === null) {
+    process.stderr.write("Invalid --agent value. Expected claude, codex, or both.\n");
+    return 2;
+  }
+  return runUpdate(defaultUpdateDeps(), { agent });
 }
 
 /**

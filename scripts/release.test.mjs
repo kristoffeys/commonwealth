@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
-import { applyVersion, currentVersion, nextVersion } from "./release.mjs";
+import {
+  applyVersion,
+  currentVersion,
+  nextVersion,
+  PLUGIN_RUNTIME_FILES,
+  verifyRelease,
+} from "./release.mjs";
 
 describe("nextVersion", () => {
   it("bumps patch/minor/major, zeroing lower components", () => {
@@ -37,5 +43,27 @@ describe("applyVersion", () => {
         file.endsWith(path.join("packages", "plugin", ".codex-plugin", "plugin.json")),
       ),
     ).toBe(true);
+  });
+});
+
+describe("verifyRelease", () => {
+  it("proves version pins and the portable Claude/Codex payload agree", () => {
+    const result = verifyRelease();
+
+    expect(result.version).toBe(currentVersion());
+    expect(result.runtimeFiles).toEqual(PLUGIN_RUNTIME_FILES);
+    expect(result.runtimeFiles).toEqual(
+      expect.arrayContaining([
+        ".claude-plugin/plugin.json",
+        ".codex-plugin/plugin.json",
+        ".mcp.json",
+        "hooks/hooks.json",
+        "hooks/codex-hooks.json",
+        "hooks/codex-hook.mjs",
+        "hooks/capture-worker.mjs",
+        "hooks/extraction.mjs",
+        "hooks/extraction-schema.json",
+      ]),
+    );
   });
 });

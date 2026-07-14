@@ -38,6 +38,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      # Both agent manifests, hook assets, and published runtime pins must move together.
+      - run: node scripts/release.mjs verify
       # `changeset publish` builds are done above; it publishes each @cmnwlth/* package
       # (workspace:* deps are rewritten to real versions) and skips already-published versions.
       - run: pnpm changeset publish

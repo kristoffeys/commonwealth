@@ -100,6 +100,15 @@ export function detectInstallKind(moduleUrl = import.meta.url): InstallKind {
 
 /** The plugin id (plugin@marketplace) Claude Code knows the Commonwealth plugin by. */
 export const PLUGIN_ID = "commonwealth@commonwealth";
+export const PLUGIN_NAME = "commonwealth";
+
+/** Agent integrations `commonwealth update` can refresh. Default remains Claude for compatibility. */
+export type UpdateTarget = "claude" | "codex" | "both";
+export type UpdateHost = Exclude<UpdateTarget, "both">;
+
+export interface UpdateOptions {
+  agent?: UpdateTarget;
+}
 
 /**
  * Outcome of refreshing the Claude Code plugin (hooks + MCP server), a SECOND artifact that
@@ -109,8 +118,21 @@ export const PLUGIN_ID = "commonwealth@commonwealth";
 export interface PluginUpdateResult {
   ran: boolean;
   ok: boolean;
+  /** A discovery/probe failure is fatal even though no mutating command ran. */
+  failed?: boolean;
   detail?: string;
+  /** Exact host-specific command(s) the user can run to repair this integration. */
+  repair?: string;
 }
+
+/** Minimal captured command result; raw output is parsed but never rendered to logs. */
+export interface UpdateCommandResult {
+  status: number | null;
+  stdout?: string;
+  error?: { code?: string };
+}
+
+export type UpdateCommandRunner = (command: string, args: string[]) => UpdateCommandResult;
 
 /** The injected effects of {@link runUpdate}; wired for real in {@link defaultUpdateDeps}. */
 export interface UpdateDeps {
@@ -122,8 +144,8 @@ export interface UpdateDeps {
   installKind(): InstallKind;
   /** Run the package-manager install for `spec`; ok=false carries a short reason. */
   install(pm: "npm" | "pnpm", spec: string): { ok: boolean; detail?: string };
-  /** Refresh the Claude Code plugin (hooks + MCP server) via `claude plugin update`. */
-  updatePlugin(): PluginUpdateResult;
+  /** Refresh one host plugin. The optional host keeps older injected deps source-compatible. */
+  updatePlugin(host?: UpdateHost): PluginUpdateResult;
   /** Restart the background sync service if installed (so the new binary loads); returns whether it did. */
   restartService(): Promise<boolean>;
   /** Progress/diagnostic sink (stderr in production). */
@@ -131,7 +153,7 @@ export interface UpdateDeps {
 }
 
 /**
- * Refresh the Claude Code plugin (hooks + MCP server) — the second half of "update Commonwealth".
+ * Refresh one selected host plugin (hooks + MCP server) — the second half of "update Commonwealth".
  * The CLI (npm) and the plugin (Claude Code marketplace) are independent artifacts, so the plugin
  * is refreshed regardless of whether the CLI itself needed updating: a user can have a current CLI
  * but a stale installed plugin (exactly the drift that leaves capture running old hook code).
@@ -144,25 +166,59 @@ export interface UpdateDeps {
  *
  * @returns Exit-code contribution: 0 unless the plugin update actually ran and failed.
  */
-function refreshPlugin(deps: UpdateDeps, kind: InstallKind): number {
+function refreshPlugin(deps: UpdateDeps, kind: InstallKind, host: UpdateHost): number {
   if (kind === "workspace" || kind === "npx") {
-    deps.log(
-      "update: also refresh the Claude Code plugin (hooks + MCP server), then restart Claude Code:\n" +
-        `  claude plugin update ${PLUGIN_ID}`,
-    );
+    if (host === "claude") {
+      deps.log(
+        "update: also refresh the Claude Code plugin (hooks + MCP server), then restart Claude Code:\n" +
+          `  claude plugin update ${PLUGIN_ID}`,
+      );
+    } else {
+      deps.log(
+        "update: also refresh the Codex plugin (hooks + MCP server), then restart Codex:\n" +
+          `  codex plugin marketplace upgrade commonwealth\n` +
+          `  codex plugin add ${PLUGIN_ID}`,
+      );
+    }
     return 0;
   }
-  const res = deps.updatePlugin();
+  let res: PluginUpdateResult;
+  try {
+    res = deps.updatePlugin(host);
+  } catch {
+    res = {
+      ran: false,
+      ok: false,
+      failed: true,
+      detail: `${host} updater threw unexpectedly`,
+      repair:
+        host === "claude"
+          ? `claude plugin update ${PLUGIN_ID}`
+          : `codex plugin marketplace upgrade commonwealth\ncodex plugin add ${PLUGIN_ID}`,
+    };
+  }
+  const repair = res.repair ? ` Repair with:\n  ${res.repair.replaceAll("\n", "\n  ")}` : "";
   if (!res.ran) {
-    deps.log(`update: skipped plugin refresh${res.detail ? ` (${res.detail})` : ""}.`);
-    return 0;
+    const verb = res.failed ? "plugin refresh failed" : "skipped plugin refresh";
+    deps.log(`update: ${verb}${res.detail ? ` (${res.detail})` : ""} [${host}].${repair}`);
+    return res.failed ? 1 : 0;
   }
   if (!res.ok) {
-    deps.log(`update: plugin refresh failed${res.detail ? ` (${res.detail})` : ""}.`);
+    deps.log(
+      `update: plugin refresh failed${res.detail ? ` (${res.detail})` : ""} [${host}].${repair}`,
+    );
     return 1;
   }
-  deps.log("update: refreshed the Claude Code plugin — restart Claude Code to apply.");
+  deps.log(
+    host === "claude"
+      ? "update: refreshed the Claude Code plugin — restart Claude Code to apply."
+      : "update: refreshed the Codex plugin — restart Codex to apply.",
+  );
   return 0;
+}
+
+function selectedHosts(target: UpdateTarget): UpdateHost[] {
+  return target === "both" ? ["claude", "codex"] : [target];
 }
 
 /**
@@ -174,56 +230,273 @@ function refreshPlugin(deps: UpdateDeps, kind: InstallKind): number {
  * @returns Exit code: 0 up-to-date/updated/guidance printed, 1 registry unreachable, CLI install
  *   failed, or the plugin refresh ran and failed.
  */
-export async function runUpdate(deps: UpdateDeps): Promise<number> {
+export async function runUpdate(deps: UpdateDeps, options: UpdateOptions = {}): Promise<number> {
+  const target = options.agent ?? "claude";
   const current = deps.currentVersion();
   const latest = await deps.fetchLatest(CLI_PACKAGE, UPDATE_TIMEOUT_MS);
+  const kind = deps.installKind();
+  let exitCode = 0;
+  let installedCli = false;
+
   if (latest === null) {
     deps.log(`update: could not reach the npm registry (current: v${current}). Try again later.`);
-    return 1;
-  }
-
-  const kind = deps.installKind();
-
-  if (!isNewer(latest, current)) {
+    exitCode = 1;
+  } else if (!isNewer(latest, current)) {
     deps.log(`update: already up to date (v${current}; latest published is v${latest}).`);
-    // The plugin can still be stale even when the CLI is current — refresh it anyway.
-    return refreshPlugin(deps, kind);
-  }
-
-  deps.log(`update: v${current} -> v${latest}`);
-  switch (kind) {
-    case "workspace":
-      deps.log(
-        "update: running from a workspace checkout — update the CLI with:\n" +
-          "  git pull && pnpm install && pnpm build",
-      );
-      return refreshPlugin(deps, kind);
-    case "npx":
-      deps.log(
-        "update: running via npx, which has no durable install to update. Pin the latest with\n" +
-          `  npx ${CLI_PACKAGE}@latest <command>   — or install it: npm i -g ${CLI_PACKAGE}`,
-      );
-      return refreshPlugin(deps, kind);
-    case "pnpm-global":
-    case "npm-global": {
-      const pm = kind === "pnpm-global" ? "pnpm" : "npm";
-      const res = deps.install(pm, `${CLI_PACKAGE}@${latest}`);
-      if (!res.ok) {
-        deps.log(`update: install failed${res.detail ? ` (${res.detail})` : ""}.`);
-        return 1;
+  } else {
+    deps.log(`update: v${current} -> v${latest}`);
+    switch (kind) {
+      case "workspace":
+        deps.log(
+          "update: running from a workspace checkout — update the CLI with:\n" +
+            "  git pull && pnpm install && pnpm build",
+        );
+        break;
+      case "npx":
+        deps.log(
+          "update: running via npx, which has no durable install to update. Pin the latest with\n" +
+            `  npx ${CLI_PACKAGE}@latest <command>   — or install it: npm i -g ${CLI_PACKAGE}`,
+        );
+        break;
+      case "pnpm-global":
+      case "npm-global": {
+        const pm = kind === "pnpm-global" ? "pnpm" : "npm";
+        const res = deps.install(pm, `${CLI_PACKAGE}@${latest}`);
+        if (!res.ok) {
+          deps.log(`update: install failed${res.detail ? ` (${res.detail})` : ""}.`);
+          exitCode = 1;
+        } else {
+          installedCli = true;
+          deps.log(`update: updated to v${latest}.`);
+        }
+        break;
       }
-      deps.log(`update: updated to v${latest}.`);
-      const pluginCode = refreshPlugin(deps, kind);
-      if (await deps.restartService()) {
-        deps.log("update: restarted the background sync service to load the new binary.");
-      }
-      return pluginCode;
     }
   }
+
+  // CLI and host integrations are independent artifacts. Always attempt every selected host,
+  // even when the registry, package-manager install, or another host refresh failed.
+  for (const host of selectedHosts(target)) {
+    exitCode = Math.max(exitCode, refreshPlugin(deps, kind, host));
+  }
+
+  if (installedCli && (await deps.restartService())) {
+    deps.log("update: restarted the background sync service to load the new binary.");
+  }
+  return exitCode;
+}
+
+function safeName(value: unknown): string | null {
+  return typeof value === "string" && /^[A-Za-z0-9._-]+$/.test(value) ? value : null;
+}
+
+/** Exact installed-plugin lookup from Codex's structured output; never scans human text. */
+export function parseCodexInstalledPlugin(stdout: string): {
+  marketplace: string;
+  selector: string;
+} | null {
+  const parsed = JSON.parse(stdout) as {
+    installed?: Array<{ pluginId?: unknown; name?: unknown; marketplaceName?: unknown }>;
+  };
+  if (!Array.isArray(parsed.installed)) throw new Error("invalid Codex plugin list shape");
+  for (const row of parsed.installed) {
+    if (row?.name !== PLUGIN_NAME) continue;
+    const marketplace = safeName(row.marketplaceName);
+    if (!marketplace || row.pluginId !== `${PLUGIN_NAME}@${marketplace}`) return null;
+    return { marketplace, selector: `${PLUGIN_NAME}@${marketplace}` };
+  }
+  return null;
+}
+
+/** Exact marketplace lookup from Codex's structured output. */
+export function parseCodexMarketplaceKind(
+  stdout: string,
+  marketplace: string,
+): "git" | "local" | null {
+  const parsed = JSON.parse(stdout) as {
+    marketplaces?: Array<{
+      name?: unknown;
+      marketplaceSource?: { sourceType?: unknown };
+    }>;
+  };
+  if (!Array.isArray(parsed.marketplaces)) throw new Error("invalid Codex marketplace list shape");
+  const row = parsed.marketplaces.find((candidate) => candidate?.name === marketplace);
+  const kind = row?.marketplaceSource?.sourceType;
+  return kind === "git" || kind === "local" ? kind : null;
+}
+
+/** Claude's supported direct update path, with structured installed-plugin discovery. */
+export function updateClaudePlugin(run: UpdateCommandRunner): PluginUpdateResult {
+  const repair = `claude plugin update ${PLUGIN_ID}`;
+  const list = run("claude", ["plugin", "list", "--json"]);
+  if (list.error?.code === "ENOENT") {
+    return {
+      ran: false,
+      ok: false,
+      detail: "claude CLI not found",
+      repair: `install Claude Code, then run commonwealth update --agent claude`,
+    };
+  }
+  if (list.status !== 0) {
+    return {
+      ran: false,
+      ok: false,
+      failed: true,
+      detail: `claude plugin list exited with code ${list.status ?? "null"}`,
+      repair,
+    };
+  }
+  let installed = false;
+  try {
+    const parsed = JSON.parse(list.stdout ?? "") as
+      | Array<{ id?: unknown; name?: unknown; plugin?: unknown }>
+      | { plugins?: Array<{ id?: unknown; name?: unknown; plugin?: unknown }> };
+    const rows = Array.isArray(parsed) ? parsed : (parsed.plugins ?? []);
+    installed = rows.some((row) => {
+      const id = typeof row?.id === "string" ? row.id : null;
+      return id === PLUGIN_ID || row?.plugin === PLUGIN_ID;
+    });
+  } catch {
+    return {
+      ran: false,
+      ok: false,
+      failed: true,
+      detail: "claude plugin list returned invalid JSON",
+      repair,
+    };
+  }
+  if (!installed) {
+    return {
+      ran: false,
+      ok: false,
+      detail: `${PLUGIN_ID} not installed`,
+      repair: `claude plugin install ${PLUGIN_ID}`,
+    };
+  }
+
+  const update = run("claude", ["plugin", "update", PLUGIN_ID]);
+  if (update.status !== 0) {
+    return {
+      ran: true,
+      ok: false,
+      detail: `claude plugin update exited with code ${update.status ?? "null"}`,
+      repair,
+    };
+  }
+  return { ran: true, ok: true };
+}
+
+/**
+ * Codex update path: discover the exact installed marketplace, refresh it only when Git-backed,
+ * then idempotently `plugin add` the same selector. Never remove/re-add the plugin.
+ */
+export function updateCodexPlugin(run: UpdateCommandRunner): PluginUpdateResult {
+  const genericRepair = `codex plugin marketplace upgrade commonwealth\ncodex plugin add ${PLUGIN_ID}`;
+  const installedList = run("codex", ["plugin", "list", "--json"]);
+  if (installedList.error?.code === "ENOENT") {
+    return {
+      ran: false,
+      ok: false,
+      detail: "codex CLI not found",
+      repair: `install Codex, then run commonwealth update --agent codex`,
+    };
+  }
+  if (installedList.status !== 0) {
+    return {
+      ran: false,
+      ok: false,
+      failed: true,
+      detail: `codex plugin list exited with code ${installedList.status ?? "null"}`,
+      repair: genericRepair,
+    };
+  }
+
+  let installed;
+  try {
+    installed = parseCodexInstalledPlugin(installedList.stdout ?? "");
+  } catch {
+    return {
+      ran: false,
+      ok: false,
+      failed: true,
+      detail: "codex plugin list returned invalid JSON",
+      repair: genericRepair,
+    };
+  }
+  if (!installed) {
+    return {
+      ran: false,
+      ok: false,
+      detail: `${PLUGIN_NAME} plugin not installed`,
+      repair: `codex plugin add ${PLUGIN_ID}`,
+    };
+  }
+
+  const repair = `codex plugin marketplace upgrade ${installed.marketplace}\ncodex plugin add ${installed.selector}`;
+  const marketplaceList = run("codex", ["plugin", "marketplace", "list", "--json"]);
+  if (marketplaceList.status !== 0) {
+    return {
+      ran: false,
+      ok: false,
+      failed: true,
+      detail: `codex marketplace list exited with code ${marketplaceList.status ?? "null"}`,
+      repair,
+    };
+  }
+  let kind;
+  try {
+    kind = parseCodexMarketplaceKind(marketplaceList.stdout ?? "", installed.marketplace);
+  } catch {
+    return {
+      ran: false,
+      ok: false,
+      failed: true,
+      detail: "codex marketplace list returned invalid JSON",
+      repair,
+    };
+  }
+  if (kind === null) {
+    return {
+      ran: false,
+      ok: false,
+      failed: true,
+      detail: `could not safely resolve marketplace ${installed.marketplace}`,
+      repair,
+    };
+  }
+
+  const effectiveRepair = kind === "git" ? repair : `codex plugin add ${installed.selector}`;
+
+  let upgradeFailed = false;
+  if (kind === "git") {
+    const upgrade = run("codex", ["plugin", "marketplace", "upgrade", installed.marketplace]);
+    upgradeFailed = upgrade.status !== 0;
+  }
+  // `plugin add` is Codex's idempotent refresh/install operation. Attempt it even when the Git
+  // marketplace refresh failed so one broken step cannot prevent the remaining repair attempt.
+  const add = run("codex", ["plugin", "add", installed.selector]);
+  if (upgradeFailed || add.status !== 0) {
+    const detail = [
+      upgradeFailed ? "codex marketplace upgrade failed" : null,
+      add.status !== 0 ? `codex plugin add exited with code ${add.status ?? "null"}` : null,
+    ]
+      .filter((part): part is string => part !== null)
+      .join("; ");
+    return { ran: true, ok: false, detail, repair: effectiveRepair };
+  }
+  return { ran: true, ok: true };
 }
 
 /** The real {@link UpdateDeps}: registry fetch, install-kind sniffing, a spawned installer. */
 export function defaultUpdateDeps(): UpdateDeps {
+  const runHostCommand: UpdateCommandRunner = (command, args) => {
+    const res = spawnSync(command, args, { encoding: "utf8" });
+    return {
+      status: res.status,
+      stdout: typeof res.stdout === "string" ? res.stdout : "",
+      error: res.error ? { code: (res.error as NodeJS.ErrnoException).code } : undefined,
+    };
+  };
   return {
     currentVersion: cliVersion,
     fetchLatest: fetchLatestVersion,
@@ -235,31 +508,8 @@ export function defaultUpdateDeps(): UpdateDeps {
       if (res.status !== 0) return { ok: false, detail: `${pm} exited with code ${res.status}` };
       return { ok: true };
     },
-    updatePlugin: () => {
-      // One `plugin list` call doubles as the availability + installed-ness probe: a missing
-      // binary sets res.error (ENOENT), and a CLI-only user (plugin never installed) is a skip,
-      // not a failure. Only when the plugin IS installed do we run the update.
-      const list = spawnSync("claude", ["plugin", "list"], { encoding: "utf8" });
-      if (list.error) return { ran: false, ok: false, detail: "claude CLI not found" };
-      if (list.status !== 0)
-        return {
-          ran: false,
-          ok: false,
-          detail: `claude plugin list exited with code ${list.status}`,
-        };
-      if (!(typeof list.stdout === "string" && list.stdout.includes(PLUGIN_ID)))
-        return { ran: false, ok: false, detail: `${PLUGIN_ID} not installed` };
-
-      const res = spawnSync("claude", ["plugin", "update", PLUGIN_ID], { stdio: "inherit" });
-      if (res.error) return { ran: true, ok: false, detail: res.error.message };
-      if (res.status !== 0)
-        return {
-          ran: true,
-          ok: false,
-          detail: `claude plugin update exited with code ${res.status}`,
-        };
-      return { ran: true, ok: true };
-    },
+    updatePlugin: (host = "claude") =>
+      host === "claude" ? updateClaudePlugin(runHostCommand) : updateCodexPlugin(runHostCommand),
     restartService: () => restartIfInstalled(defaultServiceDeps()),
     log: (m) => {
       process.stderr.write(`${m}\n`);

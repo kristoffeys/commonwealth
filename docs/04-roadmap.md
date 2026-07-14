@@ -2,7 +2,7 @@
 title: Status & roadmap
 type: project
 status: draft
-updated: 2026-07-06
+updated: 2026-07-14
 tags: [roadmap, status]
 ---
 
@@ -16,12 +16,12 @@ auto-bridge came first because they're both the hardest part and the differentia
 - **Substrate & schema** — a git repo of atomic markdown notes (memory / decisions / work-state /
   people) with collision-proof names, so concurrent writers union-merge instead of conflicting. A
   disposable SQLite index (FTS + optional embeddings) rebuilds from the files.
-- **MCP server + Claude Code plugin** — `search / read / remember / ask / list-work-state /
-  who-is` and `/commonwealth` commands, available in every session.
+- **MCP server + Claude Code/Codex plugin** — `search / read / remember / ask / list-work-state /
+  who-is`, proactive context, and automatic capture in both hosts.
 - **Sync daemon** — pull on session start, commit + push on write, index rebuild, and same-file
   conflicts kept as sibling notes (never a silent overwrite).
-- **The auto-bridge** — SessionEnd capture → curation gate (dedup, secret scan, relevance) →
-  review queue → propagate; SessionStart relevance-gated context injection.
+- **The auto-bridge** — Claude `SessionEnd` / Codex turn-boundary capture → curation gate (dedup,
+  secret scan, relevance) → review queue → propagate; session- and prompt-scoped context injection.
 - **Decisions by default** — auto-detected decisions and the explicit `/commonwealth:decide` path
   record what/when/who/why.
 - **Onboarding & multi-brain** — `commonwealth init` wizard, cold-start seeding (git history /
@@ -35,6 +35,7 @@ auto-bridge came first because they're both the hardest part and the differentia
   shared org brain.
 - **Semantic contradiction detection** — flag notes that _disagree_ with canon (a follow-up to
   the embeddings-backed dedup already shipped).
-- **Broader cross-agent support** — deepen the portability story beyond the emitted context files.
+- **Broader cross-agent support** — bring other hosts up from emitted-context fallback to the
+  live MCP/lifecycle parity now available in Claude Code and Codex.
 
 Track the live board in the repo's GitHub Project and issues.

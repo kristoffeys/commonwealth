@@ -2,16 +2,17 @@
 title: Distribution & auto-provisioning
 type: reference
 status: draft
-updated: 2026-07-06
-tags: [distribution, provisioning, claude-code, open-source]
+updated: 2026-07-14
+tags: [distribution, provisioning, claude-code, codex, open-source]
 ---
 
 # Distribution & auto-provisioning
 
-Commonwealth is delivered as a **Claude Code plugin** that a team can roll out to everyone
-through **managed settings** — so a new teammate gets the brain with no manual install. This is
-the "auto bridge": once provisioned, sessions pull relevant context in and capture learnings back
-without anyone running git by hand.
+Commonwealth is delivered as one plugin payload with **Claude Code and Codex manifests**. Claude
+Code teams can roll it out through managed settings; Codex users install it from the same
+marketplace and explicitly trust its command hooks in `/hooks`. This is the "auto bridge": once
+provisioned, either host pulls relevant context in and captures learnings back without anyone
+running git by hand.
 
 ## The auto-provisioning chain
 
@@ -19,14 +20,14 @@ without anyone running git by hand.
 Team-managed settings (org policy)
         │  distributes
         ▼
-Commonwealth Claude Code plugin  ──▶  MCP server + lifecycle hooks + brain registry
-        │  on `claude` startup in a project dir
+Commonwealth agent plugin  ──▶  MCP server + host lifecycle hooks + brain registry
+        │  on host startup in a project dir
         ▼
 Registry maps cwd/project → brain repo
         │  clones/pulls if missing
         ▼
 Sync daemon running  ──▶  SessionStart: pull + inject relevant context
-                          SessionEnd:   capture learnings → staging
+                          Claude SessionEnd / Codex Stop: capture → staging
 ```
 
 ### 1. Distribute the plugin via managed settings
@@ -44,8 +45,9 @@ hands-off.
 ### 2. The plugin bundles everything needed
 
 - **MCP server** — `search / read / remember / list-work-state / who-is` tools (and `ask`).
-- **Lifecycle hooks** — `SessionStart` (pull + relevance-gated inject), `SessionEnd` (capture →
-  staging). Hooks are how "auto" actually happens; the harness runs them, not the model.
+- **Lifecycle hooks** — both hosts load `SessionStart`, `UserPromptSubmit`, and `PreCompact`.
+  Claude Code adds `SessionEnd`; Codex maps capture to throttled, turn-scoped `Stop`. Hooks are how
+  "auto" actually happens; the harness runs them, not the model.
 - **Brain registry** — the map from project directory → brain repo.
 - **`/commonwealth` commands** — `remember`, `decide`, `recall`, `ask`, `promote`, `status`.
 
@@ -67,8 +69,12 @@ teams already trust.
 
 ## Distribution channels
 
-- **Claude Code plugin marketplace** (`claude plugin marketplace add …`) — the primary path.
+- **Claude Code and Codex plugin marketplaces** — the same payload contains both manifests and
+  selects a host-valid hook file for each.
 - **npm** — `@cmnwlth/cli` for setup/admin; the MCP server and hooks run `@cmnwlth/*` via `npx`.
 - **GitHub** — the OSS home: source, issues, and roadmap.
-- **Cross-agent** — `commonwealth emit` writes brain context into the files Cursor / Copilot /
-  Codex already read, so mixed-tool teams share one brain (see the [self-host guide](./06-self-host.md)).
+- **Cross-agent fallback** — `commonwealth emit` writes brain context into files Cursor, Copilot,
+  and Codex already read. Codex also has the live MCP and lifecycle integration.
+
+See the [agent parity contract](./07-agent-parity.md) for the exact event mapping, diagnostics,
+update behavior, and the one intentional lifecycle difference.

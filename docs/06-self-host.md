@@ -83,6 +83,17 @@ throttled capture when an agent turn reaches `Stop`. Codex has no `SessionEnd`; 
 boundary, not the end of the thread. After plugin install or update, run `/hooks` in Codex and
 trust the reviewed Commonwealth hook definitions.
 
+For mixed-host operations, diagnose and update integrations independently:
+
+```bash
+commonwealth doctor --json
+commonwealth update --agent both
+```
+
+One host's failed update does not skip the other. Codex marketplace refresh is idempotent and does
+not remove/re-add the plugin, preserving its enabled/trust state; updated hook definitions still
+require review in `/hooks`.
+
 ### Zero-runtime fallback — `commonwealth emit`
 
 For agents without the plugin, `commonwealth emit` writes the current project's team-brain slice
