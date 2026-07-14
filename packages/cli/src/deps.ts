@@ -237,6 +237,51 @@ function hasCodexEntry(args: string[], name: string): boolean {
   return text.status === 0 && new RegExp(`(^|\\s)${name}(\\s|@|$)`, "m").test(out);
 }
 
+export interface PluginInstallResult {
+  installed: boolean;
+  skipped?: string;
+}
+
+export interface CodexPluginInstallEnv {
+  /** Whether the Codex executable is available. */
+  hasExecutable: () => boolean;
+  /** Probe a structured/text Codex list command for a configured entry. */
+  hasEntry: (args: string[], name: string) => boolean;
+  /** Run a mutating Codex plugin command. */
+  run: (args: string[]) => { status: number | null; error?: Error };
+  /** Marketplace source: a workspace checkout or public repo slug. */
+  source: string;
+}
+
+/**
+ * Install Commonwealth for Codex, with command execution injected so first-run, repeat-run,
+ * missing-CLI, and command-failure behavior can be tested without mutating a real Codex install.
+ */
+export function installCodexPlugin(env: CodexPluginInstallEnv): PluginInstallResult {
+  if (!env.hasExecutable()) return { installed: false, skipped: "codex CLI not found" };
+
+  if (!env.hasEntry(["plugin", "marketplace", "list"], "commonwealth")) {
+    const add = env.run(["plugin", "marketplace", "add", env.source]);
+    if (add.error || add.status !== 0) {
+      const reason = add.error?.message ?? `code ${add.status ?? "null"}`;
+      return {
+        installed: false,
+        skipped: `codex plugin marketplace add failed (${reason})`,
+      };
+    }
+  }
+
+  if (!env.hasEntry(["plugin", "list"], "commonwealth")) {
+    const install = env.run(["plugin", "add", "commonwealth@commonwealth"]);
+    if (install.error || install.status !== 0) {
+      const reason = install.error?.message ?? `code ${install.status ?? "null"}`;
+      return { installed: false, skipped: `codex plugin add failed (${reason})` };
+    }
+  }
+
+  return { installed: true };
+}
+
 /**
  * Wire the real {@link OnboardDeps}: a dist-presence check that triggers `pnpm -r build` + the
  * plugin bundle, `runInit` for the brain core, idempotent Claude/Codex plugin installs via the repo
@@ -440,38 +485,13 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
   };
 
   /** Install the Codex plugin from the same legacy-compatible repo marketplace. */
-  const installCodexPlugin = (): { installed: boolean; skipped?: string } => {
-    if (!hasExecutable("codex")) {
-      return { installed: false, skipped: "codex CLI not found" };
-    }
-
-    if (!hasCodexEntry(["plugin", "marketplace", "list"], "commonwealth")) {
-      const source = isWorkspace ? repoRoot : PUBLIC_MARKETPLACE_REPO;
-      const add = spawnSync("codex", ["plugin", "marketplace", "add", source], {
-        stdio: "inherit",
-      });
-      if (add.error || add.status !== 0) {
-        return {
-          installed: false,
-          skipped: `codex plugin marketplace add failed (code ${add.status ?? "null"})`,
-        };
-      }
-    }
-
-    if (!hasCodexEntry(["plugin", "list"], "commonwealth")) {
-      const install = spawnSync("codex", ["plugin", "add", "commonwealth@commonwealth"], {
-        stdio: "inherit",
-      });
-      if (install.error || install.status !== 0) {
-        return {
-          installed: false,
-          skipped: `codex plugin add failed (code ${install.status ?? "null"})`,
-        };
-      }
-    }
-
-    return { installed: true };
-  };
+  const installCodex = (): PluginInstallResult =>
+    installCodexPlugin({
+      hasExecutable: () => hasExecutable("codex"),
+      hasEntry: hasCodexEntry,
+      run: (args) => spawnSync("codex", args, { stdio: "inherit" }),
+      source: isWorkspace ? repoRoot : PUBLIC_MARKETPLACE_REPO,
+    });
 
   const installPlugin = async (
     agent: AgentTarget,
@@ -480,7 +500,7 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
     const selected = agent === "both" ? (["claude", "codex"] as const) : ([agent] as const);
     const outcomes = selected.map((host) => ({
       host,
-      result: host === "claude" ? installClaudePlugin() : installCodexPlugin(),
+      result: host === "claude" ? installClaudePlugin() : installCodex(),
     }));
     const installed = outcomes.filter((outcome) => outcome.result.installed).map((o) => o.host);
     const skipped = outcomes

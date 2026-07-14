@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { nextVersion } from "./release.mjs";
+import path from "node:path";
+import { applyVersion, currentVersion, nextVersion } from "./release.mjs";
 
 describe("nextVersion", () => {
   it("bumps patch/minor/major, zeroing lower components", () => {
@@ -23,5 +24,18 @@ describe("nextVersion", () => {
   it("rejects a malformed version argument", () => {
     expect(() => nextVersion("0.1.2", "v1")).toThrow(/not a semver/);
     expect(() => nextVersion("0.1.2", "1.2")).toThrow(/not a semver/);
+  });
+});
+
+describe("applyVersion", () => {
+  it("keeps the Codex plugin manifest in the release version set", () => {
+    const target = nextVersion(currentVersion(), "patch");
+    const changed = applyVersion(target, { dryRun: true });
+
+    expect(
+      changed.some((file) =>
+        file.endsWith(path.join("packages", "plugin", ".codex-plugin", "plugin.json")),
+      ),
+    ).toBe(true);
   });
 });

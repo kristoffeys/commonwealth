@@ -58,7 +58,7 @@ type GitState = { kind: "no-repo" } | { kind: "no-upstream" } | { kind: "tracked
 
 /** Result of executing `--version` through the installed plugin hook's live curate path. */
 export interface CurateRuntimeProbe {
-  kind: "entry" | "vendored" | "npx" | "unknown";
+  kind: "entry" | "vendored" | "npx" | "unsupported" | "unknown";
   command: string;
   ok: boolean;
   code: number | null;
@@ -269,7 +269,7 @@ export function defaultDoctorEnv(cwd: string): DoctorEnv {
         };
         if (typeof mod.probeCurateRuntime !== "function") {
           return {
-            kind: "unknown",
+            kind: "unsupported",
             command: hookLib,
             ok: false,
             code: null,
@@ -380,6 +380,14 @@ export async function diagnose(
         label: "Curate runtime",
         status: "skip",
         detail: "Can't locate the installed plugin runtime path.",
+      });
+    } else if (runtime.kind === "unsupported") {
+      checks.push({
+        id: "curate-runtime",
+        label: "Curate runtime",
+        status: "warn",
+        detail: `${runtime.error ?? "The installed plugin cannot expose its live curate path."} Capture status was not inferred.`,
+        fix: "commonwealth update   (install the current plugin diagnostics)",
       });
     } else if (!runtime.ok) {
       const exit =

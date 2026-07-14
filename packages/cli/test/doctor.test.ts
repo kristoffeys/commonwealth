@@ -220,6 +220,27 @@ describe("commonwealth doctor — diagnose()", () => {
     expect(runtime.detail).toContain("npm registry/cache fallback");
   });
 
+  it("warns without claiming capture is off when an older plugin lacks the runtime probe", async () => {
+    const report = await diagnose(
+      healthyEnv({
+        curateRuntime: () =>
+          Promise.resolve({
+            kind: "unsupported",
+            command: "/plugin/hooks/lib.mjs",
+            ok: false,
+            code: null,
+            error: "installed plugin predates curate runtime diagnostics; update it",
+          }),
+      }),
+    );
+
+    const runtime = check(report, "curate-runtime");
+    expect(runtime.status).toBe("warn");
+    expect(runtime.detail).toContain("Capture status was not inferred");
+    expect(runtime.detail).not.toContain("Capture is OFF");
+    expect(runtime.fix).toContain("commonwealth update");
+  });
+
   it("fails loudly when the live npx runtime exits non-zero (#222)", async () => {
     const report = await diagnose(
       healthyEnv({
