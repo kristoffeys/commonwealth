@@ -15,7 +15,7 @@ Commonwealth is that layer, made multiplayer:
 - **Plain markdown, git-backed.** Your knowledge is files you own — diffable, portable, no
   proprietary store to be locked into.
 - **Per-project brains.** Each project gets its own brain (one git repo). Everyone reads and
-  writes it through their existing AI (Claude Code first).
+  writes it through their existing AI (Claude Code and Codex).
 - **Agent-native.** Exposed over MCP, so a teammate's agent reads the brain before acting and
   writes back what it learns.
 - **Conflict-free by design.** One fact per file with collision-proof names, so concurrent
@@ -28,7 +28,7 @@ Commonwealth is that layer, made multiplayer:
 ## How it fits together
 
 ```
-Claude Code (every teammate)
+Claude Code / Codex (every teammate)
      │   reads before acting · writes back what it learns   (MCP)
      ▼
   your brain  =  plain markdown in a git repo
@@ -39,7 +39,7 @@ Claude Code (every teammate)
 
 ## Quick start
 
-**Requirements:** Node ≥ 22 and git. Claude Code for the in-editor experience.
+**Requirements:** Node ≥ 22 and git. Claude Code and/or Codex for the agent experience.
 
 **See it in 60 seconds, no setup:**
 
@@ -63,28 +63,39 @@ commonwealth init
 1. Creates a brain for this project — or **joins** the one it already belongs to.
 2. Lets you multi-select which folders to sync into the brain and which repos to **seed** from
    (mining git history, ADRs, and agent config like `CLAUDE.md` / `.cursorrules` / `AGENTS.md`).
-3. Installs the Commonwealth **plugin** into Claude Code (MCP server + session hooks), so every
-   session reads and writes the right brain automatically.
+3. Installs the Commonwealth **plugin** for the selected agent. Claude Code gets MCP + session
+   hooks; Codex gets MCP plus a generated `AGENTS.md` brain snapshot.
 4. Starts the background **sync daemon** and sets up your capture scope.
 
-> After install, **restart Claude Code and run `/mcp`** — plugins load at session start, so a
-> session already open when you install won't see it until you restart. `/mcp` should then list
-> the `commonwealth` server.
+> After install, restart the selected agent and open a new session/thread so it loads the plugin.
+> In Claude Code, `/mcp` should list the `commonwealth` server.
 
-You can also install the Claude Code plugin directly — the repo is its own plugin marketplace:
+The default remains Claude Code for backward compatibility. Select Codex or both explicitly:
+
+```bash
+commonwealth init --agent codex
+commonwealth init --agent both
+```
+
+You can also install either plugin directly — the repo is its own compatible marketplace:
 
 ```bash
 claude plugin marketplace add kristoffeys/commonwealth
 claude plugin install commonwealth@commonwealth
+
+codex plugin marketplace add kristoffeys/commonwealth
+codex plugin add commonwealth@commonwealth
 ```
 
 Prefer to run non-interactively (CI, scripting)? Pass `--yes` to use defaults + flags:
 
 ```bash
-commonwealth init --yes --sync ~/work/app --seed-repo ~/work/app --remote git@github.com:you/brain.git
+commonwealth init --yes --agent both --sync ~/work/app --seed-repo ~/work/app --remote git@github.com:you/brain.git
 ```
 
-Then open a Claude Code session in the project and ask it something your team already knows.
+Then open a Claude Code session or Codex thread in the project and ask it something your team
+already knows. Codex automatic lifecycle capture is tracked in #225; MCP reads/writes and the
+`AGENTS.md` fallback work in this first integration slice.
 
 ## Everyday use
 

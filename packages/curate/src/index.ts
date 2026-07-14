@@ -25,6 +25,7 @@ import { curate } from "./curate.js";
 import { selectRelevant } from "./relevance.js";
 import { approve, approveAll, listPending, reject } from "./review.js";
 import { addAllow, addDeny, loadUserConfig } from "./scope.js";
+import packageJson from "../package.json";
 
 /**
  * Resolve the brain directory for a `cwd`, or `null` when none is configured (#69). Order:
@@ -577,6 +578,13 @@ async function cmdGraduate(args: string[]): Promise<void> {
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const [command, ...rest] = argv;
+
+  // Runtime health contract used by the plugin's exact-path probe (`commonwealth doctor`, #222).
+  // Keep this brain-independent and side-effect-free so it works even when capture wiring is broken.
+  if (command === "--version" || command === "-v" || command === "version") {
+    console.log(packageJson.version);
+    return;
+  }
 
   // Peel off a shared `--dir` from the remaining args; the rest are command-specific.
   const { values, positionals } = parseArgs({

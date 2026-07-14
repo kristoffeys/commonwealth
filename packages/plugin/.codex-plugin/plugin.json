@@ -1,0 +1,28 @@
+{
+  "name": "commonwealth",
+  "version": "0.1.11",
+  "description": "A multiplayer, git-backed, agent-readable second brain for teams.",
+  "author": {
+    "name": "Commonwealth",
+    "url": "https://github.com/kristoffeys/commonwealth"
+  },
+  "homepage": "https://github.com/kristoffeys/commonwealth",
+  "repository": "https://github.com/kristoffeys/commonwealth",
+  "license": "Apache-2.0",
+  "keywords": ["knowledge", "memory", "teams", "mcp"],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Commonwealth",
+    "shortDescription": "A shared second brain for your team",
+    "longDescription": "Search, read, and write your team's git-backed knowledge through the Commonwealth MCP server.",
+    "developerName": "Commonwealth",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/kristoffeys/commonwealth",
+    "defaultPrompt": [
+      "What does our team already know about this?",
+      "Remember this decision in our team brain."
+    ],
+    "brandColor": "#315B7D"
+  }
+}

@@ -43,6 +43,22 @@ describe(".claude-plugin/plugin.json", () => {
   });
 });
 
+describe(".codex-plugin/plugin.json", () => {
+  it("declares a Codex plugin backed by the shared MCP config", () => {
+    const manifest = readJson(".codex-plugin/plugin.json") as Record<string, unknown>;
+    expect(manifest.name).toBe("commonwealth");
+    expect(manifest.version).toBe(
+      (readJson(".claude-plugin/plugin.json") as { version: string }).version,
+    );
+    expect(manifest.mcpServers).toBe("./.mcp.json");
+    expect(existsSync(path.join(pluginRoot, manifest.mcpServers as string))).toBe(true);
+
+    // Codex lifecycle capture is tracked separately (#225); this first slice must not advertise
+    // Claude's SessionEnd semantics as if they already worked in Codex.
+    expect(manifest.hooks).toBeUndefined();
+  });
+});
+
 describe("repo-root .claude-plugin/marketplace.json", () => {
   it("is valid JSON declaring the commonwealth plugin whose source path exists", () => {
     const raw = readFileSync(path.join(repoRoot, ".claude-plugin", "marketplace.json"), "utf8");
@@ -60,10 +76,11 @@ describe("repo-root .claude-plugin/marketplace.json", () => {
     expect(entry?.source).toBe("./packages/plugin");
     expect(typeof entry?.description).toBe("string");
 
-    // The declared source path must resolve to a real plugin (its plugin.json exists).
+    // The legacy-compatible marketplace serves both hosts; each host requires its own manifest.
     const source = path.resolve(repoRoot, entry?.source as string);
     expect(existsSync(source)).toBe(true);
     expect(existsSync(path.join(source, ".claude-plugin", "plugin.json"))).toBe(true);
+    expect(existsSync(path.join(source, ".codex-plugin", "plugin.json"))).toBe(true);
   });
 
   it("keeps the marketplace entry version in agreement with the plugin.json version", () => {

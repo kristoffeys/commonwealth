@@ -40,6 +40,14 @@ describe("commonwealth doctor — diagnose()", () => {
       // existing checks/ids are unchanged. Corrupt/healthy cases override this per-test.
       configParse: () => Promise.resolve(null),
       pluginInstalled: () => true,
+      curateRuntime: () =>
+        Promise.resolve({
+          kind: "vendored",
+          command: "/usr/bin/node /plugin/vendor/curate/index.js",
+          ok: true,
+          code: 0,
+          version: "0.1.12",
+        }),
       pidAlive: () => true,
       gitState: () => ({ kind: "tracked", behind: 0 }),
       startDaemon: () => Promise.resolve(true),
@@ -59,6 +67,7 @@ describe("commonwealth doctor — diagnose()", () => {
 
     expect(report.ok).toBe(true);
     expect(check(report, "brain").status).toBe("ok");
+    expect(check(report, "curate-runtime").status).toBe("ok");
     expect(check(report, "daemon").status).toBe("ok");
     expect(check(report, "remote").status).toBe("ok");
     expect(check(report, "index").status).toBe("ok");
@@ -86,7 +95,7 @@ describe("commonwealth doctor — diagnose()", () => {
     expect(check(report, "brain").status).toBe("fail");
     expect(check(report, "brain").fix).toContain("commonwealth init");
     // Brain-scoped links are not evaluated once resolution fails.
-    expect(report.checks.map((c) => c.id)).toEqual(["plugin", "brain"]);
+    expect(report.checks.map((c) => c.id)).toEqual(["plugin", "curate-runtime", "brain"]);
   });
 
   it("flags a dead daemon and heals it under --fix", async () => {
@@ -190,6 +199,46 @@ describe("commonwealth doctor — diagnose()", () => {
   it("presents the plugin link as inferred (skip) when claude is absent", async () => {
     const report = await diagnose(healthyEnv({ pluginInstalled: () => null }));
     expect(check(report, "plugin").status).toBe("skip");
+  });
+
+  it("names a healthy npx fallback as the live path and warns that cache is in-path (#222)", async () => {
+    const report = await diagnose(
+      healthyEnv({
+        curateRuntime: () =>
+          Promise.resolve({
+            kind: "npx",
+            command: "npx -y @cmnwlth/curate@0.1.12",
+            ok: true,
+            code: 0,
+            version: "0.1.12",
+          }),
+      }),
+    );
+    const runtime = check(report, "curate-runtime");
+    expect(runtime.status).toBe("warn");
+    expect(runtime.detail).toContain("npx -y @cmnwlth/curate@0.1.12");
+    expect(runtime.detail).toContain("npm registry/cache fallback");
+  });
+
+  it("fails loudly when the live npx runtime exits non-zero (#222)", async () => {
+    const report = await diagnose(
+      healthyEnv({
+        curateRuntime: () =>
+          Promise.resolve({
+            kind: "npx",
+            command: "npx -y @cmnwlth/curate@0.1.12",
+            ok: false,
+            code: 254,
+            error: "package.json missing",
+          }),
+      }),
+    );
+    const runtime = check(report, "curate-runtime");
+    expect(report.ok).toBe(false);
+    expect(runtime.status).toBe("fail");
+    expect(runtime.detail).toContain("exit 254");
+    expect(runtime.detail).toContain("Capture is OFF");
+    expect(runtime.fix).toContain("npx cache");
   });
 
   it("renders the fixes in the text report", async () => {

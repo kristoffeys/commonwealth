@@ -9,7 +9,8 @@ import * as core from "@cmnwlth/core";
 import type { NewNoteInput } from "@cmnwlth/core";
 import { gatherCandidates } from "@cmnwlth/seed";
 import { findRepoRoot, runInit, type InitDeps } from "./init.js";
-import type { OnboardDeps } from "./onboard.js";
+import { defaultEmitEnv, runEmit } from "./emit.js";
+import type { AgentTarget, OnboardDeps } from "./onboard.js";
 
 /** Options for {@link defaultInitDeps}, mostly to make wiring testable/overridable. */
 export interface DefaultInitDepsOptions {
@@ -202,11 +203,46 @@ function hasClaudeEntry(args: string[], name: string): boolean {
 }
 
 /**
+ * Parse Codex's structured plugin/marketplace list output. The shapes differ by command
+ * (`installed` vs `marketplaces`); available-but-not-installed plugins are deliberately ignored.
+ */
+export function codexListJsonHasEntry(stdout: string, name: string): boolean {
+  const parsed = JSON.parse(stdout) as {
+    installed?: Array<{ pluginId?: unknown; name?: unknown }>;
+    marketplaces?: Array<{ name?: unknown }>;
+  };
+  const rows = [...(parsed.installed ?? []), ...(parsed.marketplaces ?? [])];
+  return rows.some(
+    (row) =>
+      row.name === name ||
+      ("pluginId" in row &&
+        typeof row.pluginId === "string" &&
+        row.pluginId.split("@")[0] === name),
+  );
+}
+
+function hasCodexEntry(args: string[], name: string): boolean {
+  const json = spawnSync("codex", [...args, "--json"], { encoding: "utf8" });
+  if (json.status === 0 && json.stdout) {
+    try {
+      // A successful structured response is authoritative. Falling back to the human list here
+      // would confuse a marketplace's AVAILABLE plugin with an INSTALLED one.
+      return codexListJsonHasEntry(json.stdout, name);
+    } catch {
+      // fall through to the text scan
+    }
+  }
+  const text = spawnSync("codex", args, { encoding: "utf8" });
+  const out = `${text.stdout ?? ""}${text.stderr ?? ""}`;
+  return text.status === 0 && new RegExp(`(^|\\s)${name}(\\s|@|$)`, "m").test(out);
+}
+
+/**
  * Wire the real {@link OnboardDeps}: a dist-presence check that triggers `pnpm -r build` + the
- * plugin bundle, `runInit` for the brain core, an idempotent plugin install via the repo
- * marketplace (`claude plugin marketplace add` + `claude plugin install`), and a detached
+ * plugin bundle, `runInit` for the brain core, idempotent Claude/Codex plugin installs via the repo
+ * marketplace, Codex AGENTS.md context emission, and a detached
  * sync daemon. Every step degrades to a `skipped` note rather than throwing, so a missing
- * `pnpm`/`claude` never aborts onboarding. Pure orchestration lives in {@link runOnboard}.
+ * `pnpm`/agent CLI never aborts onboarding. Pure orchestration lives in {@link runOnboard}.
  *
  * @param opts Optional overrides ({@link DefaultOnboardDepsOptions}).
  * @returns A fully-wired {@link OnboardDeps}.
@@ -349,17 +385,18 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
    * The brain is resolved per repo by the plugin + its SessionStart hook, so no brain dir is
    * pinned here.
    */
-  const installPlugin = async (): Promise<{ installed: boolean; skipped?: string }> => {
-    if (!hasExecutable("claude")) {
-      return { installed: false, skipped: "claude CLI not found" };
-    }
-
-    // (a) Refresh the vendored bundle so the installed plugin runs the current build.
+  const refreshPluginBundle = (): void => {
     const bundle = path.join(repoRoot, "packages", "plugin", "scripts", "bundle.mjs");
     if (existsSync(bundle)) {
       const res = spawnSync("node", [bundle], { cwd: repoRoot, stdio: "inherit" });
       if (res.status !== 0)
         log(`Plugin bundle exited with code ${res.status ?? "null"} (ignored).`);
+    }
+  };
+
+  const installClaudePlugin = (): { installed: boolean; skipped?: string } => {
+    if (!hasExecutable("claude")) {
+      return { installed: false, skipped: "claude CLI not found" };
     }
 
     // (b) Register the marketplace unless a `commonwealth` marketplace already exists. From a
@@ -400,6 +437,74 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
     }
 
     return { installed: true };
+  };
+
+  /** Install the Codex plugin from the same legacy-compatible repo marketplace. */
+  const installCodexPlugin = (): { installed: boolean; skipped?: string } => {
+    if (!hasExecutable("codex")) {
+      return { installed: false, skipped: "codex CLI not found" };
+    }
+
+    if (!hasCodexEntry(["plugin", "marketplace", "list"], "commonwealth")) {
+      const source = isWorkspace ? repoRoot : PUBLIC_MARKETPLACE_REPO;
+      const add = spawnSync("codex", ["plugin", "marketplace", "add", source], {
+        stdio: "inherit",
+      });
+      if (add.error || add.status !== 0) {
+        return {
+          installed: false,
+          skipped: `codex plugin marketplace add failed (code ${add.status ?? "null"})`,
+        };
+      }
+    }
+
+    if (!hasCodexEntry(["plugin", "list"], "commonwealth")) {
+      const install = spawnSync("codex", ["plugin", "add", "commonwealth@commonwealth"], {
+        stdio: "inherit",
+      });
+      if (install.error || install.status !== 0) {
+        return {
+          installed: false,
+          skipped: `codex plugin add failed (code ${install.status ?? "null"})`,
+        };
+      }
+    }
+
+    return { installed: true };
+  };
+
+  const installPlugin = async (
+    agent: AgentTarget,
+  ): Promise<{ installed: boolean; skipped?: string; detail?: string }> => {
+    refreshPluginBundle();
+    const selected = agent === "both" ? (["claude", "codex"] as const) : ([agent] as const);
+    const outcomes = selected.map((host) => ({
+      host,
+      result: host === "claude" ? installClaudePlugin() : installCodexPlugin(),
+    }));
+    const installed = outcomes.filter((outcome) => outcome.result.installed).map((o) => o.host);
+    const skipped = outcomes
+      .filter((outcome) => !outcome.result.installed)
+      .map((outcome) => `${outcome.host}: ${outcome.result.skipped ?? "not installed"}`);
+
+    if (installed.length === 0) return { installed: false, skipped: skipped.join("; ") };
+    if (agent === "claude" && skipped.length === 0) return { installed: true };
+    const detail = [
+      `installed (${installed.join(", ")})`,
+      skipped.length > 0 ? `skipped ${skipped.join("; ")}` : null,
+    ]
+      .filter((part): part is string => part !== null)
+      .join("; ");
+    return { installed: true, detail };
+  };
+
+  const emitContext = async (cwd: string): Promise<{ written: string[]; skipped?: string }> => {
+    try {
+      const result = await runEmit({}, defaultEmitEnv(cwd));
+      return { written: result.written };
+    } catch (err) {
+      return { written: [], skipped: (err as Error).message };
+    }
   };
 
   const startDaemon = async (
@@ -524,6 +629,7 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
     setAutoAdr,
     setRemote,
     installPlugin,
+    emitContext,
     startDaemon,
     confirm: promptConfirm,
     log,

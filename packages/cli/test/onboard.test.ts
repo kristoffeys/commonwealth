@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { InitResult } from "../src/init.js";
-import { runOnboard, type OnboardDeps, type OnboardOptions } from "../src/onboard.js";
+import {
+  parseAgentTarget,
+  runOnboard,
+  type OnboardDeps,
+  type OnboardOptions,
+} from "../src/onboard.js";
 
 const INIT_RESULT: InitResult = { mode: "new", brainDir: "/b", staged: 4, gathered: 4 };
 
@@ -16,6 +21,7 @@ function makeDeps(over: Partial<OnboardDeps> = {}): OnboardDeps {
     setAutoAdr: vi.fn(async () => ({ set: true })),
     setRemote: vi.fn(async () => ({ set: true })),
     installPlugin: vi.fn(async () => ({ installed: true })),
+    emitContext: vi.fn(async () => ({ written: ["AGENTS.md"] })),
     startDaemon: vi.fn(async () => ({ started: true })),
     confirm: vi.fn(async () => true),
     log: vi.fn(),
@@ -50,6 +56,7 @@ describe("runOnboard", () => {
       autoAdr: "skipped",
       remote: "skipped",
       plugin: "installed",
+      context: "skipped",
       daemon: "started",
     });
   });
@@ -133,6 +140,52 @@ describe("runOnboard", () => {
     expect(deps.init).toHaveBeenCalledTimes(1);
     expect(deps.startDaemon).toHaveBeenCalledTimes(1);
     expect(result.plugin).toBe("skipped");
+  });
+
+  it("--agent codex installs Codex and emits the AGENTS.md fallback", async () => {
+    const deps = makeDeps({
+      installPlugin: vi.fn(async () => ({ installed: true, detail: "installed (codex)" })),
+    });
+    const result = await runOnboard("/repo", { yes: true, agent: "codex" }, deps);
+
+    expect(deps.installPlugin).toHaveBeenCalledWith("codex");
+    expect(deps.emitContext).toHaveBeenCalledWith("/repo");
+    expect(result.plugin).toBe("installed (codex)");
+    expect(result.context).toBe("AGENTS.md emitted");
+  });
+
+  it("--agent both preserves a partial install result and still emits Codex context", async () => {
+    const deps = makeDeps({
+      installPlugin: vi.fn(async () => ({
+        installed: true,
+        detail: "installed (codex); skipped claude: claude CLI not found",
+      })),
+    });
+    const result = await runOnboard("/repo", { yes: true, agent: "both" }, deps);
+
+    expect(deps.installPlugin).toHaveBeenCalledWith("both");
+    expect(result.plugin).toContain("installed (codex)");
+    expect(result.plugin).toContain("claude CLI not found");
+    expect(result.context).toBe("AGENTS.md emitted");
+  });
+
+  it("--agent codex emits AGENTS.md even when plugin installation is disabled", async () => {
+    const deps = makeDeps();
+    const result = await runOnboard("/repo", { yes: true, agent: "codex", plugin: false }, deps);
+
+    expect(deps.installPlugin).not.toHaveBeenCalled();
+    expect(deps.emitContext).toHaveBeenCalledWith("/repo");
+    expect(result.context).toBe("AGENTS.md emitted");
+  });
+
+  it("surfaces Codex context emission failures without aborting onboarding", async () => {
+    const deps = makeDeps({
+      emitContext: vi.fn(async () => ({ written: [], skipped: "brain render failed" })),
+    });
+    const result = await runOnboard("/repo", { yes: true, agent: "codex" }, deps);
+
+    expect(result.context).toBe("brain render failed");
+    expect(result.mode).toBe("new");
   });
 
   it("--no-daemon: skips startDaemon, runs the rest", async () => {
@@ -382,5 +435,19 @@ describe("runOnboard", () => {
     expect(planLine).toContain("install the Commonwealth plugin");
     const doneLine = lines.find((m) => m.startsWith("Done."));
     expect(doneLine).toContain("plugin=installed");
+  });
+});
+
+describe("parseAgentTarget", () => {
+  it("defaults to Claude and accepts every public target", () => {
+    expect(parseAgentTarget(undefined)).toBe("claude");
+    expect(parseAgentTarget("claude")).toBe("claude");
+    expect(parseAgentTarget("codex")).toBe("codex");
+    expect(parseAgentTarget("both")).toBe("both");
+  });
+
+  it("rejects unknown targets", () => {
+    expect(parseAgentTarget("cursor")).toBeNull();
+    expect(parseAgentTarget("")).toBeNull();
   });
 });
