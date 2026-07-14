@@ -7,7 +7,7 @@
 // Hard rule: a hook (and its worker) must never break the session. On ANY error we exit 0. Output
 // goes nowhere (the launcher discards our stdio); the user-facing surface is the deferred receipt
 // that the next SessionStart reads (#96).
-import { DISABLE_HOOKS_ENV, realDeps, sessionEnd } from "./lib.mjs";
+import { captureWorkerHost, DISABLE_HOOKS_ENV, realDeps, sessionEnd } from "./lib.mjs";
 
 async function main() {
   // Recursion guard (#104), belt-and-suspenders: the nested `claude -p` extractor sets this, and
@@ -21,7 +21,7 @@ async function main() {
     input = {};
   }
   // `await` fully so every write (capture, saveReceipt) completes before we exit.
-  await sessionEnd(input, realDeps());
+  await sessionEnd(input, realDeps({ host: captureWorkerHost(input) }));
 }
 
 main()
