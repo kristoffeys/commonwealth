@@ -29,11 +29,12 @@ kind: memory
 title: Auth uses short-lived JWT + refresh in httpOnly cookie
 tags: [auth, security, acme]
 created: 2026-07-01
-author: kristof
+author: Kristof Feys
+author_ref: contributor-kristof-feys-2d5a7ee6f7
 status: active # active | superseded | stale
 verified: 2026-07-01 # last time checked against reality
 sources: [decisions/2026-06-30-auth-jwt-vs-session-7c1e.md]
-relates: [[people/acme-security-lead]]
+relates: [contributor-kristof-feys-2d5a7ee6f7, people/acme-security-lead]
 ---
 
 Access tokens are 15-min JWTs; refresh token lives in an httpOnly, Secure, SameSite=Lax
@@ -142,7 +143,11 @@ on our timeline in June — sensitive to scope creep.
   destroying — git already keeps history; superseding keeps the _reasoning_ visible.
 - **`verified` / `stale`** — freshness is stamped during curation. A brain that can't tell
   fresh from stale rots — which is why notes carry a freshness signal.
-- **`author` / `updated`** — provenance for trust and for the team feed.
+- **`author` / `author_ref` / `updated`** — responsibility provenance for trust and the team feed.
+  Person-authored writes resolve `COMMONWEALTH_AUTHOR`, then Git identity, and finally the local OS
+  account. Commonwealth creates the contributor `person` note once and
+  stores its stable id in `author_ref`; `relates` also carries that id as a graph edge. Set
+  `COMMONWEALTH_AUTHOR` and optionally `COMMONWEALTH_AUTHOR_EMAIL` to override local identity.
 - **`graduate`** — opt-in marker (`graduate: true`) that a note may be promoted to the
   org-brain, the audience-widening promotion of knowledge that recurs across ≥2 project brains
   (ADR-0023). Absent/`false` keeps the note in its repo. Strictly opt-in and even then staged for

@@ -174,13 +174,17 @@ export function createServer(
         "Record a new atomic note in the brain (memory, decision, work-state, or person). It " +
         "goes through the same curation as automatic capture — the secret gate, dedup, and the " +
         "brain's autoPromote setting — so it lands in canon (autoPromote on) or the review queue " +
-        "(off), and may be declined (e.g. a secret or a near-duplicate).",
+        "(off), and may be declined (e.g. a secret or a near-duplicate). The contributor is " +
+        "created as a person when needed and linked to the note for responsibility tracing.",
       inputSchema: {
         kind: kindEnum.describe("Which kind of note to create"),
         title: z.string().min(1).describe("Short title / the fact in one line"),
         body: z.string().describe("Markdown body of the note"),
         tags: z.array(z.string()).optional().describe("Topical tags"),
-        author: z.string().optional().describe("Who is recording this"),
+        author: z
+          .string()
+          .optional()
+          .describe("Deprecated compatibility field; ignored for responsibility attribution"),
       },
     },
     async ({ kind, title, body, tags, author }) => {

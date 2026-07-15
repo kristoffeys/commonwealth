@@ -28,12 +28,16 @@ beforeEach(async () => {
   process.env.COMMONWEALTH_CONFIG = path.join(tmp, "user-config.json");
   process.env.COMMONWEALTH_REGISTRY = path.join(tmp, "registry.json");
   delete process.env.COMMONWEALTH_BRAIN_DIR;
+  delete process.env.COMMONWEALTH_AUTHOR;
+  delete process.env.COMMONWEALTH_AUTHOR_EMAIL;
 });
 
 afterEach(async () => {
   delete process.env.COMMONWEALTH_CONFIG;
   delete process.env.COMMONWEALTH_REGISTRY;
   delete process.env.COMMONWEALTH_BRAIN_DIR;
+  delete process.env.COMMONWEALTH_AUTHOR;
+  delete process.env.COMMONWEALTH_AUTHOR_EMAIL;
   await fs.rm(tmp, { recursive: true, force: true });
 });
 
@@ -537,6 +541,8 @@ describe("realDeps().capture (real curate binary over stdin)", () => {
   it("captures a candidate through the real binary (proves stdin, not --from -)", async () => {
     const brain = path.join(tmp, "brain");
     await initBrain(brain);
+    process.env.COMMONWEALTH_AUTHOR = "Hook Author";
+    process.env.COMMONWEALTH_AUTHOR_EMAIL = "hook@example.com";
     const deps = realDeps({ curateEntry });
 
     const result = await deps.capture(brain, brain, [
@@ -547,7 +553,13 @@ describe("realDeps().capture (real curate binary over stdin)", () => {
     // autoPromote defaults on (ADR-0014), so the captured note lands straight in canon; the
     // staging queue is left empty. Asserting canon proves the full stdin → capture → promote path.
     const canon = await listNotes(brain);
-    expect(canon.filter((n) => n.frontmatter.kind === "memory")).toHaveLength(1);
+    const memory = canon.find((note) => note.frontmatter.kind === "memory")!;
+    const person = canon.find((note) => note.frontmatter.kind === "person")!;
+    expect(memory).toBeTruthy();
+    expect(person).toBeTruthy();
+    expect(memory.frontmatter.author).toBe("Hook Author");
+    expect(memory.frontmatter.author_ref).toBe(person.frontmatter.id);
+    expect(memory.frontmatter.relates).toContain(person.frontmatter.id);
     const staged = await fs.readdir(path.join(brain, "staging", "memory")).catch(() => []);
     expect(staged.filter((f) => f.endsWith(".md"))).toHaveLength(0);
   });

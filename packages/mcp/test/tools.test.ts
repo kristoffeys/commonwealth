@@ -1,8 +1,8 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { initBrain, readNote, writeNote } from "@cmnwlth/core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { initBrain, listNotes, readNote, writeNote } from "@cmnwlth/core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   askBrainTool,
   listWorkState,
@@ -15,12 +15,15 @@ import {
 let brainDir: string;
 
 beforeEach(async () => {
+  vi.stubEnv("COMMONWEALTH_AUTHOR", "Test Contributor");
+  vi.stubEnv("COMMONWEALTH_AUTHOR_EMAIL", "contributor@example.com");
   brainDir = await fs.mkdtemp(path.join(tmpdir(), "commonwealth-mcp-"));
   await initBrain(brainDir, { name: "test-brain" });
 });
 
 afterEach(async () => {
   await fs.rm(brainDir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
 });
 
 describe("searchNotes", () => {
@@ -103,7 +106,6 @@ describe("remember", () => {
       title: "Deploys happen on Fridays",
       body: "We ship at the end of the week.",
       tags: ["process"],
-      author: "kristof",
     });
 
     expect(result.status).toBe("promoted");
@@ -114,7 +116,16 @@ describe("remember", () => {
     const parsed = await readNote(brainDir, result.path!);
     expect(parsed.frontmatter.id).toBe(result.id);
     expect(parsed.frontmatter.title).toBe("Deploys happen on Fridays");
-    expect(parsed.frontmatter.author).toBe("kristof");
+    expect(parsed.frontmatter.author).toBe("Test Contributor");
+    expect(result.personId).toBeTruthy();
+    expect(parsed.frontmatter.author_ref).toBe(result.personId);
+    expect(parsed.frontmatter.relates).toContain(result.personId);
+    const people = await listNotes(brainDir, "person");
+    expect(people).toHaveLength(1);
+    expect(people[0]!.frontmatter).toMatchObject({
+      kind: "person",
+      name: "Test Contributor",
+    });
     expect(parsed.body).toBe("We ship at the end of the week.");
   });
 
@@ -126,8 +137,9 @@ describe("remember", () => {
     });
     expect(result.status).toBe("rejected");
     expect(result.reason).toBe("contains-secret");
-    // Nothing landed in canon.
+    // Rejected writes create neither the memory nor a contributor person in canon.
     expect(await searchNotes(brainDir, { query: "creds" })).toEqual([]);
+    expect(await listNotes(brainDir, "person")).toHaveLength(0);
   });
 
   it("stages for review instead of canon when autoPromote is off (#82)", async () => {

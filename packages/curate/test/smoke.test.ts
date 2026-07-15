@@ -3,7 +3,9 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { listNotes } from "@cmnwlth/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { listPending } from "../src/review.js";
 
 /**
  * End-to-end guard: run the *built* binary (not source) and confirm it starts. This is
@@ -51,7 +53,7 @@ describe("built binary", () => {
     expect(contents.startsWith("#!")).toBe(true);
   });
 
-  it("capture --force stages even when the cwd is out of scope (explicit import)", async () => {
+  it("capture --force imports even when the cwd is out of scope without attribution", async () => {
     // Non-empty allow that does NOT cover the cwd → the cwd is out of scope.
     const configPath = path.join(brainDir, "force-config.json");
     await fs.writeFile(configPath, JSON.stringify({ allow: ["/nowhere"], deny: [] }));
@@ -77,6 +79,97 @@ describe("built binary", () => {
       stdio: "pipe",
     });
     expect(on.toString()).toContain("Forced import");
+    expect(await listNotes(brainDir, "person")).toHaveLength(0);
+    const forced = (await listNotes(brainDir, "memory")).find(
+      (note) => note.frontmatter.title === "Forced import",
+    )!;
+    expect(forced.frontmatter.author).toBeUndefined();
+    expect(forced.frontmatter.author_ref).toBeUndefined();
+    expect(forced.frontmatter.relates).toEqual([]);
+  });
+
+  it("attributes hook-facing capture to a stable person", async () => {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-attribution-")),
+    );
+    const brain = path.join(root, "brain");
+    const project = path.join(root, "project");
+    await fs.mkdir(project, { recursive: true });
+    const configPath = path.join(root, "config.json");
+    await fs.writeFile(configPath, JSON.stringify({ rules: [{ prefix: project, brain }] }));
+    const env = {
+      ...process.env,
+      COMMONWEALTH_CONFIG: configPath,
+      COMMONWEALTH_AUTHOR: "Alice Example",
+      COMMONWEALTH_AUTHOR_EMAIL: "alice@example.com",
+    };
+    const candidate = JSON.stringify([
+      { kind: "memory", title: "Attributed capture", body: "a durable hook-captured fact" },
+    ]);
+
+    execFileSync("node", [distEntry, "capture", "--dir", brain, "--cwd", project], {
+      cwd: project,
+      input: candidate,
+      env,
+      stdio: "pipe",
+    });
+
+    const people = await listNotes(brain, "person");
+    const memories = await listNotes(brain, "memory");
+    expect(people).toHaveLength(1);
+    expect(people[0].frontmatter.name).toBe("Alice Example");
+    expect(memories).toHaveLength(1);
+    expect(memories[0].frontmatter.author).toBe("Alice Example");
+    expect(memories[0].frontmatter.author_ref).toBe(people[0].frontmatter.id);
+    expect(memories[0].frontmatter.relates).toContain(people[0].frontmatter.id);
+
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("creates and reuses a contributor person for explicit stage writes", async () => {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-stage-attribution-")),
+    );
+    try {
+      const brain = path.join(root, "brain");
+      const env = {
+        ...process.env,
+        COMMONWEALTH_AUTHOR: "Stage Author",
+        COMMONWEALTH_AUTHOR_EMAIL: "stage@example.com",
+      };
+      const stage = (title: string, body: string): void =>
+        execFileSync(
+          "node",
+          [
+            distEntry,
+            "stage",
+            "--dir",
+            brain,
+            "--kind",
+            "memory",
+            "--title",
+            title,
+            "--body",
+            body,
+          ],
+          { cwd: root, env, stdio: "pipe" },
+        );
+
+      stage("First staged fact", "The first durable fact is held for manual review.");
+      stage("Second staged fact", "The second durable fact is also held for manual review.");
+
+      const people = await listNotes(brain, "person");
+      const pending = await listPending(brain);
+      expect(people).toHaveLength(1);
+      expect(pending).toHaveLength(2);
+      for (const note of pending) {
+        expect(note.frontmatter.author).toBe("Stage Author");
+        expect(note.frontmatter.author_ref).toBe(people[0].frontmatter.id);
+        expect(note.frontmatter.relates).toContain(people[0].frontmatter.id);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("reports scope check for a cwd (exit 0, prints in/out-scope)", async () => {

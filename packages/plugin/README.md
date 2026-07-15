@@ -7,6 +7,9 @@ registry, sync daemon, and MCP server:
   work-state / people`), auto-started by declaring it in the manifest (no manual MCP
   registration). `ask` returns citation-anchored context; the agent writes the cited answer
   (ADR-0020) — Commonwealth never embeds an LLM.
+- **Responsibility attribution** — person-authored capture and MCP writes ensure a contributor
+  `person` note exists, stamp `author` + `author_ref`, and add a graph link to that person. Identity
+  resolves from `COMMONWEALTH_AUTHOR`, Git config, then the OS account; MCP callers cannot override it.
 - **Claude Code lifecycle hooks** — `SessionStart` injects session-wide context (active
   work-state, recent decisions); `UserPromptSubmit` injects the notes relevant to *this turn's*
   prompt and, throttled, also captures long-session knowledge in the background (#194);

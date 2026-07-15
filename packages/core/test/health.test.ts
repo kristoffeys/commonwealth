@@ -73,6 +73,11 @@ describe("brainHealth (#109)", () => {
     expect(brainHealth(notes, { now: NOW }).orphaned.ids).not.toContain("b");
   });
 
+  it("counts author_ref as an inbound responsibility link", () => {
+    const notes = [mem("a", { author_ref: "b" }), mem("b", { verified: NOW })];
+    expect(brainHealth(notes, { now: NOW }).orphaned.ids).not.toContain("b");
+  });
+
   it("penalizes serious (stale/contradicted) fully and soft (unverified/orphaned) at half", () => {
     // 4 notes: one stale, one clean+linked, two only-soft (unverified+orphaned).
     const notes = [

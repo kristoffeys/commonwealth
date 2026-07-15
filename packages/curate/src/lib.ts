@@ -4,7 +4,7 @@
  * `commonwealth-curate` binary (it calls `main()` on import + carries a shebang), so it must
  * never be imported as a module; this entry re-exports the pure pieces instead.
  */
-export { captureCandidates, type CaptureResult } from "./capture.js";
+export { captureCandidates, type CaptureOptions, type CaptureResult } from "./capture.js";
 export {
   consolidateCanon,
   DEFAULT_CONSOLIDATE_THRESHOLD,
