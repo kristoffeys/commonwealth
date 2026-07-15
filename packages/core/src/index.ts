@@ -8,6 +8,7 @@ export * from "./scaffold.js";
 export * from "./secrets.js";
 export * from "./index-db.js";
 export * from "./ask.js";
+export * from "./attribution.js";
 export * from "./registry.js";
 export * from "./clone.js";
 export * from "./source.js";

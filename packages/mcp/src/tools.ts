@@ -4,6 +4,7 @@ import {
   listNotes,
   readNote,
   regenerateDerived,
+  resolveContributorIdentity,
   resolveProjectSource,
   search,
   type AskResult,
@@ -92,6 +93,7 @@ export interface RememberArgs {
   title: string;
   body: string;
   tags?: string[];
+  /** @deprecated Responsibility is bound to trusted local identity; this value is ignored. */
   author?: string;
 }
 
@@ -105,6 +107,8 @@ export interface RememberResult {
   path?: string;
   /** Why a gate declined the note (e.g. `contains-secret`, `duplicate`), when rejected. */
   reason?: string;
+  /** Stable contributor-person id responsible for the write. */
+  personId?: string;
 }
 
 /**
@@ -119,35 +123,63 @@ export interface RememberResult {
  */
 export async function remember(
   brainDir: string,
-  { kind, title, body, tags, author }: RememberArgs,
+  { kind, title, body, tags }: RememberArgs,
 ): Promise<RememberResult> {
   // Attribute the note to the project the MCP is running in (ADR-0015), so it files under
   // <project>/<kind>/ like hook-captured notes. Best-effort: unresolved → unattributed.
   const source = (await resolveProjectSource(process.cwd())) ?? undefined;
-  const result = await captureCandidates(brainDir, [
-    {
-      kind,
-      title,
-      body,
-      tags: tags ?? [],
-      ...(author ? { author } : {}),
-      ...(source ? { source } : {}),
-    },
-  ]);
+  const contributor = await resolveContributorIdentity(process.cwd());
+  if (!contributor) return { status: "rejected", reason: "missing-contributor-identity" };
+  const result = await captureCandidates(
+    brainDir,
+    [
+      {
+        kind,
+        title,
+        body,
+        tags: tags ?? [],
+        ...(source ? { source } : {}),
+      },
+    ],
+    undefined,
+    { contributor },
+  );
 
   const rejected = result.rejected[0];
-  if (rejected) return { status: "rejected", reason: rejected.reason };
+  if (rejected) {
+    return {
+      status: "rejected",
+      reason: rejected.reason,
+      ...(result.contributorPersonId ? { personId: result.contributorPersonId } : {}),
+    };
+  }
 
   const note = result.staged[0];
-  if (!note) return { status: "rejected", reason: "not-staged" };
+  if (!note) {
+    return {
+      status: "rejected",
+      reason: "not-staged",
+      ...(result.contributorPersonId ? { personId: result.contributorPersonId } : {}),
+    };
+  }
 
   if (result.promoted.length > 0) {
     // autoPromote landed it in canon — refresh derived so reads/search see it now.
     await buildIndex(brainDir);
     await regenerateDerived(brainDir);
-    return { status: "promoted", id: note.frontmatter.id, path: result.promoted[0] };
+    return {
+      status: "promoted",
+      id: note.frontmatter.id,
+      path: result.promoted[0],
+      ...(result.contributorPersonId ? { personId: result.contributorPersonId } : {}),
+    };
   }
-  return { status: "staged", id: note.frontmatter.id, path: note.path };
+  return {
+    status: "staged",
+    id: note.frontmatter.id,
+    path: note.path,
+    ...(result.contributorPersonId ? { personId: result.contributorPersonId } : {}),
+  };
 }
 
 /**

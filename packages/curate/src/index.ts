@@ -2,9 +2,11 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { parseArgs } from "node:util";
 import {
+  attributeNoteInputs,
   brainHealth,
   brainMap,
   computeBrainHealth,
+  ensureContributorPerson,
   FEATURE_FLAGS,
   listNotes,
   loadBrainConfig,
@@ -14,6 +16,7 @@ import {
   refreshBrainStatus,
   resolveBrain,
   resolveBrainDir,
+  resolveContributorIdentity,
   resolveProjectSource,
   setFeature,
 } from "@cmnwlth/core";
@@ -22,6 +25,7 @@ import { consolidateCanon } from "./consolidate.js";
 import { graduateToOrgBrain } from "./graduate.js";
 import { formatContext } from "./context.js";
 import { curate } from "./curate.js";
+import { reassignStagedContributor } from "./staging.js";
 import { selectRelevant } from "./relevance.js";
 import { approve, approveAll, listPending, reject } from "./review.js";
 import { addAllow, addDeny, loadUserConfig } from "./scope.js";
@@ -208,7 +212,43 @@ async function cmdStage(dir: string, args: string[]): Promise<void> {
     ...(Object.keys(fields).length > 0 ? { fields } : {}),
   };
 
-  const result = await curate(dir, [candidate]);
+  const contributor = await resolveContributorIdentity(process.cwd());
+  if (!contributor) {
+    throw new Error("no contributor identity; configure git user.name or set COMMONWEALTH_AUTHOR");
+  }
+  const attributed = await attributeNoteInputs(dir, [candidate], contributor);
+  const result = await curate(dir, attributed.candidates);
+  if (result.staged.length > 0) {
+    try {
+      const person = await ensureContributorPerson(dir, contributor);
+      if (person.frontmatter.id !== attributed.personId) {
+        for (let index = 0; index < result.staged.length; index += 1) {
+          result.staged[index] = await reassignStagedContributor(
+            dir,
+            result.staged[index]!,
+            attributed.personId,
+            person.frontmatter.id,
+          );
+        }
+      }
+    } catch (error) {
+      const cleanupErrors: unknown[] = [];
+      for (const note of result.staged) {
+        try {
+          await reject(dir, note.frontmatter.id);
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
+      }
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [error, ...cleanupErrors],
+          "contributor creation failed and staged attribution rollback was incomplete",
+        );
+      }
+      throw error;
+    }
+  }
   for (const note of result.staged) {
     console.log(`${note.frontmatter.id}  [${note.frontmatter.kind}]  ${note.frontmatter.title}`);
   }
@@ -316,7 +356,16 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
   const source = (await resolveProjectSource(cwd)) ?? undefined;
   const stamped = candidates.map((c) => (c.source ? c : { ...c, source }));
 
-  const result = await captureCandidates(dir, stamped);
+  const contributor = values.force === true ? null : await resolveContributorIdentity(cwd);
+  if (values.force !== true && !contributor) {
+    throw new Error("no contributor identity; configure git user.name or set COMMONWEALTH_AUTHOR");
+  }
+  const result = await captureCandidates(
+    dir,
+    stamped,
+    undefined,
+    contributor ? { contributor } : {},
+  );
   // One stdout line per captured note (the SessionEnd hook counts these lines). When
   // autoPromote landed them in canon we prefix the canonical path; otherwise the staged id.
   // `result.promoted[i]` aligns with `result.staged[i]` (promotion iterates staged in order).

@@ -172,6 +172,15 @@ describe("path containment (#76, #77)", () => {
       spy.mockRestore();
     }
   });
+
+  it("rejects non-portable explicit system ids", async () => {
+    await expect(
+      writeNote(dir, { id: "nul", kind: "memory", title: "Reserved", body: "body" }),
+    ).rejects.toThrow(/portable/);
+    await expect(
+      writeNote(dir, { id: "has:colon", kind: "memory", title: "Colon", body: "body" }),
+    ).rejects.toThrow(/portable/);
+  });
 });
 
 describe("project provenance (ADR-0015)", () => {

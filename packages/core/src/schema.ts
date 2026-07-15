@@ -31,7 +31,7 @@ export const IsoDate = z.preprocess(
  * (`../../evil`) from escaping the brain on approve/write (#77). Legitimate ids from `makeNoteId`
  * are `<date>-<slug>-<suffix>`, which never contain these.
  */
-const SafeId = z
+export const SafeId = z
   .string()
   .min(1)
   .refine((s) => !s.includes("/") && !s.includes("\\") && s !== "." && s !== "..", {
@@ -46,6 +46,8 @@ const baseShape = {
   created: IsoDate,
   updated: IsoDate.optional(),
   author: z.string().optional(),
+  /** Stable id of the contributor `person` note responsible for this write. */
+  author_ref: SafeId.optional(),
   /**
    * Originating project the note was captured from — a stable repo identity (git `origin`
    * slug, else the repo-root basename). Lets a shared brain group/filter notes by project
@@ -104,6 +106,9 @@ export const PersonFrontmatter = z
     ...baseShape,
     kind: z.literal("person"),
     name: z.string().min(1),
+    /** Stable normalized identity used to make automatic contributor creation idempotent. */
+    attribution_key: z.string().optional(),
+    email: z.string().email().optional(),
     org: z.string().optional(),
     role: z.string().optional(),
   })

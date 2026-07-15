@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import matter from "gray-matter";
 import { makeNoteId, pathForNote, shortId, today } from "./ids.js";
-import { Frontmatter, KIND_DIR, type Note, type NoteKind } from "./schema.js";
+import { Frontmatter, KIND_DIR, SafeId, type Note, type NoteKind } from "./schema.js";
 
 /**
  * Input to create a new note. `id`, `created` (defaults to today), and the file path are
@@ -10,17 +10,40 @@ import { Frontmatter, KIND_DIR, type Note, type NoteKind } from "./schema.js";
  * validated against the schema.
  */
 export interface NewNoteInput {
+  /** Optional trusted stable id; ordinary notes derive a collision-proof id automatically. */
+  id?: string;
   kind: NoteKind;
   title: string;
   body: string;
   tags?: string[];
   author?: string;
+  /** Stable contributor-person id; serialized as `author_ref`. */
+  authorRef?: string;
   /** Originating project (git repo identity); recorded as frontmatter `source` (ADR-0015). */
   source?: string;
   /** `YYYY-MM-DD`; defaults to today. */
   created?: string;
   /** Extra kind-specific frontmatter fields, validated against the schema. */
   fields?: Record<string, unknown>;
+}
+
+/** Raised when a trusted deterministic note id is already present; callers may verify the winner. */
+export class NoteIdCollisionError extends Error {
+  constructor(path: string) {
+    super(`Refusing to overwrite an existing note at ${path} (id collision)`);
+    this.name = "NoteIdCollisionError";
+  }
+}
+
+/** Explicit system ids use the portable subset; parsed historical ids remain backward compatible. */
+function parseProvidedId(value: string): string {
+  const id = SafeId.parse(value);
+  const portable = /^[a-z0-9](?:[a-z0-9-]{0,118}[a-z0-9])?$/.test(id);
+  const windowsDevice = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(id);
+  if (!portable || windowsDevice) {
+    throw new Error("explicit note id must be a portable 1-120 character lowercase filename");
+  }
+  return id;
 }
 
 /** Preferred frontmatter key order for stable, readable, diff-friendly output. */
@@ -37,6 +60,9 @@ const KEY_ORDER = [
   "created",
   "updated",
   "author",
+  "author_ref",
+  "attribution_key",
+  "email",
   "source",
   "verified",
   "deciders",
@@ -91,14 +117,14 @@ export function serializeNote(note: Note): string {
 }
 
 /**
- * Create a new note atomically under `brainDir`. The id embeds a random suffix
- * (`makeNoteId`), so two concurrent writers of the same title+date produce distinct
- * files that git unions rather than conflicts (ADR-0003). Writes to a temp file then
- * renames, so readers never observe a partial file.
+ * Create a new note atomically under `brainDir`. By default the id embeds a random suffix
+ * (`makeNoteId`), so two concurrent writers of the same title+date produce distinct files that
+ * git unions rather than conflicts (ADR-0003). Trusted internal callers may provide a validated,
+ * deterministic id for idempotent system records. Readers never observe a partial file.
  */
 export async function writeNote(brainDir: string, input: NewNoteInput): Promise<Note> {
   const created = input.created ?? today();
-  const id = makeNoteId(input.title, created);
+  const id = input.id === undefined ? makeNoteId(input.title, created) : parseProvidedId(input.id);
   const relPath = pathForNote(input.kind, id, input.source);
   const absPath = resolveWithinBrain(brainDir, relPath);
 
@@ -113,6 +139,7 @@ export async function writeNote(brainDir: string, input: NewNoteInput): Promise<
     tags: input.tags ?? [],
     created,
     ...(input.author ? { author: input.author } : {}),
+    ...(input.authorRef ? { author_ref: input.authorRef } : {}),
     ...(input.source ? { source: input.source } : {}),
   };
   const frontmatter = Frontmatter.parse(raw);
@@ -131,7 +158,7 @@ export async function writeNote(brainDir: string, input: NewNoteInput): Promise<
   } catch (err) {
     await fs.rm(tmp, { force: true });
     if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error(`Refusing to overwrite an existing note at ${relPath} (id collision)`);
+      throw new NoteIdCollisionError(relPath);
     }
     throw err;
   }

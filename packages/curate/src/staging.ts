@@ -1,5 +1,5 @@
 import path from "node:path";
-import { listNotes, writeNote, type NewNoteInput, type Note } from "@cmnwlth/core";
+import { listNotes, overwriteNote, writeNote, type NewNoteInput, type Note } from "@cmnwlth/core";
 
 /** Subtree of a brain that holds proposed (not-yet-approved) notes. */
 const STAGING_DIR = "staging";
@@ -24,6 +24,27 @@ export function stageNote(brainDir: string, input: NewNoteInput): Promise<Note> 
 /** List every note currently staged for review under `staging/`. */
 export function listStaged(brainDir: string): Promise<Note[]> {
   return listNotes(stagingRoot(brainDir));
+}
+
+/** Rewrite a newly staged responsibility edge when a concurrent identity reservation converges. */
+export async function reassignStagedContributor(
+  brainDir: string,
+  note: Note,
+  predictedPersonId: string,
+  actualPersonId: string,
+): Promise<Note> {
+  const relates = [
+    ...new Set([
+      ...note.frontmatter.relates.filter((id) => id !== predictedPersonId),
+      actualPersonId,
+    ]),
+  ];
+  const updated: Note = {
+    ...note,
+    frontmatter: { ...note.frontmatter, author_ref: actualPersonId, relates },
+  };
+  await overwriteNote(stagingRoot(brainDir), updated);
+  return updated;
 }
 
 /** Absolute filesystem path of a staged note (whose `path` is staging-root-relative). */

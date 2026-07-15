@@ -75,6 +75,7 @@ export function brainHealth(notes: Note[], opts: HealthOptions = {}): HealthRepo
     const fm = n.frontmatter;
     const refs = [
       ...fm.relates,
+      ...[fm.author_ref].filter((v): v is string => typeof v === "string"),
       ...(fm.kind === "memory" ? fm.sources : []),
       ...(fm.kind === "decision" ? fm.supersedes : []),
       ...(fm.kind === "memory" || fm.kind === "decision"
