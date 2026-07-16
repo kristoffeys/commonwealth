@@ -14,6 +14,20 @@ import path from "node:path";
  */
 const LOCK_REL = path.join(".commonwealth", "sync.lock");
 
+/**
+ * Repo-relative paths (git/posix form) of a brain's DISPOSABLE runtime state: the cross-process
+ * sync lock (this module) and the sync daemon's PID file (`@cmnwlth/sync`). These are per-process
+ * local artifacts that must NEVER count as meaningful git dirt nor ride into a commit — a bulk op
+ * that holds the lock while it commits (`project adopt`), or any git-dirtiness gate, must exclude
+ * them. Newly scaffolded brains also gitignore these, but LEGACY brains predate that entry, so the
+ * git-facing code paths cannot rely on `.gitignore` alone. Centralized here so the sync engine and
+ * adopt share ONE list and can't drift. Always `/`-separated (git reports and matches posix paths).
+ */
+export const RUNTIME_STATE_REL_PATHS = [
+  ".commonwealth/sync.lock",
+  ".commonwealth/sync.pid",
+] as const;
+
 function lockPath(brainDir: string): string {
   return path.join(brainDir, LOCK_REL);
 }

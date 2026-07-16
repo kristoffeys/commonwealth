@@ -10,6 +10,7 @@ import {
   overwriteNote,
   persistProjectAliasMap,
   regenerateDerived,
+  RUNTIME_STATE_REL_PATHS,
   slugify,
   unlinkSources,
   type Note,
@@ -17,6 +18,9 @@ import {
 import { listStaged } from "./staging.js";
 
 const pexec = promisify(execFile);
+
+/** Pathspec `:(exclude)` args that drop the disposable runtime state from a git query. */
+const RUNTIME_EXCLUDES = RUNTIME_STATE_REL_PATHS.map((p) => `:(exclude)${p}`);
 
 /**
  * `project adopt` (ADR-0031 / #241) — the deliberate promotion of a PROVEN alias-map link into
@@ -100,10 +104,24 @@ export interface AdoptOptions {
   dryRun?: boolean;
 }
 
-/** True when `git status --porcelain` in `brainDir` reports any change; git errors → not dirty. */
+/**
+ * True when `brainDir` has meaningful uncommitted changes. The brain's disposable runtime state (the
+ * sync lock we're holding, a daemon's PID file) is EXCLUDED — otherwise adopt would refuse on every
+ * legacy brain, whose `.gitignore` predates those entries, seeing its own `?? .commonwealth/sync.lock`
+ * as dirt (#241 legacy-brain regression). Genuine dirt (edited notes, other untracked files) still
+ * refuses. Git errors → not dirty (the caller already gated on `.git`).
+ */
 async function worktreeDirty(brainDir: string): Promise<boolean> {
   try {
-    const { stdout } = await pexec("git", ["-C", brainDir, "status", "--porcelain"]);
+    const { stdout } = await pexec("git", [
+      "-C",
+      brainDir,
+      "status",
+      "--porcelain",
+      "--",
+      ".",
+      ...RUNTIME_EXCLUDES,
+    ]);
     return stdout.trim().length > 0;
   } catch {
     return false; // git missing / not a repo — the caller already gated on `.git`
@@ -122,7 +140,21 @@ async function commitAdoption(
 ): Promise<string | null> {
   try {
     await pexec("git", ["-C", brainDir, "add", "-A"]);
-    const { stdout: staged } = await pexec("git", ["-C", brainDir, "status", "--porcelain"]);
+    // Never commit disposable runtime state. On a LEGACY brain (no gitignore entry) `add -A` would
+    // otherwise stage `.commonwealth/sync.lock`/`sync.pid`, committing the lock and leaving a
+    // deleted-lock dirt after release. Unstage them — mirrors the sync engine's pre-commit scrub.
+    await pexec("git", ["-C", brainDir, "reset", "-q", "--", ...RUNTIME_STATE_REL_PATHS]).catch(
+      () => undefined,
+    );
+    // Look at the INDEX (staged set) directly, so leftover untracked runtime files don't read as
+    // "there is something to commit" and produce an empty/no-op commit.
+    const { stdout: staged } = await pexec("git", [
+      "-C",
+      brainDir,
+      "diff",
+      "--cached",
+      "--name-only",
+    ]);
     if (staged.trim().length === 0) return null; // nothing changed — don't create an empty commit
     let identity: string[] = [];
     try {

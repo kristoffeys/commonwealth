@@ -256,6 +256,58 @@ describe("adoptProject — safety refusals & keptSources", () => {
   });
 });
 
+describe("adoptProject — legacy-brain compatibility (#241)", () => {
+  /**
+   * Simulate a pre-existing brain: strip the runtime-state entries from `.gitignore` (they postdate
+   * such brains), so `.commonwealth/sync.lock`/`sync.pid` are NOT ignored — exactly the condition
+   * that made adopt refuse with a misleading "dirty" error before the exclusion fix.
+   */
+  async function makeLegacy(): Promise<void> {
+    const gi = path.join(brain, ".gitignore");
+    const kept = (await fs.readFile(gi, "utf8"))
+      .split("\n")
+      .filter(
+        (l) => l.trim() !== ".commonwealth/sync.lock" && l.trim() !== ".commonwealth/sync.pid",
+      )
+      .join("\n");
+    await fs.writeFile(gi, kept);
+    commitAll("legacy: drop runtime-state gitignore entries");
+    expect(await fs.readFile(gi, "utf8")).not.toContain("sync.lock");
+  }
+
+  it("succeeds on a legacy brain with a pre-existing (stale) sync.lock; lock stays out of the commit", async () => {
+    await seedLinkedAndCommitted();
+    await makeLegacy();
+    // A leftover lock from a crashed process (stale pid → reclaimable), plus a daemon pid file.
+    await fs.writeFile(path.join(brain, ".commonwealth", "sync.lock"), "999999\n");
+    await fs.writeFile(path.join(brain, ".commonwealth", "sync.pid"), "999998\n");
+    const commitsBefore = revCount();
+
+    const result = await adoptProject(brain, "acme-eng");
+
+    expect(result.skipped).toBeUndefined();
+    expect(result.adopted).toHaveLength(3);
+    expect(result.committed).toBe(true);
+    expect(revCount()).toBe(commitsBefore + 1);
+    for (const n of await listNotes(brain)) expect(n.frontmatter.project).toBe("acme-eng");
+    // The runtime lock/pid never entered the commit.
+    const tree = git("ls-tree", "-r", "HEAD", "--name-only");
+    expect(tree).not.toContain(".commonwealth/sync.lock");
+    expect(tree).not.toContain(".commonwealth/sync.pid");
+  });
+
+  it("still refuses on a legacy brain when there is GENUINE dirt", async () => {
+    await seedLinkedAndCommitted();
+    await makeLegacy();
+    await fs.writeFile(path.join(brain, ".commonwealth", "sync.lock"), "999999\n"); // disposable
+    await fs.writeFile(path.join(brain, "real-change.txt"), "genuine uncommitted work\n"); // real dirt
+
+    const result = await adoptProject(brain, "acme-eng");
+    expect(result.skipped).toContain("dirty");
+    for (const n of await listNotes(brain)) expect(n.frontmatter.project).toBeUndefined();
+  });
+});
+
 describe("adoptProject — concurrent-capture smoke", () => {
   it("a capture landing mid-adopt is neither lost nor corrupted (snapshot semantics)", async () => {
     await seedLinkedAndCommitted();
