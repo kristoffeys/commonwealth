@@ -387,6 +387,88 @@ describe("built binary", () => {
     await fs.rm(brain, { recursive: true, force: true });
   });
 
+  it("project adopt stamps historical notes in one commit and retires the entry (#241)", async () => {
+    const brain = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-adopt-cli-"));
+    await initBrain(brain, { name: "adopt-cli-brain" });
+    await writeNote(brain, {
+      kind: "work-state",
+      title: "Storefront WIP",
+      body: "building the storefront",
+      source: "weareantenna/acme-website",
+    });
+    const commit = (msg: string): void => {
+      execFileSync("git", ["-C", brain, "add", "-A"]);
+      execFileSync("git", [
+        "-C",
+        brain,
+        "-c",
+        "user.name=T",
+        "-c",
+        "user.email=t@example.com",
+        "commit",
+        "-q",
+        "-m",
+        msg,
+      ]);
+    };
+    const run = (args: string[]) =>
+      spawnSync("node", [distEntry, ...args, "--dir", brain], { cwd: repoRoot, encoding: "utf8" });
+
+    run(["project", "link", "acme-engagement", "weareantenna/acme-website"]);
+    commit("seed proven link"); // adopt refuses on a dirty worktree, so commit the setup first
+
+    const dry = run(["project", "adopt", "acme-engagement", "--dry-run"]);
+    expect(dry.status).toBe(0);
+    expect(dry.stdout).toContain("Dry run");
+    // Dry-run wrote nothing: the note still has no project frontmatter.
+    expect((await listNotes(brain, "work-state"))[0]!.frontmatter.project).toBeUndefined();
+
+    const before = Number(
+      execFileSync("git", ["-C", brain, "rev-list", "--count", "HEAD"], {
+        encoding: "utf8",
+      }).trim(),
+    );
+    const adopted = run(["project", "adopt", "acme-engagement"]);
+    expect(adopted.status).toBe(0);
+    expect(adopted.stdout).toContain("Adopted");
+    // The note now carries the project; the alias entry is gone; exactly one new commit; clean tree.
+    expect((await listNotes(brain, "work-state"))[0]!.frontmatter.project).toBe("acme-engagement");
+    const after = Number(
+      execFileSync("git", ["-C", brain, "rev-list", "--count", "HEAD"], {
+        encoding: "utf8",
+      }).trim(),
+    );
+    expect(after).toBe(before + 1);
+    expect(
+      execFileSync("git", ["-C", brain, "status", "--porcelain"], { encoding: "utf8" }).trim(),
+    ).toBe("");
+    const list = run(["project", "list"]);
+    expect(list.stdout).not.toContain("acme-engagement");
+
+    await fs.rm(brain, { recursive: true, force: true });
+  });
+
+  it("project link/adopt reject a pathological project id at the CLI (exit 2) (#241)", async () => {
+    const brain = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-idguard-"));
+    await initBrain(brain, { name: "idguard-brain" });
+    const run = (args: string[]) =>
+      spawnSync("node", [distEntry, ...args, "--dir", brain], { cwd: repoRoot, encoding: "utf8" });
+
+    const sep = run(["project", "link", "../evil", "some/source"]);
+    expect(sep.status).toBe(2);
+    expect(sep.stderr).toContain("path separator");
+
+    const long = run(["project", "link", "x".repeat(300), "some/source"]);
+    expect(long.status).toBe(2);
+    expect(long.stderr).toContain("256-character limit");
+
+    const adoptBad = run(["project", "adopt", "a/b"]);
+    expect(adoptBad.status).toBe(2);
+    expect(adoptBad.stderr).toContain("path separator");
+
+    await fs.rm(brain, { recursive: true, force: true });
+  });
+
   it("errors clearly (exit 1) when no brain is configured for the cwd (#69)", async () => {
     const plain = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-nobrain-"));
     const env = { ...process.env, COMMONWEALTH_REGISTRY: path.join(plain, "registry.json") };

@@ -122,6 +122,7 @@ commonwealth map                          # brain-at-a-glance: per-kind counts +
 commonwealth project list                 # engagement links: which sources are one project
 commonwealth project link <id> <src...>   # link a dev repo + business folder into one engagement
 commonwealth project unlink <id> [<src>]  # undo a link (derived views only; no notes change)
+commonwealth project adopt <id> [--dry-run]  # promote a proven link into note frontmatter (one commit), then retire the entry
 commonwealth statusline [install]         # ambient status line for Claude Code (see below)
 commonwealth graduate [--suggest]         # propose facts recurring across ≥2 brains to the org-brain
 commonwealth doctor [--fix]               # diagnose (and optionally fix) the setup
@@ -261,6 +262,7 @@ spans several sources: a customer's dev repo *and* their business folder. Link t
 commonwealth project link acme "weareantenna/acme-website" "Acme Website"
 commonwealth project list                 # see the engagement and its member sources
 commonwealth project unlink acme          # undo — derived views only, no note changes
+commonwealth project adopt acme           # once the link is proven, bake it into the notes
 ```
 
 Linking is always explicit (never a fuzzy name-match), it touches **no note files**, and it is
@@ -269,6 +271,13 @@ identity up front with a `.commonwealth/project.json` manifest (`{ "project": "a
 "Acme Corp" }`) — capture then stamps the project onto new notes and the customer as a
 `customer:<slug>` tag. The alias map is the retroactive/corrective layer; the manifest is the
 save-time path. (See [ADR-0031](docs/adr/0031-project-identity-resolved-at-read-time.md).)
+
+Once a link has proven correct, **adopt** it: `commonwealth project adopt acme` stamps the resolved
+`project` (and `customer:<slug>` tag) onto every linked historical note's frontmatter in one
+reviewable commit, then retires the now-redundant alias entry — the identity now lives on the notes
+themselves (`--dry-run` previews the counts first). Adoption refuses on a dirty worktree, never
+touches a note that already declares a different project (reported as a conflict), and leaves the
+derived views byte-identical (the read-time and save-time tiers resolve the same way).
 
 ## Run sync in the background (a service)
 

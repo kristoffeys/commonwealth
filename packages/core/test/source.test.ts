@@ -135,6 +135,53 @@ describe("resolveProjectManifest", () => {
     }
   });
 
+  it("rejects an over-long project id at ingestion (breadcrumb, treated as absent) (#241)", async () => {
+    const folder = path.join(root, "overlong");
+    await fs.mkdir(folder, { recursive: true });
+    await writeManifest(folder, { project: "x".repeat(257) });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await resolveProjectManifest(folder)).toBeNull();
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0]?.[0]).toContain("256-character limit");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("rejects a project id with a path separator at ingestion (#241)", async () => {
+    const folder = path.join(root, "sep");
+    await fs.mkdir(folder, { recursive: true });
+    await writeManifest(folder, { project: "../../etc/passwd" });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await resolveProjectManifest(folder)).toBeNull();
+      expect(spy.mock.calls[0]?.[0]).toContain("path separator");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("rejects a project id with a control character at ingestion (#241)", async () => {
+    const folder = path.join(root, "ctrl");
+    await fs.mkdir(folder, { recursive: true });
+    await writeManifest(folder, { project: "acme\u0007eng" });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await resolveProjectManifest(folder)).toBeNull();
+      expect(spy.mock.calls[0]?.[0]).toContain("control character");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("keeps an ordinary project id working after hardening (#241)", async () => {
+    const folder = path.join(root, "ok");
+    await fs.mkdir(folder, { recursive: true });
+    await writeManifest(folder, { project: "acme-eng" });
+    expect(await resolveProjectManifest(folder)).toEqual({ project: "acme-eng" });
+  });
+
   it("does not climb above the enclosing git repo root", async () => {
     // Manifest sits ABOVE the repo root; a walk from inside the repo must not reach it.
     await writeManifest(root, { project: "outer-should-not-leak" });

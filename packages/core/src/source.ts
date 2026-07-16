@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { slugify } from "./ids.js";
+import { projectIdError } from "./projects.js";
 
 const pexec = promisify(execFile);
 
@@ -115,6 +116,15 @@ function readManifest(file: string): ProjectManifest | null {
     console.error(
       `[commonwealth] ignoring project manifest at ${file}: missing a "project" string`,
     );
+    return null;
+  }
+  // Ingestion hardening (#241): a manifest is hand/tool-written and its `project` gets stamped onto
+  // every note captured under it — reject a pathological id (over-long / path separator / control
+  // char) here, loudly (breadcrumb) but non-fatally, so it can't be mass-stamped. Treat as absent,
+  // matching the malformed-manifest posture above (#210 loud-corrupt discipline).
+  const idErr = projectIdError(project);
+  if (idErr) {
+    console.error(`[commonwealth] ignoring project manifest at ${file}: ${idErr}`);
     return null;
   }
   const customer =

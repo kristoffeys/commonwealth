@@ -28,6 +28,38 @@ export interface ProjectAliasEntry {
 /** The brain-owned alias map: canonical project id → its {@link ProjectAliasEntry}. */
 export type ProjectAliasMap = Record<string, ProjectAliasEntry>;
 
+/**
+ * Upper bound on a project id's length (chars). A project id is stamped into note frontmatter and,
+ * once `adopt` runs, potentially onto hundreds of notes at once — so a pathological value must be
+ * rejected at ingestion rather than mass-written. 256 is generous for any real engagement name.
+ */
+export const MAX_PROJECT_ID_LENGTH = 256;
+
+/**
+ * Validate a project id at INGESTION (manifest read, `project link`, `project adopt`). Returns a
+ * human-readable reason naming the violated constraint, or `null` when the id is acceptable.
+ *
+ * Constraints (deliberately minimal so existing valid ids like `acme-eng` keep working):
+ *   - non-empty, at most {@link MAX_PROJECT_ID_LENGTH} chars;
+ *   - no path separators (`/` or `\`) — a project id is a grouping key, not a path, and blocking
+ *     separators keeps it from ever being mistaken for one;
+ *   - no control characters (incl. DEL) — printable text only, so it can't corrupt a terminal,
+ *     a YAML frontmatter block, or a router heading.
+ *
+ * Pure; callers decide how to surface the failure (a breadcrumb + skip on the capture hot path, a
+ * clear error + non-zero exit on the CLI).
+ */
+export function projectIdError(id: string): string | null {
+  if (typeof id !== "string" || id.length === 0) return "project id must be a non-empty string";
+  if (id.length > MAX_PROJECT_ID_LENGTH) {
+    return `project id exceeds the ${MAX_PROJECT_ID_LENGTH}-character limit (was ${id.length})`;
+  }
+  if (/[/\\]/.test(id)) return "project id must not contain a path separator ('/' or '\\')";
+  // eslint-disable-next-line no-control-regex -- intentional: reject C0 controls + DEL
+  if (/[\u0000-\u001f\u007f]/.test(id)) return "project id must not contain control characters";
+  return null;
+}
+
 /** Alias-map path relative to the brain root. Versioned + synced with the brain. */
 const PROJECTS_REL = path.join(".commonwealth", "projects.json");
 

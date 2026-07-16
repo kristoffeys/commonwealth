@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   linkSources,
   loadProjectAliasMap,
+  MAX_PROJECT_ID_LENGTH,
   persistProjectAliasMap,
   projectForSource,
+  projectIdError,
   projectsMapPath,
   resolveNoteProject,
   unlinkSources,
@@ -148,6 +150,36 @@ describe("resolveNoteProject", () => {
 
   it("returns null for an unattributed note (no project, no source)", () => {
     expect(resolveNoteProject(note({}), aliasMap)).toBeNull();
+  });
+});
+
+describe("projectIdError (ingestion hardening, #241)", () => {
+  it("accepts ordinary ids", () => {
+    expect(projectIdError("acme-eng")).toBeNull();
+    expect(projectIdError("Acme Website")).toBeNull();
+    expect(projectIdError("x".repeat(MAX_PROJECT_ID_LENGTH))).toBeNull();
+  });
+
+  it("rejects empty / non-string", () => {
+    expect(projectIdError("")).toContain("non-empty");
+    expect(projectIdError(undefined as unknown as string)).toContain("non-empty");
+  });
+
+  it("rejects an over-long id, naming the limit", () => {
+    const err = projectIdError("x".repeat(MAX_PROJECT_ID_LENGTH + 1));
+    expect(err).toContain(`${MAX_PROJECT_ID_LENGTH}-character limit`);
+  });
+
+  it("rejects path separators", () => {
+    expect(projectIdError("../evil")).toContain("path separator");
+    expect(projectIdError("a/b")).toContain("path separator");
+    expect(projectIdError("a\\b")).toContain("path separator");
+  });
+
+  it("rejects control characters", () => {
+    expect(projectIdError("a\u0009b")).toContain("control character");
+    expect(projectIdError("a\u0000b")).toContain("control character");
+    expect(projectIdError("a\u007fb")).toContain("control character");
   });
 });
 
