@@ -12,6 +12,7 @@ import {
   parseCandidateArray,
   parseCaptureLines,
   promptCaptureIntervalMs,
+  resolveSyncRuntime,
   sessionEnd,
   sessionStart,
   shouldCaptureNow,
@@ -805,5 +806,136 @@ describe("launchCaptureWorker (#190 — detached so `/clear` teardown can't kill
     });
     const child = await launchCaptureWorker("{}", { workerPath: "/w.mjs", spawnFn });
     expect(child).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Daemonless lifecycle sync (ADR-0032). The hooks drive sync-once through injectable seams
+// (syncOnce / isDaemonRunning / spawnDetachedSync), so these tests assert the CONTROL FLOW —
+// when sync runs, when it is skipped (daemon arbitration / zero-capture), and the fail-open /
+// deferred behaviors — without a real git repo. `makeDeps` omits the seams, so the *existing*
+// tests exercise the no-seam fallback (sync simply doesn't run) unchanged.
+// ---------------------------------------------------------------------------------------
+
+/** makeDeps + the three sync seams as spies, so a test can assert exactly when each fires. */
+function makeSyncDeps(overrides: Record<string, unknown> = {}) {
+  return makeDeps({
+    syncOnce: vi.fn(async () => ({ ok: true, timedOut: false, code: 0 })),
+    isDaemonRunning: vi.fn(async () => false),
+    spawnDetachedSync: vi.fn(() => {}),
+    ...overrides,
+  });
+}
+
+describe("sessionEnd — lifecycle sync (ADR-0032)", () => {
+  it("syncs the brain after a capture that landed ≥1 note, with the 60s cap", async () => {
+    const deps = makeSyncDeps();
+    await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" }, deps);
+    expect(deps.isDaemonRunning).toHaveBeenCalledWith("/brains/acme");
+    expect(deps.syncOnce).toHaveBeenCalledWith("/brains/acme", { timeoutMs: 60_000 });
+  });
+
+  it("does NOT sync when the capture staged zero notes (no pointless commit)", async () => {
+    const deps = makeSyncDeps({
+      extractCandidates: vi.fn(async () => ({ ok: true, candidates: [] })),
+    });
+    await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" }, deps);
+    expect(deps.capture).not.toHaveBeenCalled();
+    expect(deps.syncOnce).not.toHaveBeenCalled();
+  });
+
+  it("skips sync entirely when a sync daemon owns the brain (arbitration)", async () => {
+    const deps = makeSyncDeps({ isDaemonRunning: vi.fn(async () => true) });
+    await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" }, deps);
+    expect(deps.isDaemonRunning).toHaveBeenCalledWith("/brains/acme");
+    expect(deps.syncOnce).not.toHaveBeenCalled();
+  });
+
+  it("marks the capture sync-deferred and says so in the receipt when sync fails", async () => {
+    const deps = makeSyncDeps({
+      syncOnce: vi.fn(async () => ({ ok: false, timedOut: true, code: null })),
+    });
+    const result = await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
+      deps,
+    );
+    expect(result).toMatchObject({ captured: 1, syncDeferred: true });
+    expect(deps.saveReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("Sync deferred") }),
+    );
+  });
+
+  it("does not flag sync-deferred when the sync succeeds", async () => {
+    const deps = makeSyncDeps();
+    const result = await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
+      deps,
+    );
+    expect((result as { syncDeferred?: boolean }).syncDeferred).toBeUndefined();
+  });
+});
+
+describe("sessionStart — lifecycle sync (ADR-0032)", () => {
+  it("pulls with the 5s cap before injecting context, then injects", async () => {
+    const deps = makeSyncDeps();
+    const out = await sessionStart({ cwd: "/work/acme/app" }, deps);
+    expect(deps.syncOnce).toHaveBeenCalledWith("/brains/acme", { timeoutMs: 5_000 });
+    expect(deps.getContext).toHaveBeenCalledWith("/brains/acme", "/work/acme/app");
+    expect(out).toContain("Relevant from the team brain");
+  });
+
+  it("fails open on a slow/timed-out sync: still injects, and spawns a detached debt flush", async () => {
+    const deps = makeSyncDeps({
+      syncOnce: vi.fn(async () => ({ ok: false, timedOut: true, code: null })),
+    });
+    const out = await sessionStart({ cwd: "/work/acme/app" }, deps);
+    // Context still injected (fail-open, slightly stale) …
+    expect(out).toContain("Relevant from the team brain");
+    // … and the sync is finished in the background so the debt still flushes.
+    expect(deps.spawnDetachedSync).toHaveBeenCalledWith("/brains/acme");
+  });
+
+  it("does not spawn a detached flush when the capped sync succeeds", async () => {
+    const deps = makeSyncDeps();
+    await sessionStart({ cwd: "/work/acme/app" }, deps);
+    expect(deps.spawnDetachedSync).not.toHaveBeenCalled();
+  });
+
+  it("skips sync (and the flush) when a sync daemon owns the brain", async () => {
+    const deps = makeSyncDeps({ isDaemonRunning: vi.fn(async () => true) });
+    const out = await sessionStart({ cwd: "/work/acme/app" }, deps);
+    expect(deps.syncOnce).not.toHaveBeenCalled();
+    expect(deps.spawnDetachedSync).not.toHaveBeenCalled();
+    expect(out).toContain("Relevant from the team brain"); // context still injected
+  });
+
+  it("does nothing sync-related when the cwd maps to no brain", async () => {
+    const deps = makeSyncDeps({ resolveBrain: vi.fn(async () => ({ kind: "none" })) });
+    const out = await sessionStart({ cwd: "/loose/project" }, deps);
+    expect(out).toBe("");
+    expect(deps.syncOnce).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveSyncRuntime (ADR-0032, mirrors resolveCurateRuntime)", () => {
+  it("prefers an explicit vendored entry: a direct `node <entry>`", () => {
+    const rt = resolveSyncRuntime({
+      syncEntry: "/plugin/vendor/sync/index.js",
+      nodeBin: "/usr/bin/node",
+    });
+    expect(rt.kind).toBe("entry");
+    expect(rt.command).toBe("/usr/bin/node");
+    expect(rt.args).toEqual(["/plugin/vendor/sync/index.js"]);
+  });
+
+  it("falls back to a pinned npx package when no vendored entry exists", () => {
+    const rt = resolveSyncRuntime({
+      syncEntry: null,
+      syncPackage: "@cmnwlth/sync@9.9.9",
+      npxBin: "npx",
+    });
+    expect(rt.kind).toBe("npx");
+    expect(rt.command).toBe("npx");
+    expect(rt.args).toEqual(["-y", "@cmnwlth/sync@9.9.9"]);
   });
 });

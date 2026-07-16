@@ -9,9 +9,15 @@ is no Commonwealth server, no database to run, and no account.
 - **Brain repo** — plain markdown notes (`memory/`, `decisions/`, `work-state/`, `people/`) plus
   a generated `COMMONWEALTH.md` router. The source of truth.
 - **Git remote** — any remote all teammates can push/pull. This _is_ the sync backbone.
-- **Sync daemon** — a local, resident process per teammate that commits local changes, pulls
-  teammates' work on a poll interval, resolves same-file conflicts as siblings (no data loss),
-  and pushes. One per machine; a cross-process lock keeps a one-shot `sync` from racing it.
+- **Lifecycle sync** (default, daemonless — ADR-0032) — the plugin hooks commit local changes, pull
+  teammates' work, resolve same-file conflicts as siblings (no data loss), and push **at session
+  start and after each capture**. No resident process, nothing to install or babysit; a cross-process
+  lock keeps concurrent syncs from racing. Safe without coordination because atomic notes
+  union-merge (ADR-0003).
+- **Sync daemon** (optional profile — ADR-0032) — a local, resident process that additionally pulls
+  on a poll interval for **continuous** background propagation. Opt in for headless/server installs,
+  shared machines, or high-frequency teams; when it runs, the lifecycle hooks stand down (it owns
+  sync). Start it with `commonwealth sync start`.
 - **Per-user scope config** (`~/.commonwealth/config.json`, never synced) — which directories are
   in capture scope (ADR-0008).
 - **Registry** (`~/.commonwealth/registry.json`, never synced) — maps each project directory to
@@ -26,17 +32,18 @@ is no Commonwealth server, no database to run, and no account.
    commonwealth init --remote git@github.com:my-org/my-project-brain.git
    ```
 
-   `--remote` sets the brain repo's `origin`; the daemon pushes the seeded canon up, and the
-   registry mapping records the remote so teammates can clone-on-demand (ADR-0019). (No remote
-   yet? Run `init` without it, create the empty remote, then
+   `--remote` sets the brain repo's `origin`; the first lifecycle sync (or `commonwealth sync once`)
+   pushes the seeded canon up, and the registry mapping records the remote so teammates can
+   clone-on-demand (ADR-0019). (No remote yet? Run `init` without it, create the empty remote, then
    `git -C <brain> remote add origin <url> && commonwealth sync once`.)
 
 2. **A teammate joins.** They install the CLI (`npm i -g @cmnwlth/cli`), then from the same
    project run `commonwealth init`. When a brain already exists for the project they
    **join** it (clone-and-go, time-to-first-value ≈ 0) rather than re-seeding. If their registry
    maps the project to a brain that isn't checked out locally yet — and the mapping carries a
-   `remote` — the daemon (or `commonwealth sync once`) **clones it on demand** on first use, under
-   their own git identity, before the first sync. The daemon keeps both clones converged.
+   `remote` — lifecycle sync (or `commonwealth sync once`) **clones it on demand** on first use, under
+   their own git identity, before the first sync. From then on each session start/end keeps both
+   clones converged.
 
    > **Access control = git permissions (ADR-0019).** There is no separate ACL. Whether a teammate
    > can read/write a brain is exactly whether their git identity can `clone`/`push` its repo —
@@ -46,11 +53,13 @@ is no Commonwealth server, no database to run, and no account.
    > "mapped but not cloned yet / clone failed"). No access → the session degrades to no-brain,
    > never a crash.
 
-3. **Keep it converged.** `init` starts the daemon detached; control it with:
+3. **Keep it converged.** Convergence is automatic — the plugin hooks sync at session start and
+   after each capture (ADR-0032), so there's nothing to run day to day. Manual/optional controls:
 
    ```bash
-   commonwealth sync start | once | stop
-   commonwealth status        # is the daemon running? what's in the queue?
+   commonwealth sync once         # flush + pull now (also runs debt recovery)
+   commonwealth sync start | stop # opt into / out of the continuous daemon profile
+   commonwealth status            # review queue + sync state
    ```
 
 ## Per-brain configuration (committed, team-wide)
@@ -157,14 +166,16 @@ with `--dry-run` (ADR-0017).
 
 The setup spans several parts that can fail silently: the plugin install, the plugin's live curate
 runtime (vendored or npx fallback), brain resolution for your cwd, a dangling
-`.commonwealth/brain` marker, a dead sync daemon (→ a stale brain), and remote lag / review-queue
-depth / index freshness / scope. `commonwealth doctor` walks the whole chain and
-prints pass/fail with the exact one-line fix per failed link:
+`.commonwealth/brain` marker, and remote lag / review-queue depth / index freshness / scope. Sync
+health follows the daemonless model (ADR-0032): lifecycle sync with no daemon is reported as
+healthy; a live daemon is the daemon profile; the real red flag is **sync debt** — uncommitted or
+unpushed work that lifecycle sync hasn't flushed, surfaced with its age. `commonwealth doctor` walks
+the whole chain and prints pass/fail with the exact one-line fix per failed link:
 
 ```bash
 commonwealth doctor          # human-readable pass/fail + fixes
 commonwealth doctor --json   # structured report for agents/CI (exit 1 if any link failed)
-commonwealth doctor --fix    # self-heal — restarts a dead daemon (the only auto-fix)
+commonwealth doctor --fix    # self-heal — restarts a stale daemon for daemon-profile users (the only auto-fix)
 ```
 
 Paste the output into any support thread — it's the first triage step. Exit code is non-zero when a

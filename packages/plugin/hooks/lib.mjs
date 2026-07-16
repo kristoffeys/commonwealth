@@ -56,6 +56,22 @@ const CONTEXT_QUERY_TIMEOUT_MS = 10_000;
 const DEFAULT_PROMPT_CAPTURE_INTERVAL_MS = 15 * 60 * 1000;
 
 /**
+ * Hard cap on the SessionStart sync (ADR-0032). SessionStart runs synchronously on the critical
+ * path to context injection, so the pull must be short: on timeout we inject slightly-stale context
+ * (fail-open) and finish the sync detached in the background. Kept well under Claude Code's hook
+ * budget so a slow/offline remote never delays the session start noticeably.
+ */
+const SESSION_START_SYNC_TIMEOUT_MS = 5_000;
+
+/**
+ * Hard cap on the SessionEnd sync (ADR-0032). This runs inside the ALREADY-detached capture worker
+ * (never on the user's critical path), so it can afford the full commit → pull --rebase → push
+ * round-trip — but is still bounded so a wedged git op can't keep the worker alive forever. On
+ * failure the receipt says the sync was deferred; the next SessionStart flushes the debt.
+ */
+const SESSION_END_SYNC_TIMEOUT_MS = 60_000;
+
+/**
  * Env var the extraction spawn sets so the NESTED `claude -p` it launches doesn't re-fire the
  * Commonwealth SessionStart/SessionEnd hooks — which would recurse (each extraction spawning
  * another) and re-capture the extractor's own transcript (#104). The hook entries early-return
@@ -172,8 +188,61 @@ export async function sessionStart(input, deps) {
   const resolved = await resolveSessionBrain(inputCwd, deps);
   if (resolved.kind !== "brain") return "";
 
+  // Daemonless lifecycle sync (ADR-0032): pull teammates' latest AND flush any debt left by a prior
+  // failed/offline session-end, BEFORE injecting context — but time-capped hard so a slow remote
+  // never stalls the session. If a sync daemon owns this brain, skip entirely (it already
+  // converges continuously). On timeout/failure we fail OPEN — inject slightly-stale context — and
+  // spawn the sync detached so it completes in the background (debt flush). Guarded on the dep so
+  // older wiring / unit tests that don't inject a sync seam are unaffected.
+  await lifecycleSync(deps, resolved.brain, {
+    timeoutMs: SESSION_START_SYNC_TIMEOUT_MS,
+    detachOnFailure: true,
+  });
+
   const context = await deps.getContext(resolved.brain, resolved.cwd);
   return typeof context === "string" ? context : "";
+}
+
+/**
+ * Run a lifecycle sync-once for `brain`, honoring daemon arbitration and returning a small outcome
+ * (ADR-0032). Never throws — a hook must never break the session. Returns:
+ *  - `{ ran: false, reason: "no-seam" }`  when no sync dep is wired (older wiring / unit tests);
+ *  - `{ ran: false, reason: "daemon" }`   when a sync daemon owns this brain (it already converges);
+ *  - `{ ran: true, ok }`                  when sync-once ran (ok=false on timeout/failure).
+ *
+ * When `detachOnFailure` is set and the capped sync did not succeed, a detached background sync is
+ * spawned so the pull/flush still completes without blocking the caller (the SessionStart debt
+ * flush). Callers decide what to do with a non-ok outcome (SessionStart fails open; SessionEnd
+ * records a deferred-sync breadcrumb on the receipt).
+ *
+ * @param {object} deps
+ * @param {string} brain
+ * @param {{ timeoutMs: number, detachOnFailure?: boolean }} opts
+ * @returns {Promise<{ ran: boolean, ok?: boolean, reason?: string }>}
+ */
+async function lifecycleSync(deps, brain, opts) {
+  if (typeof deps.syncOnce !== "function") return { ran: false, reason: "no-seam" };
+  try {
+    if (typeof deps.isDaemonRunning === "function" && (await deps.isDaemonRunning(brain))) {
+      return { ran: false, reason: "daemon" };
+    }
+    const res = await deps.syncOnce(brain, { timeoutMs: opts.timeoutMs });
+    const ok = !!res && res.ok === true;
+    if (!ok && opts.detachOnFailure && typeof deps.spawnDetachedSync === "function") {
+      deps.spawnDetachedSync(brain);
+    }
+    return { ran: true, ok };
+  } catch {
+    // A sync failure must never break the session; treat it as a non-ok run.
+    if (opts.detachOnFailure && typeof deps.spawnDetachedSync === "function") {
+      try {
+        deps.spawnDetachedSync(brain);
+      } catch {
+        // best-effort background flush
+      }
+    }
+    return { ran: true, ok: false };
+  }
 }
 
 /**
@@ -336,10 +405,25 @@ export async function sessionEnd(input, deps) {
     const annotated = await deps.classifyCandidates(brain, cwd, candidates);
     if (Array.isArray(annotated)) candidates = annotated;
   }
-  const result =
+  let result =
     Array.isArray(candidates) && candidates.length > 0
       ? await deps.capture(brain, cwd, candidates)
       : { captured: 0 };
+
+  // Daemonless lifecycle sync (ADR-0032): commit → pull --rebase → push the notes this session just
+  // staged/promoted, right here in the already-detached worker. Only when at least one note landed —
+  // a zero-capture session has nothing to sync, so we never make a pointless empty commit/push. If a
+  // sync daemon owns this brain, skip (it converges continuously). On timeout/failure we DON'T throw:
+  // the notes are safely committed locally (or will be by the next commit) and the next SessionStart
+  // flushes the debt — the receipt just says so, so the deferral is never silent.
+  const capturedCount = typeof result?.captured === "number" ? result.captured : 0;
+  if (capturedCount >= 1) {
+    const outcome = await lifecycleSync(deps, brain, { timeoutMs: SESSION_END_SYNC_TIMEOUT_MS });
+    if (outcome.ran && outcome.ok !== true) {
+      result = { ...result, syncDeferred: true };
+      console.error("[commonwealth] sync deferred — will flush next session.");
+    }
+  }
 
   // Refresh the ambient status cache AFTER capture so the statusline reflects this session's notes
   // (#197). We're in the detached worker here, off the per-turn statusline hot path, so the index
@@ -587,10 +671,16 @@ export function endReceiptMessage(result, boundary) {
     }
     return null; // no-cwd / unknown — nothing useful to surface
   }
+  // A sync-deferred capture (ADR-0032): the notes are safely committed locally but the push/pull
+  // didn't complete this session (offline / slow / killed). Append a breadcrumb so the deferral is
+  // visible, never silent — the next SessionStart flushes the debt.
+  const syncNote = result.syncDeferred
+    ? "\n⏳ Sync deferred — notes are saved locally and will flush to your team at the next session."
+    : "";
   // Prefer the legible, titled receipt when we have structured notes (#204), naming what the LLM
   // curation pass did (ADR-0030) via the verdict summary the capture command reported.
   if (Array.isArray(result.notes) && result.notes.length > 0) {
-    return renderCaptureReceipt(result.notes, boundary, result.verdicts);
+    return renderCaptureReceipt(result.notes, boundary, result.verdicts) + syncNote;
   }
   if (typeof result.captured === "number") {
     if (result.captured === 0) {
@@ -603,7 +693,7 @@ export function endReceiptMessage(result, boundary) {
       return `🧠 Commonwealth: reviewed ${source} but found no durable knowledge worth capturing.`;
     }
     const n = result.captured;
-    return `🧠 Commonwealth: captured ${n} note(s) from ${source}. Run \`commonwealth status\` to review.`;
+    return `🧠 Commonwealth: captured ${n} note(s) from ${source}. Run \`commonwealth status\` to review.${syncNote}`;
   }
   return null;
 }
@@ -866,6 +956,79 @@ export function resolveCurateRuntime(overrides = {}) {
   };
 }
 
+/**
+ * The plugin's vendored sync entry (`<pluginRoot>/vendor/sync/index.js`), or null when absent. Same
+ * fast path as {@link resolveVendoredCurate}: a direct `node <entry> sync --dir <brain>` with no
+ * `npx -y` registry resolution. A bare git-clone install has no `vendor/`, so we fall back to npx.
+ */
+function resolveVendoredSync() {
+  try {
+    const entry = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "vendor",
+      "sync",
+      "index.js",
+    );
+    return existsSync(entry) ? entry : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the sync-once command the daemonless lifecycle hooks run (ADR-0032), mirroring
+ * {@link resolveCurateRuntime}'s vendored → npx discipline (ADR-0026). The returned `args` are the
+ * BASE invocation (the entry / package); callers append the subcommand + `--dir <brain>`. Reusing
+ * the sync package's `sync` subcommand drives the SAME engine as the daemon (commit → pull --rebase
+ * → push, secret scrub, cross-process lock, bounded retry) — the plugin never forks git logic.
+ *
+ * @param {object} [overrides]  syncEntry / syncPackage / nodeBin / npxBin (tests).
+ * @returns {{kind: "entry" | "vendored" | "npx", command: string, args: string[], display: string}}
+ */
+export function resolveSyncRuntime(overrides = {}) {
+  const nodeBin = overrides.nodeBin ?? process.execPath;
+  const hasExplicitEntry = Object.prototype.hasOwnProperty.call(overrides, "syncEntry");
+  const explicitEntry = overrides.syncEntry;
+  const vendoredEntry = hasExplicitEntry ? explicitEntry : resolveVendoredSync();
+  if (vendoredEntry) {
+    const kind = hasExplicitEntry ? "entry" : "vendored";
+    return {
+      kind,
+      command: nodeBin,
+      args: [vendoredEntry],
+      display: `${nodeBin} ${vendoredEntry}`,
+    };
+  }
+
+  const syncPackage = overrides.syncPackage ?? "@cmnwlth/sync@0.1.11";
+  const npxBin = overrides.npxBin ?? "npx";
+  return {
+    kind: "npx",
+    command: npxBin,
+    args: ["-y", syncPackage],
+    display: `${npxBin} -y ${syncPackage}`,
+  };
+}
+
+/**
+ * True iff a sync daemon is live for `brainDir`: a recorded pid in `.commonwealth/sync.pid` whose
+ * process still exists (ADR-0032 arbitration — the daemon owns sync, so the hooks stand down).
+ * Inlined pid check (mirrors packages/sync/src/daemon.ts and the statusline) so the hook doesn't
+ * import the sync package at runtime. Never throws.
+ */
+async function daemonIsRunning(brainDir) {
+  try {
+    const raw = await fs.readFile(path.join(brainDir, ".commonwealth", "sync.pid"), "utf8");
+    const pid = Number.parseInt(raw.trim(), 10);
+    if (!Number.isFinite(pid)) return false;
+    process.kill(pid, 0); // signal 0 = existence check; throws ESRCH when the process is gone
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Keep a child-process diagnostic short enough for a one-line deferred receipt. */
 function processFailureDetail(res) {
   const text = `${res?.stderr ?? ""}`.trim().replace(/\s+/g, " ");
@@ -916,6 +1079,12 @@ export function realDeps(overrides = {}) {
   const curateRuntime = resolveCurateRuntime(overrides);
   const runCurate = (args, runOpts) =>
     run(curateRuntime.command, [...curateRuntime.args, ...args], runOpts);
+
+  // Sync runtime, resolved ONCE (ADR-0032): the daemonless lifecycle hooks drive the sync package's
+  // `sync` subcommand, which runs the same engine as the daemon (commit → pull --rebase → push,
+  // secret scrub, cross-process lock, bounded retry). Vendored fast path → npx fallback, mirroring
+  // curate (ADR-0026). `--dir <brain>` pins the brain the hook already resolved.
+  const syncRuntime = resolveSyncRuntime(overrides);
 
   async function getContext(brain, cwd) {
     const res = await runCurate(["context", "--cwd", cwd], {
@@ -1121,6 +1290,47 @@ export function realDeps(overrides = {}) {
     }
   }
 
+  /**
+   * Run one lifecycle sync pass for `brain` (ADR-0032), hard-capped at `timeoutMs`. Drives the sync
+   * package's `sync` subcommand (same engine as the daemon), so the plugin never forks git logic.
+   * Never throws — a wedged/offline sync resolves `{ ok: false }` so the caller can fail open. A
+   * timeout hard-kills the child (SIGKILL via `run`); the engine's next pass recovers any stranded
+   * rebase and the stale lock is reclaimed, so an interrupted sync is always safe.
+   */
+  async function syncOnce(brain, { timeoutMs } = {}) {
+    const res = await run(syncRuntime.command, [...syncRuntime.args, "sync", "--dir", brain], {
+      timeoutMs,
+    });
+    return {
+      ok: res.code === 0 && res.timedOut !== true,
+      timedOut: res.timedOut === true,
+      code: res.code,
+      error: res.code === 0 ? undefined : processFailureDetail(res),
+    };
+  }
+
+  /**
+   * Fire-and-forget background sync for `brain` (ADR-0032 debt flush). Used when the capped
+   * SessionStart sync times out: we inject stale context now and let this detached child finish the
+   * pull/push. Its OWN process group (`detached: true`) + `stdio: "ignore"` + `unref()` mean it
+   * outlives the hook without keeping it alive. Best-effort — a spawn failure is swallowed.
+   */
+  function spawnDetachedSync(brain) {
+    import("node:child_process")
+      .then(({ spawn }) => {
+        try {
+          const child = spawn(syncRuntime.command, [...syncRuntime.args, "sync", "--dir", brain], {
+            detached: true,
+            stdio: "ignore",
+          });
+          child.unref?.();
+        } catch {
+          // Best-effort background flush; the next SessionStart retries the debt sync anyway.
+        }
+      })
+      .catch(() => {});
+  }
+
   return {
     resolveBrain: realResolveBrain,
     getContext,
@@ -1133,6 +1343,9 @@ export function realDeps(overrides = {}) {
     takeReceipt,
     readCaptureMark,
     writeCaptureMark,
+    syncOnce,
+    spawnDetachedSync,
+    isDaemonRunning: daemonIsRunning,
   };
 }
 

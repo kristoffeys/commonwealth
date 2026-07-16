@@ -26,8 +26,9 @@ own, not an opaque index or a block database you can't leave.
 - **Remote = any git host.** GitHub by default (fits our OSS + Projects workflow), but
   the design must not assume GitHub-only. Self-host / BYO-remote is first-class.
 - **A local working copy** lives on each member's machine (e.g. `~/.commonwealth/<brain>`),
-  kept in sync by the daemon (below). The agent reads/writes the local copy; the daemon
-  moves commits to/from the remote.
+  kept in sync by the plugin's lifecycle hooks at session start and after each capture
+  (ADR-0032) — a resident daemon is an optional profile, no longer the default. The agent
+  reads/writes the local copy; sync moves commits to/from the remote.
 - **A derived index** (SQLite + embeddings) is built _from_ the markdown for fast
   search. It is disposable and `.gitignore`d — rebuildable from files at any time
   (basic-memory's model, and the right one).
@@ -128,8 +129,10 @@ product. It runs in four stages, wired into host-specific Claude Code/Codex life
 
 ### Propagate (SessionStart hook + relevance-gated fetch)
 
-- **Push** on commit (daemon).
-- **Fetch/merge** into every teammate's local copy on session start (daemon `pull`).
+- **Commit + push** after each capture, in the (already-detached) SessionEnd worker (ADR-0032).
+- **Fetch/merge** into every teammate's local copy on session start (the SessionStart hook runs a
+  time-capped sync-once, then flushes any debt from a prior offline session). The optional daemon
+  profile does the same continuously on a poll interval.
 - **Relevance-gated injection** — the genuinely novel bit: don't dump the whole brain
   into context; surface the notes relevant to _what this teammate is doing right now_
   (current project/files/task). This is the "auto push/fetch where it sees fit" from
@@ -144,7 +147,8 @@ product. It runs in four stages, wired into host-specific Claude Code/Codex life
 | Component              | Role                                                                                                                                                      |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Brain repo(s)**      | Git repo(s) of markdown — the substrate & source of truth                                                                                                 |
-| **Sync daemon**        | Per-machine: pull on session start, commit+push on write, run the write queue, rebuild the index. Long-lived, one per user.                               |
+| **Lifecycle sync**     | Default (daemonless, ADR-0032): the plugin hooks commit+push after capture and pull+flush-debt at session start, reusing the sync engine as a library. Nothing resident to run. |
+| **Sync daemon**        | Optional profile (ADR-0032): a long-lived per-machine process that additionally polls for continuous background propagation. When live, the lifecycle hooks stand down.        |
 | **MCP server**         | Exposes `search / read / remember / list-workstate / whoami`-style tools to Claude Code, Codex, and other MCP clients. Reads local copy + index.         |
 | **Curation agent**     | Runs dedupe/verify/contradiction/relevance on staging + nightly (cron), opens review PRs. Can reuse Claude via the Agent SDK.                             |
 | **Agent plugin**       | One payload with Claude Code and Codex manifests, shared MCP/runtime assets, and host-specific lifecycle declarations. The provisioning unit.          |

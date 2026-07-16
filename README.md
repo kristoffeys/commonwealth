@@ -65,7 +65,10 @@ commonwealth init
    (mining git history, ADRs, and agent config like `CLAUDE.md` / `.cursorrules` / `AGENTS.md`).
 3. Installs the Commonwealth **plugin** for the selected agent. Claude Code and Codex both get MCP
    plus host-specific lifecycle hooks; Codex also gets a generated `AGENTS.md` brain snapshot.
-4. Starts the background **sync daemon** and sets up your capture scope.
+4. Sets up your capture scope. Sync then runs **automatically in the session lifecycle** — the
+   plugin hooks commit/pull/push at session start and after each capture, no background service
+   required (ADR-0032). A resident daemon is available as an opt-in profile for continuous
+   propagation.
 
 > After install, restart the selected agent and open a new session/thread so it loads the plugin.
 > In Claude Code, `/mcp` should list the `commonwealth` server.
@@ -108,14 +111,15 @@ rest — every command resolves the right brain from the current directory autom
 ```bash
 commonwealth add <folder> [--brain <dir>] # wire another folder to the brain, in one go
 commonwealth registry <show|route|allow|deny|remove|default|pull>  # brain-resolution rules (see below)
-commonwealth status                       # review queue + sync-daemon state
+commonwealth status                       # review queue + sync state
 commonwealth recall <query>               # search the brain
 commonwealth ask <question>               # a cited answer, synthesized from the brain
 commonwealth reseed [<repo>] [--all]      # mine repo(s) into the brain again
 commonwealth pending                      # notes awaiting review
 commonwealth promote <id...> | --all      # approve staged notes into canon
 commonwealth reject <id...>               # discard staged notes
-commonwealth sync start|stop|once         # control the background sync (foreground)
+commonwealth sync once                    # sync now (lifecycle hooks do this automatically)
+commonwealth sync start|stop              # opt into/out of the continuous daemon profile
 commonwealth service <install|uninstall|status|restart>  # run sync as an OS background service
 commonwealth health                       # freshness / trust score for the brain
 commonwealth map                          # brain-at-a-glance: per-kind counts + top contributors
@@ -167,8 +171,9 @@ running a command:
 commonwealth statusline install     # add it to ~/.claude/settings.json (then restart Claude Code)
 ```
 
-Renders e.g. `🧠 antenna · 87/100 · 3 pending · ⇅` (the `⇅` shows only when the sync daemon is
-live; `pending` only when the queue is non-empty). It reads a cached status the SessionEnd hook
+Renders e.g. `🧠 antenna · 87/100 · 3 pending · ⇅` (the `⇅` shows only when the optional sync
+daemon profile is live; with the default daemonless lifecycle sync it's simply omitted. `pending`
+shows only when the queue is non-empty). It reads a cached status the SessionEnd hook
 refreshes, so it stays well under the status line's per-turn latency budget — no git or index work
 happens on render. `commonwealth statusline uninstall` removes it; a hand-written `statusLine` is
 never clobbered. (Claude Code doesn't let a plugin register a main status line, so this one-time
@@ -279,7 +284,13 @@ themselves (`--dry-run` previews the counts first). Adoption refuses on a dirty 
 touches a note that already declares a different project (reported as a conflict), and leaves the
 derived views byte-identical (the read-time and save-time tiers resolve the same way).
 
-## Run sync in the background (a service)
+## Optional: run sync as a continuous background service (daemon profile)
+
+You usually don't need this. By default sync runs **in the session lifecycle** (ADR-0032) — the
+plugin hooks commit/pull/push at session start and after each capture, so a fresh install converges
+with no resident process. The **daemon profile** below is opt-in for cases that want *continuous*
+background propagation regardless of sessions: headless/server installs, shared machines, or
+high-frequency teams. When the daemon is live, the lifecycle hooks stand down (it owns sync).
 
 `commonwealth sync start` runs the daemon in the **foreground** (it holds the terminal). To keep a
 brain syncing across logout and reboot, install it as a **user-level service** that auto-restarts

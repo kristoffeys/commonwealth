@@ -2,7 +2,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { ensureBrainCloned, resolveBrainMapping, type ResolvedBrain } from "@cmnwlth/core";
 import { Daemon, isRunning, readPid } from "./daemon.js";
-import { SyncEngine } from "./engine.js";
+import { SyncEngine, syncOnceWithRetry } from "./engine.js";
 import { formatSyncSummary } from "./format.js";
 
 /**
@@ -31,7 +31,11 @@ async function resolveMapping(dirFlag: string | undefined): Promise<ResolvedBrai
 
 async function cmdSync(dir: string): Promise<void> {
   const engine = new SyncEngine(dir);
-  const summary = await engine.syncOnce();
+  // Retry with bounded backoff on lock contention (ADR-0032): when the daemonless lifecycle hooks
+  // fire two syncs on one brain at once, the loser waits for the winner to release the lock and then
+  // flushes its own changes, rather than silently deferring. A genuine no-op / real work returns at
+  // once. Exhausting the budget while still locked leaves `skippedLocked` true → deferred.
+  const { summary } = await syncOnceWithRetry(engine);
   console.error(formatSyncSummary(summary));
 }
 

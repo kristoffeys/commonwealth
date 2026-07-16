@@ -20,6 +20,7 @@ const NOOP_SUMMARY: SyncSummary = {
   pushed: false,
   conflicts: [],
   secretsBlocked: [],
+  skippedLocked: false,
 };
 
 /** Options for constructing a {@link SyncEngine}. */
@@ -43,6 +44,13 @@ export interface SyncSummary {
    * secret (#16). They remain modified/uncommitted in the working tree for the user to fix.
    */
   secretsBlocked: string[];
+  /**
+   * True when this pass did nothing because another LIVE process held the cross-process sync lock
+   * (#100). Distinct from a genuine no-op (nothing to sync): a lock-skip means work MAY remain, so
+   * lifecycle callers can retry with backoff (ADR-0032) rather than silently defer. See
+   * {@link syncOnceWithRetry}.
+   */
+  skippedLocked: boolean;
 }
 
 /** Safety valve so a pathological rebase can't spin forever. */
@@ -76,7 +84,7 @@ export class SyncEngine {
     //     file lock; if a live process holds it, skip this pass rather than race its git ops
     //     (#100). The daemon/poll will sync again shortly; a one-shot defers to the running one.
     const release = await acquireSyncLock(dir);
-    if (!release) return { ...NOOP_SUMMARY };
+    if (!release) return { ...NOOP_SUMMARY, skippedLocked: true };
     try {
       // 0b. Recover a rebase stranded by a previously crashed/killed pass (#100). Committing new
       //     work while mid-rebase would land it on a detached HEAD and then the pullRebase below
@@ -151,6 +159,57 @@ export class SyncEngine {
       pushed = true;
     }
 
-    return { committed, pulled, pushed, conflicts, secretsBlocked };
+    return { committed, pulled, pushed, conflicts, secretsBlocked, skippedLocked: false };
   }
+}
+
+/** Options for {@link syncOnceWithRetry}. */
+export interface SyncRetryOptions {
+  /** Maximum number of `syncOnce` attempts (default 6). Bounded so a wedged peer can't spin forever. */
+  attempts?: number;
+  /** Base backoff in ms between lock-contended attempts; grows linearly per attempt (default 75). */
+  backoffMs?: number;
+  /** Called before each retry (attempt index ≥ 1), for tests/observability. */
+  onRetry?: (attempt: number) => void;
+  /** Injectable sleep (tests). Defaults to a real timer. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** Outcome of {@link syncOnceWithRetry}: the last pass summary plus how many attempts it took. */
+export interface SyncRetryResult {
+  summary: SyncSummary;
+  /** Total `syncOnce` attempts made (≥ 1). */
+  attempts: number;
+}
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Run {@link SyncEngine.syncOnce}, RETRYING with bounded linear backoff while a pass is skipped
+ * because another live process holds the cross-process lock (ADR-0032). This is the discipline the
+ * daemonless lifecycle hooks use: when two session-ends fire on one brain, the winner commits and
+ * pushes while the loser retries until the lock frees and then flushes its own changes — so BOTH
+ * teammates' notes land in one round rather than the loser deferring to its next SessionStart. The
+ * retry budget is bounded (`attempts`), so a genuinely wedged peer never causes an unbounded spin;
+ * if the budget is exhausted while still locked, the loser defers to the next SessionStart debt
+ * flush (the returned summary still carries `skippedLocked: true`). A non-lock no-op or any real
+ * work resolves immediately. Never throws beyond what `syncOnce` itself throws.
+ */
+export async function syncOnceWithRetry(
+  engine: SyncEngine,
+  opts: SyncRetryOptions = {},
+): Promise<SyncRetryResult> {
+  const attempts = Math.max(1, opts.attempts ?? 6);
+  const backoffMs = Math.max(0, opts.backoffMs ?? 75);
+  const sleep = opts.sleep ?? defaultSleep;
+  let summary = await engine.syncOnce();
+  let made = 1;
+  while (summary.skippedLocked && made < attempts) {
+    opts.onRetry?.(made);
+    await sleep(backoffMs * made);
+    summary = await engine.syncOnce();
+    made += 1;
+  }
+  return { summary, attempts: made };
 }

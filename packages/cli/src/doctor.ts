@@ -13,16 +13,23 @@ import { defaultHostIntegrationEnv, diagnoseHostIntegrations } from "./host-inte
 
 /**
  * `commonwealth doctor` — full-chain install/sync diagnosis (#134). The Commonwealth setup spans
- * five moving parts that each fail *silently*: the plugin install (#62), brain resolution for the
- * cwd, a dangling `.commonwealth/brain` marker shadowing the registry (#68), a dead sync daemon
- * (→ a stale brain that reads as "the product lies"), and the remote-lag / review-queue /
- * index-freshness / scope state. This walks the whole chain and prints pass/fail with the exact
- * one-line fix per failed link — the brew/flutter/expo-doctor triage pattern.
+ * several moving parts that each fail *silently*: the plugin install (#62), brain resolution for the
+ * cwd, a dangling `.commonwealth/brain` marker shadowing the registry (#68), the sync health model,
+ * and the remote-lag / review-queue / index-freshness / scope state. This walks the whole chain and
+ * prints pass/fail with the exact one-line fix per failed link — the brew/flutter/expo-doctor triage
+ * pattern.
  *
- * Read-only by default; the single self-heal (`--fix`) is capped strictly to restarting a dead
- * daemon, so `doctor` can never mutate canon or wiring. Every check maps to an already-readable
- * surface — the daemon PID file, `git` behind-count, the staging queue, the derived index mtime,
- * the scope config — so this adds no new state.
+ * Sync health (ADR-0032): lifecycle sync (daemonless) is the healthy DEFAULT — the plugin hooks
+ * commit/pull/push at session start & end, so a MISSING daemon is no longer a failure. A live daemon
+ * is the opt-in daemon profile (also healthy); a stale daemon pidfile is a soft warning that
+ * lifecycle sync still covers. The one thing that IS unhealthy is aged SYNC DEBT — unsynced work
+ * (uncommitted note files / unpushed commits) that lifecycle sync should have flushed but hasn't
+ * (offline, or a push that keeps failing) — surfaced as a warning with age.
+ *
+ * Read-only by default; the single self-heal (`--fix`) is capped strictly to restarting a stale
+ * daemon (for daemon-profile users), so `doctor` can never mutate canon or wiring. Every check maps
+ * to an already-readable surface — the daemon PID file, `git` ahead/behind, the staging queue, the
+ * derived index mtime, the scope config — so this adds no new state.
  */
 
 /** Outcome of a single diagnostic link. `skip` = couldn't determine (e.g. no `claude` on PATH). */
@@ -112,6 +119,15 @@ export interface DoctorEnv {
   gitState: (brainDir: string) => GitState;
   /** Restart the sync daemon for a brain (the only self-heal); resolves true on success. */
   startDaemon: (brainDir: string) => Promise<boolean>;
+  /**
+   * Sync debt for a brain (ADR-0032): unsynced local work — `uncommittedNotes` (note files not yet
+   * committed) plus `unpushed` (commits ahead of the upstream) — and `oldestMs`, the epoch-ms of the
+   * OLDEST piece of that debt (null when there is none), used to age the warning. Optional: when
+   * absent (older API consumers), the debt link is simply not emitted.
+   */
+  syncDebt?: (
+    brainDir: string,
+  ) => Promise<{ uncommittedNotes: number; unpushed: number; oldestMs: number | null }>;
 }
 
 const COMMONWEALTH_DIR = ".commonwealth";
@@ -119,6 +135,31 @@ const PID_FILE = "sync.pid";
 const MARKER_REL = path.join(".commonwealth", "brain");
 /** Dirs never counted as note edits when checking index freshness (derived / local-only / vcs). */
 const NON_NOTE_DIRS = new Set([".git", "index", COMMONWEALTH_DIR, "staging", "node_modules"]);
+/** Sync debt older than this (24h) is unhealthy — lifecycle sync should have flushed it (ADR-0032). */
+const DEBT_WARN_AGE_MS = 24 * 60 * 60 * 1000;
+
+/** A coarse human age ("3h", "2d", "45m") for the sync-debt warning. */
+function formatAge(ms: number): string {
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 60) return `${Math.max(1, mins)}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+/**
+ * True when a repo-relative path is a markdown NOTE file (not a derived/local-only artifact) — the
+ * files whose uncommitted presence counts as sync debt. Mirrors the note-vs-derived split used
+ * elsewhere: any `.md` outside the derived/vcs/local dirs, excluding the generated INDEX.md /
+ * COMMONWEALTH.md.
+ */
+function isNoteRel(rel: string): boolean {
+  if (!rel.endsWith(".md")) return false;
+  const base = rel.split("/").pop() ?? "";
+  if (base === "INDEX.md" || base === "COMMONWEALTH.md") return false;
+  const top = rel.split("/")[0] ?? "";
+  return !NON_NOTE_DIRS.has(top);
+}
 
 /** Read the daemon PID recorded for a brain, or null when there is no PID file. */
 async function readPid(brainDir: string): Promise<number | null> {
@@ -316,6 +357,53 @@ export function defaultDoctorEnv(cwd: string): DoctorEnv {
       const n = Number.parseInt(behind.out, 10);
       return { kind: "tracked", behind: Number.isFinite(n) ? n : 0 };
     },
+    syncDebt: async (brainDir) => {
+      const git = (args: string[]): { code: number; out: string } => {
+        const r = spawnSync("git", ["-C", brainDir, ...args], { encoding: "utf8" });
+        return { code: r.status ?? 1, out: (r.stdout ?? "").trim() };
+      };
+      if (git(["rev-parse", "--git-dir"]).code !== 0) {
+        return { uncommittedNotes: 0, unpushed: 0, oldestMs: null };
+      }
+      let oldestMs: number | null = null;
+      const seeOld = (ms: number): void => {
+        if (Number.isFinite(ms) && (oldestMs === null || ms < oldestMs)) oldestMs = ms;
+      };
+
+      // Uncommitted note files: porcelain paths whose leaf is a note .md (not derived/local). Age by
+      // working-tree mtime (best-effort — a file we can't stat just doesn't contribute an age).
+      let uncommittedNotes = 0;
+      for (const line of git(["status", "--porcelain", "--untracked-files=all"]).out.split("\n")) {
+        if (!line.trim()) continue;
+        let file = line.slice(3).trim();
+        const arrow = file.indexOf(" -> ");
+        if (arrow !== -1) file = file.slice(arrow + 4);
+        file = file.replace(/^"(.*)"$/, "$1");
+        if (!isNoteRel(file)) continue;
+        uncommittedNotes += 1;
+        try {
+          seeOld((await fs.stat(path.join(brainDir, file))).mtimeMs);
+        } catch {
+          // unreadable/deleted — count it but contribute no age
+        }
+      }
+
+      // Unpushed commits: ahead of the tracked upstream. The OLDEST unpushed commit's committer date
+      // ages the debt (a week-old unpushed commit is the incident signal). No upstream → can't tell.
+      let unpushed = 0;
+      if (git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).code === 0) {
+        const ahead = Number.parseInt(git(["rev-list", "--count", "@{u}..HEAD"]).out, 10);
+        unpushed = Number.isFinite(ahead) ? ahead : 0;
+        if (unpushed > 0) {
+          const ts = git(["log", "@{u}..HEAD", "--format=%ct", "--reverse"])
+            .out.split("\n")[0]
+            ?.trim();
+          const secs = Number.parseInt(ts ?? "", 10);
+          if (Number.isFinite(secs)) seeOld(secs * 1000);
+        }
+      }
+      return { uncommittedNotes, unpushed, oldestMs };
+    },
     startDaemon: (brainDir) =>
       new Promise<boolean>((resolve) => {
         try {
@@ -494,39 +582,88 @@ export async function diagnose(
   const markerCheck = await checkMarker(cwd);
   if (markerCheck) checks.push(markerCheck);
 
-  // 4) Daemon liveness — a dead daemon means a stale brain. The sole self-heal target.
+  // 4) Sync health (ADR-0032). Lifecycle sync (daemonless) is the healthy DEFAULT: the plugin hooks
+  //    commit/pull/push at session start & end, so NO daemon is OK. A live daemon is the opt-in
+  //    daemon profile (also OK). A stale pidfile (a daemon profile that died) is a soft WARN, never a
+  //    failure — lifecycle sync still converges the brain; `--fix` restarts it for daemon-profile
+  //    users who want it back. Aged debt (the next check) is the real unhealthy signal, not "no daemon".
   const pid = await readPid(brain);
   const alive = pid !== null && env.pidAlive(pid);
   let healed = false;
   if (alive) {
     checks.push({
       id: "daemon",
-      label: "Daemon",
+      label: "Sync",
       status: "ok",
-      detail: `Sync daemon running (pid ${pid}).`,
+      detail: `Daemon profile — sync daemon running (pid ${pid}).`,
     });
-  } else if (opts.fix) {
+  } else if (pid !== null && opts.fix) {
+    // A stale pidfile means the daemon profile was in use and died; --fix restarts it.
     healed = await env.startDaemon(brain);
     checks.push({
       id: "daemon",
-      label: "Daemon",
-      status: healed ? "ok" : "fail",
+      label: "Sync",
+      status: healed ? "ok" : "warn",
       detail: healed
-        ? "Sync daemon was not running — restarted it."
-        : "Sync daemon is not running and the restart failed.",
-      ...(healed ? {} : { fix: "commonwealth sync start" }),
+        ? `Daemon profile — restarted the stale sync daemon (was pid ${pid}).`
+        : `Lifecycle sync (daemonless) — the recorded daemon (pid ${pid}) is dead and the restart failed; hooks still sync each session.`,
+      ...(healed ? {} : { fix: "commonwealth sync start   (retry the daemon profile)" }),
+    });
+  } else if (pid !== null) {
+    checks.push({
+      id: "daemon",
+      label: "Sync",
+      status: "warn",
+      detail: `Lifecycle sync (daemonless). A stale daemon pidfile remains (recorded pid ${pid} is dead).`,
+      fix: `rm ${path.join(brain, COMMONWEALTH_DIR, PID_FILE)}   (or: commonwealth sync start to run the daemon profile)`,
     });
   } else {
     checks.push({
       id: "daemon",
-      label: "Daemon",
-      status: "fail",
-      detail:
-        pid === null
-          ? "No sync daemon running — your brain won't converge with teammates."
-          : `Recorded daemon (pid ${pid}) is not alive — stale PID file.`,
-      fix: "commonwealth doctor --fix   (or: commonwealth sync start)",
+      label: "Sync",
+      status: "ok",
+      detail: "Lifecycle sync (daemonless) — hooks sync at session start & end.",
     });
+  }
+
+  // 4b) Sync debt (ADR-0032): unsynced work — uncommitted note files or unpushed commits. Fresh debt
+  //     is normal (a session just ended, next SessionStart flushes it). Debt OLDER than the threshold
+  //     means lifecycle sync isn't flushing (offline, or a push that keeps failing) → warn with age.
+  if (env.syncDebt) {
+    const debt = await env.syncDebt(brain);
+    const pending = debt.uncommittedNotes + debt.unpushed;
+    if (pending === 0) {
+      checks.push({
+        id: "debt",
+        label: "Sync debt",
+        status: "ok",
+        detail: "No unsynced changes — everything is committed and pushed.",
+      });
+    } else {
+      const ageMs = debt.oldestMs !== null ? Math.max(0, Date.now() - debt.oldestMs) : 0;
+      const what = [
+        debt.uncommittedNotes > 0 ? `${debt.uncommittedNotes} uncommitted note(s)` : null,
+        debt.unpushed > 0 ? `${debt.unpushed} unpushed commit(s)` : null,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      if (ageMs >= DEBT_WARN_AGE_MS) {
+        checks.push({
+          id: "debt",
+          label: "Sync debt",
+          status: "warn",
+          detail: `${what} — oldest is ${formatAge(ageMs)} old; lifecycle sync hasn't flushed it.`,
+          fix: "commonwealth sync once",
+        });
+      } else {
+        checks.push({
+          id: "debt",
+          label: "Sync debt",
+          status: "ok",
+          detail: `${what} pending — will flush at the next session.`,
+        });
+      }
+    }
   }
 
   // 5) Remote lag — behind the last-fetched upstream (no network; the daemon does the fetching).

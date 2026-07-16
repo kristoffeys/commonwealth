@@ -10,6 +10,9 @@ export function formatSyncSummary(s: SyncSummary): string {
   let line =
     `[commonwealth-sync] sync: committed=${s.committed} pulled=${s.pulled} ` +
     `pushed=${s.pushed} conflicts=${s.conflicts.length}`;
+  if (s.skippedLocked) {
+    line += " (skipped: another sync held the lock — deferred)";
+  }
   if (s.secretsBlocked.length > 0) {
     line += `\n[commonwealth-sync] withheld ${s.secretsBlocked.length} note(s) containing a secret (not committed/pushed): ${s.secretsBlocked.join(", ")}`;
   }

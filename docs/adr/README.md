@@ -13,7 +13,7 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 | [0003](0003-concurrency-model.md)             | Concurrency: atomic files + union merge + derived indexes    | Accepted |
 | [0004](0004-license-apache-2.md)              | License: Apache-2.0                                          | Accepted |
 | [0005](0005-search-and-embeddings.md)         | Search: SQLite FTS5 now, pluggable embeddings later          | Accepted |
-| [0006](0006-sync-resident-daemon.md)          | Sync architecture: resident daemon                           | Accepted |
+| [0006](0006-sync-resident-daemon.md)          | Sync architecture: resident daemon                           | Superseded by [0032](0032-daemonless-lifecycle-sync.md) |
 | [0007](0007-curation-review-gate.md)          | Curation & review gate: in-repo staging queue                | Accepted |
 | [0008](0008-curation-locality.md)             | Curation locality: staging is per-user local, canon syncs    | Accepted |
 | [0009](0009-brain-config-feature-flags.md)    | Brain-level config & feature flags (incl. optional auto-ADR) | Accepted |
@@ -31,6 +31,8 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 | [0028](0028-codex-turn-boundary-lifecycle.md) | Codex lifecycle parity uses a distinct hook manifest and turn-boundary capture | Accepted |
 | [0029](0029-person-responsibility-attribution.md) | Person-backed responsibility attribution for brain writes | Accepted |
 | [0030](0030-llm-curation-pass.md)             | LLM curation pass: durability judge + consolidation completes ADR-0007's curator | Accepted |
+| [0031](0031-project-identity-resolved-at-read-time.md) | Project identity is resolved at read time; provenance is immutable | Accepted |
+| [0032](0032-daemonless-lifecycle-sync.md)     | Sync moves from resident daemon to session lifecycle; daemon becomes an opt-in profile | Accepted |
 
 ## Process
 
