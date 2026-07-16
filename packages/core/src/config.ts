@@ -119,6 +119,17 @@ export const FEATURE_FLAGS: ReadonlyArray<{
       "force lexical-only even with a provider.",
     default: true,
   },
+  {
+    name: "llmCurator",
+    description:
+      "LLM curation pass in the default capture pipeline (ADR-0030): a durability judge that " +
+      "filters trivia the length check can't, plus DISTINCT/DUPLICATE/SUPERSEDES/CONTRADICTS " +
+      "consolidation so autoPromote canon stays clean without human review. Runs in the plugin " +
+      "hook layer via the ADR-0027 host runtime; curate applies the verdicts deterministically. " +
+      "Default ON, but inert unless a host runtime is available (same discipline as semanticSearch) " +
+      "— any classifier failure fails open to today's DISTINCT behavior. Set false to skip the pass.",
+    default: true,
+  },
 ];
 
 /** Default embeddings config (ADR-0021): local provider, inert until `semanticDedup` is on. */

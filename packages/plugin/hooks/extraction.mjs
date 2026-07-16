@@ -347,6 +347,89 @@ async function defaultRun(command, args, { input, cwd, env, timeoutMs } = {}) {
   });
 }
 
+/**
+ * Build the host CLI argv for a schema-constrained, non-conversational model call. Both the
+ * extractor (ADR-0027) and the LLM curation classifier (ADR-0030) go through this ONE contract:
+ * Claude via print mode with an appended system prompt; Codex via the supported non-interactive
+ * `codex exec` surface with an output schema and developer instructions. `schemaPath` is only used
+ * for Codex. Kept a pure function so both consumers — and their tests — share the exact argv shape.
+ */
+export function buildHostArgs(host, { system, prompt, schemaPath }) {
+  if (host === "codex") {
+    return [
+      "-a",
+      "never",
+      "exec",
+      "--ephemeral",
+      "--sandbox",
+      "read-only",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "--skip-git-repo-check",
+      "--color",
+      "never",
+      "--output-schema",
+      schemaPath,
+      "-c",
+      `developer_instructions=${JSON.stringify(system)}`,
+      prompt,
+    ];
+  }
+  return ["-p", "--append-system-prompt", system, prompt];
+}
+
+/**
+ * Invoke a host model with the shared ADR-0027 request contract and return its raw stdout, or a
+ * structured failure. This is the single host boundary both the transcript extractor and the
+ * ADR-0030 curation classifier reuse: it owns argv construction, the Codex isolated-cwd guard, the
+ * recursion-guard env var, the hard timeout, and the availability/timeout/nonzero failure
+ * taxonomy. It does NOT interpret `stdout` — each consumer parses its own schema, so a malformed
+ * body stays distinguishable from a process failure. `input` is the untrusted DATA payload on stdin
+ * (a transcript for extraction; candidates+neighbors for classification).
+ */
+export async function invokeHostModel({
+  host,
+  run = defaultRun,
+  runtime,
+  system,
+  prompt,
+  input,
+  cwd,
+  schemaPath = DEFAULT_SCHEMA_PATH,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+} = {}) {
+  if (!["claude", "codex"].includes(host)) {
+    return failure("extractor-unavailable", host, runtime, null, `unsupported host: ${host}`);
+  }
+  const args = buildHostArgs(host, { system, prompt, schemaPath });
+
+  let result;
+  let isolatedCwd = null;
+  try {
+    // `--ignore-user-config` does not disable project AGENTS.md discovery. The payload is already
+    // on stdin, so keep repository instructions untrusted by running Codex from a fresh empty
+    // directory that cannot contribute project guidance or project config.
+    if (host === "codex") {
+      isolatedCwd = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-extractor-"));
+    }
+    result = await run(runtime, args, {
+      input,
+      cwd: isolatedCwd ?? cwd,
+      timeoutMs,
+      env: { [DISABLE_HOOKS_ENV]: "1" },
+    });
+  } catch (error) {
+    result = { code: null, stdout: "", stderr: "", error };
+  } finally {
+    if (isolatedCwd) await fs.rm(isolatedCwd, { recursive: true, force: true }).catch(() => {});
+  }
+
+  if (isUnavailable(result)) return failure("extractor-unavailable", host, runtime, result);
+  if (isTimeout(result)) return failure("extractor-timeout", host, runtime, result);
+  if (result?.code !== 0) return failure("extractor-failed", host, runtime, result);
+  return { ok: true, stdout: result.stdout, result };
+}
+
 /** Create a host-specific transcript extractor without coupling hook orchestration to either CLI. */
 export function createExtractor({
   host,
@@ -382,55 +465,21 @@ export function createExtractor({
 
       const compact = host === "codex" ? compactCodexTranscript(raw) : compactClaudeTranscript(raw);
       const input = tailCap(compact || raw);
-      const args =
-        host === "codex"
-          ? [
-              "-a",
-              "never",
-              "exec",
-              "--ephemeral",
-              "--sandbox",
-              "read-only",
-              "--ignore-user-config",
-              "--ignore-rules",
-              "--skip-git-repo-check",
-              "--color",
-              "never",
-              "--output-schema",
-              schemaPath,
-              "-c",
-              `developer_instructions=${JSON.stringify(EXTRACTION_SYSTEM)}`,
-              CODEX_PROMPT,
-            ]
-          : ["-p", "--append-system-prompt", EXTRACTION_SYSTEM, CLAUDE_PROMPT];
+      const invoked = await invokeHostModel({
+        host,
+        run,
+        runtime,
+        system: EXTRACTION_SYSTEM,
+        prompt: host === "codex" ? CODEX_PROMPT : CLAUDE_PROMPT,
+        input,
+        cwd,
+        schemaPath,
+        timeoutMs,
+      });
+      if (invoked.ok !== true) return invoked;
 
-      let result;
-      let isolatedCwd = null;
-      try {
-        // `--ignore-user-config` does not disable project AGENTS.md discovery. The transcript is
-        // already on stdin, so keep repository instructions untrusted by running Codex from a
-        // fresh empty directory that cannot contribute project guidance or project config.
-        if (host === "codex") {
-          isolatedCwd = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-extractor-"));
-        }
-        result = await run(runtime, args, {
-          input,
-          cwd: isolatedCwd ?? cwd,
-          timeoutMs,
-          env: { [DISABLE_HOOKS_ENV]: "1" },
-        });
-      } catch (error) {
-        result = { code: null, stdout: "", stderr: "", error };
-      } finally {
-        if (isolatedCwd) await fs.rm(isolatedCwd, { recursive: true, force: true }).catch(() => {});
-      }
-
-      if (isUnavailable(result)) return failure("extractor-unavailable", host, runtime, result);
-      if (isTimeout(result)) return failure("extractor-timeout", host, runtime, result);
-      if (result?.code !== 0) return failure("extractor-failed", host, runtime, result);
-
-      const candidates = parseExtractionOutput(result.stdout, { strict: host === "codex" });
-      if (candidates === null) return failure("malformed-output", host, runtime, result);
+      const candidates = parseExtractionOutput(invoked.stdout, { strict: host === "codex" });
+      if (candidates === null) return failure("malformed-output", host, runtime, invoked.result);
       return { ok: true, candidates };
     },
   };

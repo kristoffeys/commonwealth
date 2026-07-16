@@ -25,11 +25,21 @@ import { consolidateCanon } from "./consolidate.js";
 import { graduateToOrgBrain } from "./graduate.js";
 import { formatContext } from "./context.js";
 import { curate } from "./curate.js";
+import { computeNeighbors } from "./neighbors.js";
 import { reassignStagedContributor } from "./staging.js";
 import { selectRelevant } from "./relevance.js";
 import { approve, approveAll, listPending, reject } from "./review.js";
 import { addAllow, addDeny, loadUserConfig } from "./scope.js";
+import type { AnnotatedCandidate } from "./verdict.js";
 import packageJson from "../package.json";
+
+/**
+ * Sentinel line the `capture` command appends to stdout to carry the LLM curation verdict summary
+ * (ADR-0030) back to the plugin hook, which uses it to render the capture receipt. It has NO
+ * `[kind]` bracket, so the hook's note-line parser skips it; the hook parses this line separately.
+ * Keep in sync with `parseVerdictSummary` in packages/plugin/hooks/lib.mjs.
+ */
+const VERDICT_SUMMARY_PREFIX = "##commonwealth:verdicts ";
 
 /**
  * Resolve the brain directory for a `cwd`, or `null` when none is configured (#69). Order:
@@ -115,6 +125,7 @@ function usage(): void {
       "      [--deciders a,b] [--status <s>] [--dir <brain>]   (deciders/status: decisions)",
       "  commonwealth-curate context [--dir <brain>] [--cwd <dir>] [--query <q>] [--limit <n>]",
       "  commonwealth-curate capture [--dir <brain>] [--cwd <dir>] [--from <json-file>]",
+      "  commonwealth-curate neighbors [--dir <brain>] [--cwd <dir>] [--from <json-file>] [--k <n>]",
       "  commonwealth-curate scope show",
       "  commonwealth-curate scope check [--cwd <dir>]",
       "  commonwealth-curate scope allow <path>",
@@ -138,10 +149,26 @@ function isNoteKind(value: string): value is NoteKind {
   return (NOTE_KINDS as readonly string[]).includes(value);
 }
 
+/** Render an LLM-consolidation annotation for a staged note's pending line (ADR-0030), or "". */
+function pendingVerdictAnnotation(fm: Record<string, unknown>): string {
+  const ids = (key: string): string[] =>
+    Array.isArray(fm[key])
+      ? (fm[key] as unknown[]).filter((v): v is string => typeof v === "string")
+      : [];
+  const parts: string[] = [];
+  for (const c of ids("contradicts")) parts.push(`⚠ contradicts ${c}`);
+  for (const s of ids("supersedes")) parts.push(`↳ supersedes ${s}`);
+  return parts.length > 0 ? `  ${parts.join("  ")}` : "";
+}
+
 async function cmdList(dir: string): Promise<void> {
   const pending = await listPending(dir);
   for (const note of pending) {
-    console.log(`${note.frontmatter.id}  [${note.frontmatter.kind}]  ${note.frontmatter.title}`);
+    const fm = note.frontmatter as unknown as Record<string, unknown>;
+    const annotation = pendingVerdictAnnotation(fm);
+    console.log(
+      `${note.frontmatter.id}  [${note.frontmatter.kind}]  ${note.frontmatter.title}${annotation}`,
+    );
   }
 }
 
@@ -296,13 +323,17 @@ async function cmdContext(explicitDir: string | undefined, args: string[]): Prom
   if (rendered.length > 0) console.log(rendered);
 }
 
-/** Read and validate a candidate array (`NewNoteInput[]`) from a JSON string. */
-function parseCandidates(raw: string): NewNoteInput[] {
+/**
+ * Read and validate a candidate array from a JSON string. Each entry is a `NewNoteInput` that may
+ * additionally carry an LLM `verdict` (ADR-0030) the hook layer annotated it with; the verdict
+ * rides through untouched and is applied by {@link captureCandidates}.
+ */
+function parseCandidates(raw: string): AnnotatedCandidate[] {
   const parsed: unknown = JSON.parse(raw);
   if (!Array.isArray(parsed)) {
     throw new Error("capture expects a JSON array of candidate notes");
   }
-  return parsed as NewNoteInput[];
+  return parsed as AnnotatedCandidate[];
 }
 
 /** Read all of STDIN as a UTF-8 string. */
@@ -379,10 +410,72 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
       console.log(`${note.frontmatter.id}  [${note.frontmatter.kind}]  ${note.frontmatter.title}`);
     }
   }
+  // Emit the LLM curation verdict summary (ADR-0030) as a machine-readable sentinel line the hook
+  // reads to render the receipt ("… 1 superseded older note, 1 flagged contradiction, filtered 2
+  // as trivia"). Only when the pass actually did something, so the plain-capture stdout is
+  // unchanged for brains without the curator.
+  const duplicates = result.rejected.filter((r) => r.reason === "llm-duplicate").length;
+  if (
+    result.superseded.length > 0 ||
+    result.contradictions.length > 0 ||
+    result.triviaFiltered > 0 ||
+    duplicates > 0 ||
+    result.clamped > 0
+  ) {
+    console.log(
+      VERDICT_SUMMARY_PREFIX +
+        JSON.stringify({
+          superseded: result.superseded.length,
+          contradicted: result.contradictions.length,
+          trivia: result.triviaFiltered,
+          duplicate: duplicates,
+          clamped: result.clamped,
+        }),
+    );
+  }
   for (const r of result.rejected) {
     const extra = r.duplicateOf ? ` (of ${r.duplicateOf})` : "";
     console.error(`[commonwealth-curate] rejected: ${r.reason}${extra}`);
   }
+}
+
+/**
+ * `neighbors --from <json>|stdin [--k <n>] [--cwd <dir>]` — the DETERMINISTIC, offline first step
+ * of the LLM curation pass (ADR-0030). For each candidate note it emits the top-`k` nearest CANON
+ * notes (vectors when a provider + index are present, else lexical Jaccard — no model call), so the
+ * plugin hook can hand candidate+neighbor context to ONE batched classifier. Also reports the
+ * `llmCurator` flag as `enabled`, so the hook skips classification entirely when the brain has the
+ * feature off. Output is a single JSON object on stdout; diagnostics go to stderr.
+ */
+async function cmdNeighbors(explicitDir: string | undefined, args: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      dir: { type: "string" },
+      cwd: { type: "string" },
+      from: { type: "string" },
+      k: { type: "string" },
+    },
+    allowPositionals: false,
+  });
+
+  const cwd = typeof values.cwd === "string" ? values.cwd : process.cwd();
+  const resolved = await resolveScopedBrain(explicitDir ?? values.dir, cwd);
+  if ("skip" in resolved) {
+    // Out of scope / no brain: nothing to classify. Report disabled so the hook does no work.
+    console.log(JSON.stringify({ enabled: false, candidates: [] }));
+    return;
+  }
+  const dir = resolved.brain;
+
+  const raw =
+    typeof values.from === "string" ? await fs.readFile(values.from, "utf8") : await readStdin();
+  const candidates = parseCandidates(raw);
+  const k = values.k !== undefined ? Number.parseInt(values.k, 10) : undefined;
+  const result = await computeNeighbors(dir, candidates, {
+    ...(k !== undefined && Number.isFinite(k) && k > 0 ? { k } : {}),
+  });
+  console.log(JSON.stringify(result));
 }
 
 /** `scope <show|check|allow|deny>` — inspect and edit the per-user scope filter. */
@@ -672,6 +765,9 @@ async function main(): Promise<void> {
       break;
     case "capture":
       await cmdCapture(explicitDir, rest);
+      break;
+    case "neighbors":
+      await cmdNeighbors(explicitDir, rest);
       break;
     case "scope":
       await cmdScope(rest);

@@ -305,6 +305,13 @@ commonwealth config set semanticDedup true   # smarter dedup (see below)
   Inert for brains with no provider (behaves exactly like lexical-only), and set it `false` to force
   lexical-only even with a provider. Reuses the same vectors as `semanticDedup`, so existing brains
   need one index rebuild to backfill vectors for notes captured before either was enabled.
+- **`llmCurator`** (default **on**) — an LLM curation pass in the capture pipeline
+  ([ADR-0030](docs/adr/0030-llm-curation-pass.md)): a durability judge filters trivia the length
+  check can't, and a consolidation classifier catches paraphrased updates (supersedes the older
+  note) and contradictions of canon (flags them — never auto-rejected). Keeps autoPromote canon
+  clean without human review. Runs in the plugin hook layer over the same host runtime as capture,
+  so it is inert without a runtime (behaves exactly like today); any classifier failure fails open
+  to the deterministic gate. Set `false` to skip the pass.
 
 ## Docs
 

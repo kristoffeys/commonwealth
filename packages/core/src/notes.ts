@@ -68,6 +68,7 @@ const KEY_ORDER = [
   "deciders",
   "supersedes",
   "superseded_by",
+  "contradicts",
   "sources",
   "relates",
 ];

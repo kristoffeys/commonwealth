@@ -260,3 +260,41 @@ describe("supersedeNote / overwriteNote (#29)", () => {
     if (out.frontmatter.kind === "work-state") expect(out.frontmatter.status).toBe("in-progress");
   });
 });
+
+describe("contradicts frontmatter (ADR-0030 / #214)", () => {
+  it("round-trips a memory note's contradicts marker through serialize/parse", async () => {
+    const note = await writeNote(dir, {
+      kind: "memory",
+      title: "Auth does not use JWT",
+      body: "the gateway rejects JWT and only accepts opaque tokens",
+      fields: { contradicts: ["2026-07-01-jwt-a1"] },
+    });
+    expect((note.frontmatter as Record<string, unknown>).contradicts).toEqual([
+      "2026-07-01-jwt-a1",
+    ]);
+    const back = await readNote(dir, note.path);
+    expect((back.frontmatter as Record<string, unknown>).contradicts).toEqual([
+      "2026-07-01-jwt-a1",
+    ]);
+    // Serialized frontmatter keeps `contradicts` next to the supersession keys (stable order).
+    expect(serializeNote(back)).toContain("contradicts:");
+  });
+
+  it("rejects a non-string-array contradicts value (schema-guarded)", () => {
+    expect(() =>
+      parseNote(
+        [
+          "---",
+          "id: x",
+          "kind: memory",
+          "title: T",
+          "created: 2026-07-16",
+          "contradicts: 5",
+          "---",
+          "body",
+        ].join("\n"),
+        "memory/x.md",
+      ),
+    ).toThrow();
+  });
+});

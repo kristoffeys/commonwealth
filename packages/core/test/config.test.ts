@@ -27,6 +27,10 @@ describe("defaultBrainConfig", () => {
   it("defaults autoAdr on (decisions are traced by default; ADR-0022)", () => {
     expect(defaultBrainConfig("x").features.autoAdr).toBe(true);
   });
+
+  it("defaults llmCurator on (inert without a host runtime; ADR-0030)", () => {
+    expect(defaultBrainConfig("x").features.llmCurator).toBe(true);
+  });
 });
 
 describe("brain config on a scaffolded brain", () => {
