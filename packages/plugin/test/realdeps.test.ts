@@ -333,7 +333,9 @@ describe("realDeps().extractCandidates hardening (#104)", () => {
     const transcript = path.join(tmp, "t.jsonl");
     await fs.writeFile(transcript, `${JSON.stringify({ role: "user", content: "hi" })}\n`);
 
-    const deps = realDeps({ claudeBin: stub, extractionTimeoutMs: 500 });
+    // Force the legacy path so the hang stub isn't first hit by the `--json-schema` capability
+    // probe (#196) — this test isolates the extraction timeout, not the probe.
+    const deps = realDeps({ claudeBin: stub, extractionTimeoutMs: 500, claudeJsonSchema: false });
     const start = process.hrtime.bigint();
     const out = await deps.extractCandidates({ transcriptPath: transcript, cwd: tmp });
     const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;

@@ -31,6 +31,7 @@ import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { appendCaptureLog, captureLogPath, deriveCaptureLogEntry } from "./capture-log.mjs";
 import { createClassifier } from "./classify.mjs";
 import { compactClaudeTranscript, createExtractor, parseExtractionOutput } from "./extraction.mjs";
 
@@ -376,6 +377,9 @@ export async function sessionEnd(input, deps) {
         captured: 0,
         failed: true,
         reason: "extractor-failure",
+        // The specific ADR-0027 class (extractor-unavailable/timeout/failed/malformed-output), so
+        // the receipt and capture log can name WHICH failure this was, not just "extraction failed".
+        extractionReason: typeof extracted?.reason === "string" ? extracted.reason : undefined,
         host: extracted?.host,
         runtime: extracted?.runtime,
         code: extracted?.code,
@@ -389,6 +393,7 @@ export async function sessionEnd(input, deps) {
               : "extractor returned an invalid result",
       },
       boundary,
+      brain,
     );
   }
   let candidates = extracted.candidates;
@@ -405,6 +410,7 @@ export async function sessionEnd(input, deps) {
     const annotated = await deps.classifyCandidates(brain, cwd, candidates);
     if (Array.isArray(annotated)) candidates = annotated;
   }
+  const extractedCount = Array.isArray(candidates) ? candidates.length : 0;
   let result =
     Array.isArray(candidates) && candidates.length > 0
       ? await deps.capture(brain, cwd, candidates)
@@ -430,7 +436,7 @@ export async function sessionEnd(input, deps) {
   // work is free to run. Best-effort — the dep swallows its own errors; a hook must never break.
   if (typeof deps.refreshStatus === "function") await deps.refreshStatus(brain, cwd);
 
-  return await finishEnd(deps, cwd, result, boundary);
+  return await finishEnd(deps, cwd, result, boundary, brain, extractedCount);
 }
 
 /**
@@ -440,10 +446,19 @@ export async function sessionEnd(input, deps) {
  * captured" must be deferred to the next start. Best-effort via `deps.saveReceipt`; returns the
  * result unchanged so the hook's stderr summary is untouched.
  */
-async function finishEnd(deps, cwd, result, boundary) {
+async function finishEnd(deps, cwd, result, boundary, brain, extracted) {
+  const ts = Date.now();
   const message = endReceiptMessage(result, boundary);
   if (message && typeof deps.saveReceipt === "function") {
-    await deps.saveReceipt({ cwd, message, ts: Date.now() });
+    await deps.saveReceipt({ cwd, message, ts });
+  }
+  // Persist a durable capture-log line (#211) so "why is my brain not filling?" is answerable long
+  // after the one-shot receipt is consumed. `extracted` (pre-curate candidate count) is threaded
+  // ONLY into the log — not the returned result — so the log can show the rejected count without
+  // changing the hook's public result shape. Best-effort — the dep swallows its own errors.
+  if (typeof deps.recordCapture === "function") {
+    const logResult = typeof extracted === "number" ? { ...result, extracted } : result;
+    await deps.recordCapture({ cwd, brain: brain ?? null, result: logResult, boundary, ts });
   }
   return result;
 }
@@ -631,13 +646,20 @@ export function endReceiptMessage(result, boundary) {
     const host = typeof result.host === "string" && result.host.length > 0 ? ` ${result.host}` : "";
     const runtime =
       typeof result.runtime === "string" && result.runtime.length > 0 ? ` (${result.runtime})` : "";
-    const outcome = result.timedOut
-      ? " timed out"
-      : typeof result.code === "number"
-        ? ` exited ${result.code}`
-        : typeof result.signal === "string" && result.signal.length > 0
-          ? ` was killed by ${result.signal}`
-          : " failed to start or returned invalid output";
+    // Name the SPECIFIC failure class (ADR-0027) so the receipt distinguishes a missing/unauthed CLI
+    // from a timeout from schema-invalid output — never collapsing them into one vague message.
+    const outcome =
+      result.extractionReason === "extractor-unavailable"
+        ? " could not be started (not found or not executable)"
+        : result.extractionReason === "malformed-output"
+          ? " returned output that did not match the expected schema (malformed output)"
+          : result.timedOut || result.extractionReason === "extractor-timeout"
+            ? " timed out"
+            : typeof result.code === "number"
+              ? ` exited ${result.code}`
+              : typeof result.signal === "string" && result.signal.length > 0
+                ? ` was killed by ${result.signal}`
+                : " failed to start or returned invalid output";
     const rawDetail =
       typeof result.error === "string" && result.error.length > 0 ? result.error : "";
     const detail = rawDetail ? `: ${rawDetail}${/[.!?]$/.test(rawDetail) ? "" : "."}` : ".";
@@ -1067,6 +1089,9 @@ export function realDeps(overrides = {}) {
     codexBin: overrides.codexBin,
     timeoutMs: overrides.extractionTimeoutMs ?? EXTRACTION_TIMEOUT_MS,
     schemaPath: overrides.schemaPath,
+    // Undefined by default → the extractor probes `claude --help` once (#196); a boolean override
+    // (tests / forced config) skips the probe.
+    claudeJsonSchema: overrides.claudeJsonSchema,
   });
 
   // Curate runtime, resolved ONCE (matters for the per-turn UserPromptSubmit hook, #194):
@@ -1226,6 +1251,16 @@ export function realDeps(overrides = {}) {
     return path.join(os.homedir(), ".commonwealth", filename);
   }
 
+  /**
+   * Append a structured line to the persistent capture log (#211), injecting the resolved `host`
+   * (which the pure result object doesn't carry). Best-effort — {@link appendCaptureLog} swallows
+   * its own errors, so a broken log can never break capture.
+   */
+  async function recordCapture({ cwd, brain, result, boundary, ts }) {
+    const entry = deriveCaptureLogEntry(result, { cwd, brain, host, boundary, ts });
+    await appendCaptureLog(entry, { path: captureLogPath() });
+  }
+
   /** Persist the SessionEnd receipt (best-effort; a hook must never break the session). */
   async function saveReceipt(receipt) {
     try {
@@ -1339,6 +1374,7 @@ export function realDeps(overrides = {}) {
     classifyCandidates,
     refreshStatus,
     extractCandidates: extractor.extract,
+    recordCapture,
     saveReceipt,
     takeReceipt,
     readCaptureMark,

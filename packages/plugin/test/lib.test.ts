@@ -539,9 +539,83 @@ describe("endReceiptMessage (#96)", () => {
     expect(msg).toContain("curate was NOT run");
     expect(msg).not.toContain("no durable knowledge");
   });
+  it("names each extraction failure class distinctly, never as empty judgment (#211)", () => {
+    const matrix: Array<[Record<string, unknown>, string]> = [
+      [
+        { extractionReason: "extractor-unavailable", error: "spawn claude ENOENT" },
+        "could not be started",
+      ],
+      [{ extractionReason: "extractor-timeout", timedOut: true }, "timed out"],
+      [{ extractionReason: "extractor-failed", code: 1, error: "auth required" }, "exited 1"],
+      [{ extractionReason: "malformed-output", code: 0 }, "malformed output"],
+    ];
+    for (const [extra, needle] of matrix) {
+      const msg = endReceiptMessage({
+        captured: 0,
+        failed: true,
+        reason: "extractor-failure",
+        host: "claude",
+        runtime: "claude",
+        ...extra,
+      });
+      expect(msg).toContain("capture FAILED");
+      expect(msg).toContain(needle);
+      expect(msg).not.toContain("no durable knowledge");
+    }
+  });
   it("returns null for junk input", () => {
     expect(endReceiptMessage(null)).toBe(null);
     expect(endReceiptMessage({})).toBe(null);
+  });
+});
+
+describe("sessionEnd capture log wiring (#211)", () => {
+  it("records an ok capture with extracted/staged/promoted counts", async () => {
+    const deps = makeDeps();
+    const recordCapture = vi.fn(async () => {});
+    await sessionEnd({ cwd: "/work/acme/app" }, { ...deps, recordCapture });
+    expect(recordCapture).toHaveBeenCalledOnce();
+    const { cwd, brain, result } = recordCapture.mock.calls[0][0] as {
+      cwd: string;
+      brain: string;
+      result: Record<string, unknown>;
+    };
+    expect(cwd).toBe("/work/acme/app");
+    expect(brain).toBe("/brains/acme");
+    expect(result).toMatchObject({ captured: 1, extracted: 1 });
+  });
+
+  it("records an extraction failure with the specific class threaded through", async () => {
+    const deps = makeDeps({
+      extractCandidates: vi.fn(async () => ({
+        ok: false,
+        reason: "extractor-timeout",
+        host: "claude",
+        runtime: "claude",
+        code: null,
+        error: "timed out",
+      })),
+    });
+    const recordCapture = vi.fn(async () => {});
+    await sessionEnd({ cwd: "/work/acme/app" }, { ...deps, recordCapture });
+    expect(recordCapture).toHaveBeenCalledOnce();
+    const { result } = recordCapture.mock.calls[0][0] as { result: Record<string, unknown> };
+    expect(result).toMatchObject({
+      failed: true,
+      reason: "extractor-failure",
+      extractionReason: "extractor-timeout",
+    });
+    // Capture never invoked when extraction failed.
+    expect(deps.capture).not.toHaveBeenCalled();
+  });
+
+  it("records a skip (out-of-scope) with its reason", async () => {
+    const deps = makeDeps({ resolveBrain: vi.fn(async () => ({ kind: "denied", cwd: "/x" })) });
+    const recordCapture = vi.fn(async () => {});
+    await sessionEnd({ cwd: "/x" }, { ...deps, recordCapture });
+    expect(recordCapture).toHaveBeenCalledOnce();
+    const { result } = recordCapture.mock.calls[0][0] as { result: Record<string, unknown> };
+    expect(result).toMatchObject({ skipped: true, reason: "out-of-scope" });
   });
 });
 

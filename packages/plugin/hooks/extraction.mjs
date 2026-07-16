@@ -20,14 +20,19 @@ const EXTRACTION_SYSTEM = [
   "Be generous, but skip pure trivia, secrets, and ephemeral details.",
 ].join("\n");
 
-const CLAUDE_PROMPT = [
+// Legacy free-text prompt (#196): used ONLY on the Claude fallback path, when the installed
+// `claude` predates `--json-schema`. The reply is scraped with lenient JSON recovery.
+const CLAUDE_LEGACY_PROMPT = [
   "Extract durable team knowledge from the transcript on stdin.",
   "Output ONLY a JSON array (no prose or code fence) of objects shaped:",
   '{ "kind": "memory|work-state|decision|person", "title": string, "body": string, "tags"?: string[] }',
   "Output [] only when there is truly nothing worth capturing.",
 ].join("\n");
 
-const CODEX_PROMPT = [
+// Schema-constrained prompt (#196): used for Codex (`--output-schema`) AND for the default Claude
+// path (`--json-schema`). The host validates the reply against the candidate schema, so a deviation
+// (fenced JSON, a preamble, trailing prose) becomes a MALFORMED-OUTPUT failure, never a silent [].
+const SCHEMA_PROMPT = [
   "Extract durable team knowledge from the transcript on stdin.",
   "Return an object matching the supplied output schema. Use an empty candidates array only when",
   "there is truly nothing worth capturing.",
@@ -352,9 +357,13 @@ async function defaultRun(command, args, { input, cwd, env, timeoutMs } = {}) {
  * extractor (ADR-0027) and the LLM curation classifier (ADR-0030) go through this ONE contract:
  * Claude via print mode with an appended system prompt; Codex via the supported non-interactive
  * `codex exec` surface with an output schema and developer instructions. `schemaPath` is only used
- * for Codex. Kept a pure function so both consumers — and their tests — share the exact argv shape.
+ * for Codex. `jsonSchema`, when a non-empty string, switches the Claude path to schema-constrained
+ * structured output (#196): `--output-format json --json-schema <schema>`, so a schema-invalid
+ * reply is a loud failure rather than a scraped `[]`; when absent, Claude uses the legacy print
+ * mode whose free-text reply is parsed leniently. Kept a pure function so both consumers — and
+ * their tests — share the exact argv shape.
  */
-export function buildHostArgs(host, { system, prompt, schemaPath }) {
+export function buildHostArgs(host, { system, prompt, schemaPath, jsonSchema } = {}) {
   if (host === "codex") {
     return [
       "-a",
@@ -375,7 +384,81 @@ export function buildHostArgs(host, { system, prompt, schemaPath }) {
       prompt,
     ];
   }
+  if (typeof jsonSchema === "string" && jsonSchema.length > 0) {
+    return [
+      "-p",
+      "--append-system-prompt",
+      system,
+      "--output-format",
+      "json",
+      "--json-schema",
+      jsonSchema,
+      prompt,
+    ];
+  }
   return ["-p", "--append-system-prompt", system, prompt];
+}
+
+// Cache the `--json-schema` capability probe per `claude` binary so it runs at most once per
+// process (the SessionEnd worker is short-lived, but PreCompact/prompt captures reuse it).
+const jsonSchemaSupport = new Map();
+
+/**
+ * Detect whether the installed `claude` supports `--json-schema` (#196), by grepping `--help` once
+ * and caching the answer per binary. Feature-detect / graceful fallback: an older `claude` without
+ * the flag keeps the legacy free-text extraction path so capture never hard-fails on version skew.
+ * Best-effort — an unprobeable CLI is treated as unsupported (falls back to the lenient parser).
+ */
+export async function claudeSupportsJsonSchema(run, claudeBin) {
+  if (!jsonSchemaSupport.has(claudeBin)) {
+    jsonSchemaSupport.set(
+      claudeBin,
+      (async () => {
+        try {
+          const res = await run(claudeBin, ["--help"], { timeoutMs: 5_000 });
+          return typeof res?.stdout === "string" && res.stdout.includes("--json-schema");
+        } catch {
+          return false;
+        }
+      })(),
+    );
+  }
+  return jsonSchemaSupport.get(claudeBin);
+}
+
+/**
+ * Unwrap Claude's `--output-format json` envelope (#196) to the model's schema-validated structured
+ * output, serialized back to a JSON string so the shared candidate/verdict validators parse it
+ * exactly as they parse Codex's raw schema output. A non-JSON envelope or a missing
+ * `structured_output` is MALFORMED-OUTPUT; an `is_error`/non-success envelope (e.g. max-turns,
+ * execution error) that still exited 0 is an EXTRACTOR-FAILED state, not an empty result.
+ */
+function unwrapClaudeEnvelope(stdout) {
+  let env;
+  try {
+    env = JSON.parse(String(stdout).trim());
+  } catch {
+    return { ok: false, reason: "malformed-output", error: "claude produced non-JSON stdout" };
+  }
+  if (!env || typeof env !== "object") {
+    return { ok: false, reason: "malformed-output", error: "claude envelope was not an object" };
+  }
+  if (env.is_error === true || (typeof env.subtype === "string" && env.subtype !== "success")) {
+    const detail = typeof env.result === "string" && env.result ? env.result : env.subtype;
+    return {
+      ok: false,
+      reason: "extractor-failed",
+      error: String(detail ?? "claude reported an error").slice(0, 500),
+    };
+  }
+  if (!env.structured_output || typeof env.structured_output !== "object") {
+    return {
+      ok: false,
+      reason: "malformed-output",
+      error: "claude reply had no structured_output",
+    };
+  }
+  return { ok: true, stdout: JSON.stringify(env.structured_output) };
 }
 
 /**
@@ -397,11 +480,22 @@ export async function invokeHostModel({
   cwd,
   schemaPath = DEFAULT_SCHEMA_PATH,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  claudeJsonSchema = false,
 } = {}) {
   if (!["claude", "codex"].includes(host)) {
     return failure("extractor-unavailable", host, runtime, null, `unsupported host: ${host}`);
   }
-  const args = buildHostArgs(host, { system, prompt, schemaPath });
+  // Claude schema path (#196): load the schema file so `--json-schema` gets the inline schema. An
+  // unreadable schema degrades to the legacy free-text path rather than failing capture.
+  let jsonSchema = null;
+  if (host === "claude" && claudeJsonSchema) {
+    try {
+      jsonSchema = await fs.readFile(schemaPath, "utf8");
+    } catch {
+      jsonSchema = null;
+    }
+  }
+  const args = buildHostArgs(host, { system, prompt, schemaPath, jsonSchema });
 
   let result;
   let isolatedCwd = null;
@@ -427,10 +521,25 @@ export async function invokeHostModel({
   if (isUnavailable(result)) return failure("extractor-unavailable", host, runtime, result);
   if (isTimeout(result)) return failure("extractor-timeout", host, runtime, result);
   if (result?.code !== 0) return failure("extractor-failed", host, runtime, result);
+  // Claude's `--output-format json` wraps the structured output in a transport envelope; unwrap it
+  // to the raw schema object so consumers parse it identically to Codex. Envelope-level errors keep
+  // the ADR-0027 taxonomy distinct.
+  if (host === "claude" && jsonSchema) {
+    const unwrapped = unwrapClaudeEnvelope(result.stdout);
+    if (unwrapped.ok !== true) {
+      return failure(unwrapped.reason, host, runtime, result, unwrapped.error);
+    }
+    return { ok: true, stdout: unwrapped.stdout, result };
+  }
   return { ok: true, stdout: result.stdout, result };
 }
 
-/** Create a host-specific transcript extractor without coupling hook orchestration to either CLI. */
+/**
+ * Create a host-specific transcript extractor without coupling hook orchestration to either CLI.
+ * `claudeJsonSchema` (#196): `true`/`false` forces the Claude schema/legacy path; when left
+ * `undefined` it is auto-detected once via {@link claudeSupportsJsonSchema}. Codex always uses its
+ * `--output-schema` surface, so the flag is Claude-only.
+ */
 export function createExtractor({
   host,
   run = defaultRun,
@@ -438,6 +547,7 @@ export function createExtractor({
   codexBin = "codex",
   timeoutMs = DEFAULT_TIMEOUT_MS,
   schemaPath = DEFAULT_SCHEMA_PATH,
+  claudeJsonSchema,
 } = {}) {
   const runtime = host === "codex" ? codexBin : claudeBin;
 
@@ -463,6 +573,15 @@ export function createExtractor({
         );
       }
 
+      // Resolve the Claude structured-output mode (probe once when not forced); Codex is always
+      // schema-backed.
+      const useSchema =
+        host === "codex"
+          ? true
+          : typeof claudeJsonSchema === "boolean"
+            ? claudeJsonSchema
+            : await claudeSupportsJsonSchema(run, runtime);
+
       const compact = host === "codex" ? compactCodexTranscript(raw) : compactClaudeTranscript(raw);
       const input = tailCap(compact || raw);
       const invoked = await invokeHostModel({
@@ -470,15 +589,19 @@ export function createExtractor({
         run,
         runtime,
         system: EXTRACTION_SYSTEM,
-        prompt: host === "codex" ? CODEX_PROMPT : CLAUDE_PROMPT,
+        prompt: host === "codex" || useSchema ? SCHEMA_PROMPT : CLAUDE_LEGACY_PROMPT,
         input,
         cwd,
         schemaPath,
         timeoutMs,
+        claudeJsonSchema: useSchema,
       });
       if (invoked.ok !== true) return invoked;
 
-      const candidates = parseExtractionOutput(invoked.stdout, { strict: host === "codex" });
+      // Structured output (Codex, or Claude on the schema path) is validated strictly; the Claude
+      // legacy free-text reply keeps the lenient recovery parser.
+      const strict = host === "codex" || useSchema;
+      const candidates = parseExtractionOutput(invoked.stdout, { strict });
       if (candidates === null) return failure("malformed-output", host, runtime, invoked.result);
       return { ok: true, candidates };
     },

@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { defaultAddDeps, runAdd } from "./add.js";
+import { formatCaptureLine, readCaptureLog } from "./capture-log.js";
 import { cmdOrgBrain } from "./org-brain.js";
 import { cmdRegistry } from "./registry.js";
 import { cmdService } from "./service.js";
@@ -241,6 +242,12 @@ export async function run(argv: string[]): Promise<number> {
     case "config":
       return cmdConfig(rest);
     case "status": {
+      // Lead with the last capture outcome (#211) so "is my brain filling?" is answered up front,
+      // before the review queue and sync state (each delegate prints its own output).
+      const captures = await readCaptureLog();
+      if (captures.length > 0) {
+        process.stdout.write(`${formatCaptureLine(captures[captures.length - 1]!)}\n`);
+      }
       const queue = await delegateCurate(["list"]);
       const daemon = await delegateSync(["status"]);
       return queue || daemon;

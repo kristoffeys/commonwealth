@@ -111,7 +111,7 @@ rest — every command resolves the right brain from the current directory autom
 ```bash
 commonwealth add <folder> [--brain <dir>] # wire another folder to the brain, in one go
 commonwealth registry <show|route|allow|deny|remove|default|pull>  # brain-resolution rules (see below)
-commonwealth status                       # review queue + sync state
+commonwealth status                       # last capture outcome + review queue + sync state
 commonwealth recall <query>               # search the brain
 commonwealth ask <question>               # a cited answer, synthesized from the brain
 commonwealth reseed [<repo>] [--all]      # mine repo(s) into the brain again
@@ -129,7 +129,7 @@ commonwealth project unlink <id> [<src>]  # undo a link (derived views only; no 
 commonwealth project adopt <id> [--dry-run]  # promote a proven link into note frontmatter (one commit), then retire the entry
 commonwealth statusline [install]         # ambient status line for Claude Code (see below)
 commonwealth graduate [--suggest]         # propose facts recurring across ≥2 brains to the org-brain
-commonwealth doctor [--fix]               # diagnose (and optionally fix) the setup
+commonwealth doctor [--fix]               # diagnose the setup + last capture outcome (reads ~/.commonwealth/capture.log)
 commonwealth update --agent both          # update the CLI + refresh both host integrations
 commonwealth --version                    # print the installed CLI version
 ```
