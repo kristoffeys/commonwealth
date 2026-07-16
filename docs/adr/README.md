@@ -30,6 +30,7 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 | [0027](0027-host-neutral-extraction-runtime.md) | Host-neutral session extraction: Claude Code and Codex adapters | Accepted |
 | [0028](0028-codex-turn-boundary-lifecycle.md) | Codex lifecycle parity uses a distinct hook manifest and turn-boundary capture | Accepted |
 | [0029](0029-person-responsibility-attribution.md) | Person-backed responsibility attribution for brain writes | Accepted |
+| [0030](0030-llm-curation-pass.md)             | LLM curation pass: durability judge + consolidation completes ADR-0007's curator | Accepted |
 
 ## Process
 

@@ -75,6 +75,14 @@ export const MemoryFrontmatter = z
     verified: IsoDate.optional(),
     sources: z.array(z.string()).default([]),
     superseded_by: z.string().nullable().optional(),
+    /**
+     * Ids of canon notes this note is judged to CONTRADICT (ADR-0030, #214). Set at capture time
+     * by the LLM curation pass when a candidate makes a claim incompatible with existing canon —
+     * the note is kept (never auto-rejected), but the disagreement is recorded here and surfaced in
+     * receipts / the review queue so a human (or the curator agent, #198) can reconcile. Optional
+     * and additive; absent means "no known contradiction".
+     */
+    contradicts: z.array(z.string()).optional(),
   })
   .passthrough();
 export type MemoryFrontmatter = z.infer<typeof MemoryFrontmatter>;
@@ -87,6 +95,8 @@ export const DecisionFrontmatter = z
     supersedes: z.array(z.string()).default([]),
     superseded_by: z.string().nullable().optional(),
     deciders: z.array(z.string()).default([]),
+    /** Ids of canon notes this decision is judged to CONTRADICT (ADR-0030, #214). See {@link MemoryFrontmatter.contradicts}. */
+    contradicts: z.array(z.string()).optional(),
   })
   .passthrough();
 export type DecisionFrontmatter = z.infer<typeof DecisionFrontmatter>;

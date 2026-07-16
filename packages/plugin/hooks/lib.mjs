@@ -18,6 +18,10 @@
 //   extractCandidates({ transcriptPath, cwd })
 //                                      -> { ok: true, candidates: NewNoteInput[] }
 //                                       | { ok: false, host, error, ... }
+//   classifyCandidates(brain, cwd, candidates)
+//                                      -> NewNoteInput[] (each maybe + `verdict`; ADR-0030 LLM
+//                                                         curation. Fail-open: returns candidates
+//                                                         UNCHANGED on flag-off/no-runtime/error.)
 //   capture(brain, cwd, candidates)    -> { captured, ... }(stage candidates via the review queue)
 //   refreshStatus(brain, cwd)          -> void             (refresh the statusline cache; #197)
 //   readCaptureMark(key)               -> number | null    (last prompt-capture ts for a session)
@@ -27,6 +31,7 @@ import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createClassifier } from "./classify.mjs";
 import { compactClaudeTranscript, createExtractor, parseExtractionOutput } from "./extraction.mjs";
 
 /**
@@ -317,7 +322,20 @@ export async function sessionEnd(input, deps) {
       boundary,
     );
   }
-  const candidates = extracted.candidates;
+  let candidates = extracted.candidates;
+  // LLM curation pass (ADR-0030): annotate each candidate with a durability/consolidation verdict
+  // BEFORE curate applies it. This is fail-open by construction — `classifyCandidates` returns the
+  // candidates unchanged when the `llmCurator` flag is off, no host runtime is available, or the
+  // classifier times out / errors — so capture behavior degrades to today's DISTINCT path, never
+  // dropping a candidate. Absent dep (older wiring / unit tests) → skip entirely.
+  if (
+    Array.isArray(candidates) &&
+    candidates.length > 0 &&
+    typeof deps.classifyCandidates === "function"
+  ) {
+    const annotated = await deps.classifyCandidates(brain, cwd, candidates);
+    if (Array.isArray(annotated)) candidates = annotated;
+  }
   const result =
     Array.isArray(candidates) && candidates.length > 0
       ? await deps.capture(brain, cwd, candidates)
@@ -417,6 +435,60 @@ export function parseCaptureLines(stdout) {
   return notes;
 }
 
+/** Prefix of the machine-readable verdict-summary line `capture` emits (ADR-0030). Keep in sync
+ *  with `VERDICT_SUMMARY_PREFIX` in packages/curate/src/index.ts. */
+const VERDICT_SUMMARY_PREFIX = "##commonwealth:verdicts ";
+
+/**
+ * Parse the LLM curation verdict summary (ADR-0030) `capture` appends to its stdout, or `null` when
+ * absent (no curator ran / it changed nothing). The summary counts what the curation pass did:
+ * notes that superseded canon, notes flagged as contradictions, candidates filtered as trivia, and
+ * candidates rejected as duplicates. Pure function; last summary line wins. Never throws.
+ *
+ * @param {string} stdout  Raw stdout from the `capture` command.
+ * @returns {{superseded: number, contradicted: number, trivia: number, duplicate: number} | null}
+ */
+export function parseVerdictSummary(stdout) {
+  if (typeof stdout !== "string") return null;
+  let found = null;
+  for (const raw of stdout.split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith(VERDICT_SUMMARY_PREFIX)) continue;
+    try {
+      const parsed = JSON.parse(line.slice(VERDICT_SUMMARY_PREFIX.length));
+      if (parsed && typeof parsed === "object") {
+        found = {
+          superseded: Number(parsed.superseded) || 0,
+          contradicted: Number(parsed.contradicted) || 0,
+          trivia: Number(parsed.trivia) || 0,
+          duplicate: Number(parsed.duplicate) || 0,
+        };
+      }
+    } catch {
+      // Ignore a malformed summary line — the note lines still render the receipt.
+    }
+  }
+  return found;
+}
+
+/**
+ * Render the parenthetical curation clause for a capture receipt (ADR-0030), e.g.
+ * " (1 superseded an older note, 1 flagged as a contradiction, 2 filtered as trivia)", or "" when
+ * the pass changed nothing / didn't run. Pure function.
+ */
+function verdictClause(verdicts) {
+  if (!verdicts || typeof verdicts !== "object") return "";
+  const parts = [];
+  if (verdicts.superseded > 0) parts.push(`${verdicts.superseded} superseded an older note`);
+  if (verdicts.contradicted > 0)
+    parts.push(
+      `${verdicts.contradicted} flagged as a contradiction${verdicts.contradicted === 1 ? "" : "s"}`,
+    );
+  if (verdicts.trivia > 0) parts.push(`${verdicts.trivia} filtered as trivia`);
+  if (verdicts.duplicate > 0) parts.push(`${verdicts.duplicate} dropped as duplicate(s)`);
+  return parts.length > 0 ? ` (${parts.join(", ")})` : "";
+}
+
 /** Cap on how many note titles a capture receipt lists inline before collapsing to "(+N more)". */
 const RECEIPT_TITLE_LIMIT = 3;
 
@@ -430,18 +502,20 @@ const RECEIPT_TITLE_LIMIT = 3;
  * @param {Array<{kind: string, title: string, promoted: boolean}>} notes
  * @returns {string}
  */
-function renderCaptureReceipt(notes, boundary) {
+function renderCaptureReceipt(notes, boundary, verdicts) {
   const source = captureBoundaryLabel(boundary);
   const shown = notes.slice(0, RECEIPT_TITLE_LIMIT).map((n) => `• "${n.title}"`);
   const extra = notes.length - shown.length;
   const list = [...shown, ...(extra > 0 ? [`(+${extra} more)`] : [])].join("\n");
+  // The LLM curation pass (ADR-0030) appends what it did — superseded / contradiction / trivia.
+  const clause = verdictClause(verdicts);
   // autoPromote is a brain-level flag, so a capture is all-promoted or all-staged; `some` is a
   // belt-and-suspenders read in case a line ever fails to parse its prefix.
   const promoted = notes.some((n) => n.promoted);
   if (promoted) {
-    return `🧠 Commonwealth remembered from ${source}:\n${list}\nRun \`commonwealth status\` to review.`;
+    return `🧠 Commonwealth remembered from ${source}${clause}:\n${list}\nRun \`commonwealth status\` to review.`;
   }
-  return `🧠 Commonwealth staged ${notes.length} note(s) from ${source} for review:\n${list}\nRun \`/commonwealth:promote\` to approve.`;
+  return `🧠 Commonwealth staged ${notes.length} note(s) from ${source} for review${clause}:\n${list}\nRun \`/commonwealth:promote\` to approve.`;
 }
 
 /** Describe which transcript boundary a capture worker reviewed. */
@@ -509,12 +583,19 @@ export function endReceiptMessage(result, boundary) {
     }
     return null; // no-cwd / unknown — nothing useful to surface
   }
-  // Prefer the legible, titled receipt when we have structured notes (#204).
+  // Prefer the legible, titled receipt when we have structured notes (#204), naming what the LLM
+  // curation pass did (ADR-0030) via the verdict summary the capture command reported.
   if (Array.isArray(result.notes) && result.notes.length > 0) {
-    return renderCaptureReceipt(result.notes, boundary);
+    return renderCaptureReceipt(result.notes, boundary, result.verdicts);
   }
   if (typeof result.captured === "number") {
     if (result.captured === 0) {
+      // The curation pass can legitimately filter every candidate as trivia/duplicate — say so,
+      // rather than the misleading "found no durable knowledge" (nothing was extracted).
+      const clause = verdictClause(result.verdicts);
+      if (clause) {
+        return `🧠 Commonwealth: reviewed ${source} and captured nothing${clause}.`;
+      }
       return `🧠 Commonwealth: reviewed ${source} but found no durable knowledge worth capturing.`;
     }
     const n = result.captured;
@@ -876,7 +957,71 @@ export function realDeps(overrides = {}) {
       };
     }
     const notes = parseCaptureLines(res.stdout);
-    return { captured: notes.length, notes };
+    // The LLM curation verdict summary (ADR-0030), when the pass did something — threaded into the
+    // receipt so it can report superseded/contradiction/trivia counts.
+    const verdicts = parseVerdictSummary(res.stdout);
+    return { captured: notes.length, notes, ...(verdicts ? { verdicts } : {}) };
+  }
+
+  /**
+   * LLM curation pass (ADR-0030), fail-open by construction. Two steps, both off the per-turn hot
+   * path (this runs in the detached SessionEnd/PreCompact worker):
+   *   1. `curate neighbors` — DETERMINISTIC, offline: attaches each candidate's nearest-canon
+   *      neighbors AND reports the `llmCurator` flag. Flag off (or out-of-scope / no brain) →
+   *      `enabled: false` → return the candidates unchanged (classifier never runs).
+   *   2. ONE batched classifier call via the ADR-0027 host runtime → a verdict per candidate.
+   * ANY failure (neighbors non-zero, unparseable output, classifier missing/timeout/garbage) returns
+   * the ORIGINAL candidates unannotated with a single stderr breadcrumb, so capture degrades to
+   * today's DISTINCT behavior — a classifier can only ADD a verdict, never drop a candidate.
+   */
+  async function classifyCandidates(brain, cwd, candidates) {
+    if (!Array.isArray(candidates) || candidates.length === 0) return candidates;
+    try {
+      const neigh = await runCurate(["neighbors", "--cwd", cwd], {
+        input: JSON.stringify(candidates),
+        env: { COMMONWEALTH_BRAIN_DIR: brain },
+      });
+      if (neigh.code !== 0) return candidates;
+      let parsed;
+      try {
+        parsed = JSON.parse(neigh.stdout.trim());
+      } catch {
+        return candidates;
+      }
+      // Flag off, or nothing to classify → skip the model call entirely.
+      if (!parsed || parsed.enabled !== true || !Array.isArray(parsed.candidates)) {
+        return candidates;
+      }
+
+      const classifierFactory = overrides.createClassifier ?? createClassifier;
+      const classifier = classifierFactory({
+        host,
+        run,
+        claudeBin: overrides.claudeBin,
+        codexBin: overrides.codexBin,
+        ...(overrides.classifyTimeoutMs !== undefined
+          ? { timeoutMs: overrides.classifyTimeoutMs }
+          : {}),
+        ...(overrides.classifySchemaPath !== undefined
+          ? { schemaPath: overrides.classifySchemaPath }
+          : {}),
+      });
+      const res = await classifier.classify({ candidates: parsed.candidates, cwd });
+      if (res.ok !== true || !Array.isArray(res.candidates)) {
+        console.error(
+          `[commonwealth] llmCurator: classifier ${res?.reason ?? "failed"}; ` +
+            `proceeding with unclassified candidates (DISTINCT).`,
+        );
+        return candidates;
+      }
+      return res.candidates;
+    } catch (err) {
+      console.error(
+        `[commonwealth] llmCurator: curation pass errored (${err instanceof Error ? err.message : err}); ` +
+          `proceeding with unclassified candidates (DISTINCT).`,
+      );
+      return candidates;
+    }
   }
 
   /**
@@ -977,6 +1122,7 @@ export function realDeps(overrides = {}) {
     getContext,
     getContextQuery,
     capture,
+    classifyCandidates,
     refreshStatus,
     extractCandidates: extractor.extract,
     saveReceipt,

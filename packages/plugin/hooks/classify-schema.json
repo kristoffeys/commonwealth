@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdicts"],
+  "properties": {
+    "verdicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["index", "judge", "consolidation", "targetId", "reason"],
+        "properties": {
+          "index": { "type": "integer" },
+          "judge": {
+            "type": "string",
+            "enum": ["durable", "trivia"]
+          },
+          "consolidation": {
+            "type": "string",
+            "enum": ["distinct", "duplicate", "supersedes", "contradicts"]
+          },
+          "targetId": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  }
+}

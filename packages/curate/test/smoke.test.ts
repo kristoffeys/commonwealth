@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listNotes } from "@cmnwlth/core";
+import { initBrain, listNotes, readNote, writeNote } from "@cmnwlth/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { listPending } from "../src/review.js";
 
@@ -167,6 +167,67 @@ describe("built binary", () => {
         expect(note.frontmatter.author_ref).toBe(people[0].frontmatter.id);
         expect(note.frontmatter.relates).toContain(people[0].frontmatter.id);
       }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("applies LLM curation verdicts end-to-end and emits the hook's summary line (ADR-0030)", async () => {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-verdict-e2e-")),
+    );
+    try {
+      const brain = path.join(root, "brain");
+      await initBrain(brain, { name: "verdict-e2e" });
+      // Seed a canon note the verdicts can target.
+      await writeNote(brain, {
+        id: "2026-07-01-jwt-a1",
+        kind: "memory",
+        title: "Auth uses JWT",
+        body: "the service authenticates requests with fifteen-minute JWT access tokens",
+      });
+      const env = {
+        ...process.env,
+        COMMONWEALTH_AUTHOR: "Alice Example",
+        COMMONWEALTH_AUTHOR_EMAIL: "alice@example.com",
+      };
+      const candidates = JSON.stringify([
+        {
+          kind: "memory",
+          title: "Auth moved to opaque sessions",
+          body: "we replaced the token scheme with opaque server-side session identifiers",
+          verdict: { consolidation: "supersedes", targetId: "2026-07-01-jwt-a1" },
+        },
+        {
+          kind: "memory",
+          title: "Ran the test suite",
+          body: "the whole suite went green on the first attempt today",
+          verdict: { judge: "trivia" },
+        },
+        {
+          kind: "memory",
+          title: "Gateway now rejects JWT entirely",
+          body: "the edge gateway refuses any JWT and only accepts opaque tokens now",
+          verdict: { consolidation: "contradicts", targetId: "2026-07-01-jwt-a1" },
+        },
+      ]);
+
+      const out = execFileSync("node", [distEntry, "capture", "--dir", brain, "--cwd", brain], {
+        cwd: root,
+        input: candidates,
+        env,
+        stdio: "pipe",
+      }).toString();
+
+      // The machine-readable summary line the plugin hook parses to build the receipt.
+      const line = out.split("\n").find((l) => l.startsWith("##commonwealth:verdicts "));
+      expect(line).toBeTruthy();
+      const counts = JSON.parse(line!.slice("##commonwealth:verdicts ".length));
+      expect(counts).toMatchObject({ superseded: 1, contradicted: 1, trivia: 1 });
+
+      // The target canon note was superseded in place (supersede-not-delete).
+      const target = await readNote(brain, "memory/2026-07-01-jwt-a1.md");
+      expect(target.frontmatter.kind === "memory" && target.frontmatter.status).toBe("superseded");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
