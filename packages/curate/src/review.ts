@@ -2,6 +2,15 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { pathForNote, resolveWithinBrain, type Note } from "@cmnwlth/core";
 import { listStaged, stagedAbsPath } from "./staging.js";
+import { addTombstone } from "./tombstone.js";
+
+/** A staged note's `graduated_from` origin refs, or `undefined` if it is not a graduation candidate. */
+function graduatedFrom(note: Note): string[] | undefined {
+  const raw = (note.frontmatter as unknown as Record<string, unknown>).graduated_from;
+  if (!Array.isArray(raw)) return undefined;
+  const refs = raw.filter((r): r is string => typeof r === "string");
+  return refs.length > 0 ? refs : undefined;
+}
 
 /** All notes currently awaiting review in the staging queue. */
 export function listPending(brainDir: string): Promise<Note[]> {
@@ -41,13 +50,28 @@ export async function approve(brainDir: string, id: string): Promise<string> {
   return canonRel;
 }
 
-/** Reject a staged note (ADR-0007): discard its file. Throws if the id is not pending. */
+/**
+ * Reject a staged note (ADR-0007): discard its file. Throws if the id is not pending.
+ *
+ * When the note is an org-brain graduation candidate (it carries `graduated_from`), also record a
+ * reject-tombstone (#172) so the next `graduate` pass skips re-proposing the same cross-brain
+ * cluster instead of resurfacing it every run. The tombstone lives in this same brain (the
+ * org-brain, where graduation candidates are staged) — see {@link addTombstone}.
+ */
 export async function reject(brainDir: string, id: string): Promise<void> {
   const note = await findStaged(brainDir, id);
   if (!note) {
     throw new Error(`No staged note with id "${id}" to reject`);
   }
   await fs.rm(stagedAbsPath(brainDir, note));
+  const refs = graduatedFrom(note);
+  if (refs) {
+    await addTombstone(brainDir, {
+      refs,
+      title: note.frontmatter.title,
+      kind: note.frontmatter.kind,
+    });
+  }
 }
 
 /** Approve every pending staged note; returns the canonical paths, in id order. */

@@ -147,7 +147,7 @@ function usage(): void {
       "      | adopt <id> [--dry-run]> [--dir <brain>]",
       "  commonwealth-curate status-cache [--dir <brain>]",
       "  commonwealth-curate consolidate [--dry-run] [--dir <brain>]",
-      "  commonwealth-curate graduate [--suggest] [--dry-run] [--threshold <n>] [--org-dir <brain>]",
+      "  commonwealth-curate graduate [--suggest] [--dry-run] [--threshold <n>] [--org-dir <brain>] [--include-rejected]",
       "  commonwealth-curate feature list [--dir <brain>]",
       "  commonwealth-curate feature enable <name> [--dir <brain>]",
       "  commonwealth-curate feature disable <name> [--dir <brain>]",
@@ -880,6 +880,7 @@ async function cmdGraduate(args: string[]): Promise<void> {
       "dry-run": { type: "boolean" },
       threshold: { type: "string" },
       "org-dir": { type: "string" },
+      "include-rejected": { type: "boolean" },
     },
     allowPositionals: false,
   });
@@ -891,6 +892,7 @@ async function cmdGraduate(args: string[]): Promise<void> {
   }
   const result = await graduateToOrgBrain({
     dryRun: values["dry-run"] === true,
+    includeRejected: values["include-rejected"] === true,
     ...(threshold !== undefined ? { threshold } : {}),
     ...(typeof values["org-dir"] === "string" ? { orgBrainDir: values["org-dir"] } : {}),
   });
@@ -905,7 +907,8 @@ async function cmdGraduate(args: string[]): Promise<void> {
   console.error(
     `[commonwealth-curate] ${result.clusters} cross-brain cluster(s); ${verb} ` +
       `${values["dry-run"] ? result.candidates.length : result.staged.length} candidate(s)` +
-      (result.rejected.length > 0 ? `; ${result.rejected.length} rejected by gate` : ""),
+      (result.rejected.length > 0 ? `; ${result.rejected.length} rejected by gate` : "") +
+      (result.suppressed > 0 ? ` (previously rejected — ${result.suppressed} suppressed)` : ""),
   );
   // stdout: one line per candidate — `<kind>  <title>  <- src1, src2` — composable with other tools.
   for (const c of result.candidates) {

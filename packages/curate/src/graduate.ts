@@ -16,6 +16,7 @@ import {
   type Note,
 } from "@cmnwlth/core";
 import { curate, defaultCurator, textSimilarity, type RejectedCandidate } from "./curate.js";
+import { graduationClusterKey, loadTombstonedKeys } from "./tombstone.js";
 
 /**
  * Org-brain graduation (#110, ADR-0023): detect a fact/decision that **recurs across ≥2 project
@@ -37,9 +38,11 @@ import { curate, defaultCurator, textSimilarity, type RejectedCandidate } from "
  * is required — this is a local O(n·m) scan over already-registered brains, sufficient for the
  * acceptance bar; an ANN index is future work for large N.
  *
- * KNOWN LIMITATION (follow-up): a candidate a reviewer *rejects* is neither canon nor staged, so a
- * later run re-detects and re-stages it. Because the pass is on-demand (not a background batch) the
- * harm is low — a human chose to re-run it — but a reject-tombstone is tracked as a follow-up.
+ * REJECT-TOMBSTONES (#172): a candidate a reviewer *rejects* is neither canon nor staged, so a
+ * naive later run would re-detect and re-stage it. On reject we record the cluster's stable key in
+ * the org-brain's shared tombstone store (see {@link loadTombstonedKeys}); this pass computes each
+ * surviving cluster's key and skips tombstoned ones, reporting a `suppressed` count rather than
+ * silently dropping them. `--include-rejected` (`GraduateOptions.includeRejected`) resurfaces them.
  */
 
 /** Default cosine similarity at/above which two same-kind notes count as the same fact. */
@@ -70,6 +73,11 @@ export interface GraduateOptions {
   brainDirs?: string[];
   /** Registry path override (tests), threaded to org-brain + brain enumeration. */
   registryPath?: string;
+  /**
+   * Re-propose clusters a reviewer previously rejected (#172). Default `false`: tombstoned clusters
+   * are skipped and counted in {@link GraduationResult.suppressed}. Set `true` to resurface them.
+   */
+  includeRejected?: boolean;
 }
 
 /** A recurring-fact cluster that graduated (or would, in a dry run). */
@@ -96,6 +104,12 @@ export interface GraduationResult {
   rejected: RejectedCandidate[];
   /** Project brains skipped, with why (lock held, no comparable vectors), for transparency. */
   skippedBrains: Array<{ brain: string; reason: string }>;
+  /**
+   * Cross-brain clusters skipped because a reviewer previously rejected them (#172). Counted, never
+   * silently dropped; `includeRejected` sets this to 0 (nothing suppressed). Not included in
+   * `clusters`/`candidates`.
+   */
+  suppressed: number;
   /** Set when the whole pass did nothing (no org-brain, lock held, no embedder). */
   skipped?: string;
 }
@@ -246,6 +260,7 @@ export async function graduateToOrgBrain(opts: GraduateOptions = {}): Promise<Gr
     staged: [],
     rejected: [],
     skippedBrains: [],
+    suppressed: 0,
     skipped,
   });
   const threshold = opts.threshold ?? DEFAULT_RECURRENCE_THRESHOLD;
@@ -309,13 +324,27 @@ export async function graduateToOrgBrain(opts: GraduateOptions = {}): Promise<Gr
       pool.push(...loaded.entries);
     }
 
-    // 6) Cluster, synthesize candidates, stage via curate() (unless dry-run).
-    const clusters = clusterByRecurrence(pool, threshold);
+    // 6) Cluster, drop reviewer-rejected clusters (#172), synthesize candidates, stage via curate().
+    //    A cluster's key is a stable hash of its origin refs — the same identity the tombstone was
+    //    written under on reject — so a rejected cluster is skipped even after paraphrase, as long
+    //    as it still clusters to the same origin set. Skips are counted, never silently dropped.
+    const allClusters = clusterByRecurrence(pool, threshold);
+    const tombstoned = opts.includeRejected
+      ? new Set<string>()
+      : await loadTombstonedKeys(orgBrainDir);
     const candidates: GraduationCandidate[] = [];
     const inputs: NewNoteInput[] = [];
-    for (const cluster of clusters) {
+    let suppressed = 0;
+    for (const cluster of allClusters) {
       const rep = pickRepresentative(cluster);
       const refs = [...new Set(cluster.map((e) => `${e.source}/${e.note.frontmatter.id}`))].sort();
+      if (tombstoned.has(graduationClusterKey(refs))) {
+        suppressed++;
+        console.error(
+          `[commonwealth-curate] graduate: skipping previously-rejected cluster "${rep.note.frontmatter.title}"`,
+        );
+        continue;
+      }
       candidates.push({
         kind: rep.note.frontmatter.kind,
         title: rep.note.frontmatter.title,
@@ -326,18 +355,26 @@ export async function graduateToOrgBrain(opts: GraduateOptions = {}): Promise<Gr
     }
 
     if (opts.dryRun || inputs.length === 0) {
-      return { clusters: clusters.length, candidates, staged: [], rejected: [], skippedBrains };
+      return {
+        clusters: candidates.length,
+        candidates,
+        staged: [],
+        rejected: [],
+        skippedBrains,
+        suppressed,
+      };
     }
 
     // curate() runs the secret + dedup gate and stages into the org-brain's local staging/ —
     // NEVER captureCandidates, so nothing auto-promotes across the trust boundary.
     const curateResult = await curate(orgBrainDir, inputs, defaultCurator, embedder);
     return {
-      clusters: clusters.length,
+      clusters: candidates.length,
       candidates,
       staged: curateResult.staged,
       rejected: curateResult.rejected,
       skippedBrains,
+      suppressed,
     };
   } finally {
     await release();

@@ -5,6 +5,7 @@ import { listNotes } from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { approve, approveAll, reject } from "../src/review.js";
 import { listStaged, stageNote } from "../src/staging.js";
+import { graduationClusterKey, loadTombstonedKeys } from "../src/tombstone.js";
 
 let brainDir: string;
 
@@ -50,6 +51,33 @@ describe("review", () => {
 
     const canon = await listNotes(brainDir);
     expect(canon.map((n) => n.frontmatter.id)).not.toContain(id);
+  });
+
+  it("rejecting a graduation candidate writes a reject-tombstone; a plain note leaves none (#172)", async () => {
+    // A plain staged note (no graduated_from) leaves no tombstone.
+    const plain = await stageNote(brainDir, {
+      kind: "memory",
+      title: "Plain fact",
+      body: "Not a graduation candidate — rejecting it must not tombstone anything.",
+    });
+    await reject(brainDir, plain.frontmatter.id);
+    expect(await loadTombstonedKeys(brainDir)).toHaveLength(0);
+
+    // A graduation candidate carries graduated_from; rejecting it tombstones its cluster key.
+    const refs = ["acme/aaaaaaaaaaaa", "beta/bbbbbbbbbbbb"];
+    const grad = await stageNote(brainDir, {
+      kind: "memory",
+      title: "Graduated fact",
+      body: "A cross-brain fact proposed for the org-brain.",
+      fields: { sources: refs, graduated_from: refs },
+    });
+    await reject(brainDir, grad.frontmatter.id);
+
+    const keys = await loadTombstonedKeys(brainDir);
+    expect(keys).toHaveLength(1);
+    expect(keys.has(graduationClusterKey(refs))).toBe(true);
+    // The key is order-independent — the same origin set, any order, hashes identically.
+    expect(graduationClusterKey([...refs].reverse())).toBe(graduationClusterKey(refs));
   });
 
   it("approve-all clears staging into canon", async () => {

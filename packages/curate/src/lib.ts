@@ -29,6 +29,13 @@ export {
   type GraduationResult,
 } from "./graduate.js";
 export { approve, approveAll, listPending, reject } from "./review.js";
+export {
+  addTombstone,
+  graduationClusterKey,
+  loadTombstonedKeys,
+  tombstonePath,
+  type GraduationTombstone,
+} from "./tombstone.js";
 export { listStaged, stageNote, stagedAbsPath, stagingRoot } from "./staging.js";
 export { selectRelevant } from "./relevance.js";
 export { formatContext } from "./context.js";
