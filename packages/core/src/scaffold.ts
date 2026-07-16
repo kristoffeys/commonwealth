@@ -41,10 +41,20 @@ const BRAIN_ENTRIES = new Set<string>([
 const GITATTRIBUTES = ["COMMONWEALTH.md merge=union", "**/INDEX.md merge=union", ""].join("\n");
 
 // `staging/` is the per-user review queue — local only, never synced (ADR-0008).
+// `.commonwealth/sync.lock` is a per-process runtime lock (#100); like `index/` it is disposable
+// local state that must never be committed — otherwise a bulk op (e.g. `project adopt`) that holds
+// the lock while it `git add -A`s would sweep it into the commit and leave the tree dirty after.
 // `.DS_Store` — macOS drops one into every browsed folder; it must never enter the brain.
-const GITIGNORE = ["index/", "staging/", "*.db", "*.db-shm", "*.db-wal", ".DS_Store", ""].join(
-  "\n",
-);
+const GITIGNORE = [
+  "index/",
+  "staging/",
+  ".commonwealth/sync.lock",
+  "*.db",
+  "*.db-shm",
+  "*.db-wal",
+  ".DS_Store",
+  "",
+].join("\n");
 
 /**
  * Make `dir` a git repository with an initial scaffold commit, so the brain is operational

@@ -18,6 +18,7 @@ import {
   NOTE_KINDS,
   type NoteKind,
   persistProjectAliasMap,
+  projectIdError,
   refreshBrainStatus,
   regenerateDerived,
   resolveBrain,
@@ -29,6 +30,7 @@ import {
   unlinkSources,
   buildIndex,
 } from "@cmnwlth/core";
+import { adoptProject, type AdoptResult } from "./adopt.js";
 import { captureCandidates } from "./capture.js";
 import { consolidateCanon } from "./consolidate.js";
 import { graduateToOrgBrain } from "./graduate.js";
@@ -141,7 +143,8 @@ function usage(): void {
       "  commonwealth-curate scope deny <path>",
       "  commonwealth-curate health [--dir <brain>]",
       "  commonwealth-curate map [--dir <brain>]",
-      "  commonwealth-curate project <list | link <id> <src...> | unlink <id> [<src...>]> [--dir <brain>]",
+      "  commonwealth-curate project <list | link <id> <src...> | unlink <id> [<src...>]",
+      "      | adopt <id> [--dry-run]> [--dir <brain>]",
       "  commonwealth-curate status-cache [--dir <brain>]",
       "  commonwealth-curate consolidate [--dry-run] [--dir <brain>]",
       "  commonwealth-curate graduate [--suggest] [--dry-run] [--threshold <n>] [--org-dir <brain>]",
@@ -672,6 +675,8 @@ async function cmdMap(dir: string): Promise<void> {
  *   - `list`                             — print the map (project id → customer? + member sources).
  *   - `link   <projectId> <source...>`   — add sources to a project (creating it), then regenerate.
  *   - `unlink <projectId> [<source...>]` — remove sources (all if none given), then regenerate.
+ *   - `adopt  <projectId> [--dry-run]`   — stamp the resolved identity onto the linked historical
+ *     notes' frontmatter in one commit, then retire the redundant alias entry (ADR-0031, #241).
  *
  * Writes go through the guarded {@link persistProjectAliasMap} (refuses to clobber a corrupt map),
  * and every mutation regenerates the derived router + index so the grouping updates atomically with
@@ -711,6 +716,13 @@ async function cmdProject(dir: string, args: string[]): Promise<number> {
       console.error("usage: commonwealth project link <projectId> <source...>");
       return 2;
     }
+    // Ingestion hardening (#241): a link creates a project id the adopt path may later stamp onto
+    // hundreds of notes — reject a pathological value here, before it enters the map.
+    const idErr = projectIdError(projectId);
+    if (idErr) {
+      console.error(`Invalid project id: ${idErr}`);
+      return 2;
+    }
     await persistProjectAliasMap(dir, (map) => linkSources(map, projectId, sources));
     await buildIndex(dir);
     await regenerateDerived(dir);
@@ -739,9 +751,82 @@ async function cmdProject(dir: string, args: string[]): Promise<number> {
     return 0;
   }
 
+  if (sub === "adopt") {
+    const projectId = rest[0];
+    if (!projectId) {
+      console.error("usage: commonwealth project adopt <projectId> [--dry-run]");
+      return 2;
+    }
+    const idErr = projectIdError(projectId);
+    if (idErr) {
+      console.error(`Invalid project id: ${idErr}`);
+      return 2;
+    }
+    // `--dry-run` is a flag, not a positional; re-parse `args` to read it (the outer parse dropped
+    // unknown options into `values`, but reading it explicitly here keeps the intent local).
+    const { values } = parseArgs({
+      args,
+      options: { dir: { type: "string" }, "dry-run": { type: "boolean" } },
+      allowPositionals: true,
+      strict: false,
+    });
+    const result = await adoptProject(dir, projectId, { dryRun: values["dry-run"] === true });
+    return renderAdopt(result);
+  }
+
   console.error(`Unknown project subcommand: ${sub}`);
-  console.error("usage: commonwealth project <list | link | unlink>");
+  console.error("usage: commonwealth project <list | link | unlink | adopt>");
   return 2;
+}
+
+/** Render an {@link AdoptResult} to stdout (summary) / stderr (refusals); returns the exit code. */
+function renderAdopt(result: AdoptResult): number {
+  if (result.skipped) {
+    console.error(`[commonwealth-curate] adopt skipped: ${result.skipped}`);
+    return 1;
+  }
+
+  const label = result.customer
+    ? `"${result.project}"  (customer: ${result.customer})`
+    : `"${result.project}"`;
+  const total = result.adopted.length;
+
+  if (result.dryRun) {
+    console.log(`Dry run — no changes written. Adopt ${label}:`);
+  } else if (result.committed) {
+    console.log(`Adopted ${label} onto ${total} note(s); committed ${result.commit}.`);
+  } else {
+    console.log(
+      `Adopted ${label} onto ${total} note(s) (no commit — non-git brain or no changes).`,
+    );
+  }
+
+  for (const s of result.perSource) {
+    const verb = result.dryRun ? "would stamp" : "stamped";
+    const parts = [`${verb} ${s.adopted}`];
+    if (s.conflicts > 0) parts.push(`${s.conflicts} conflict(s)`);
+    if (s.staged > 0) parts.push(`${s.staged} staged (not adopted)`);
+    console.log(`  ${s.source}: ${parts.join(", ")}`);
+  }
+
+  if (result.conflicts.length > 0) {
+    console.log("Conflicts (declare a different project — left untouched, need review):");
+    for (const c of result.conflicts) {
+      console.log(`  ${c.id}  ${c.path}  currently project=${c.existingProject}`);
+    }
+  }
+
+  if (!result.dryRun) {
+    if (result.entryRemoved) {
+      console.log("Removed the now-redundant alias entry.");
+    } else if (result.keptSources.length > 0) {
+      console.log(
+        `Kept alias entry (sources with no adopted notes): ${result.keptSources.join(", ")}`,
+      );
+    }
+  }
+
+  return 0;
 }
 
 /**
