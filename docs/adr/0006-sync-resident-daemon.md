@@ -1,9 +1,16 @@
 # 6. Sync architecture: resident daemon
 
-- Status: Accepted
+- Status: Superseded by [ADR-0032](0032-daemonless-lifecycle-sync.md) (2026-07-16)
 - Date: 2026-07-01
 - Deciders: kristof (owner), Claude (orchestrator)
 - Relates: [architecture §2c, Components](../01-architecture.md), GitHub issues #6, #7, #8
+
+> **Superseded.** ADR-0032 moves sync into the session lifecycle hooks and demotes the resident
+> daemon to an opt-in profile. The sync **engine** decided here (the `syncOnce` cycle, serial queue,
+> conflict-as-siblings resolution, cross-process lock) is unchanged and is exactly what the hooks now
+> reuse as a library — only the *always-on daemon runner* is no longer the default. See ADR-0032 for
+> why (silent daemon death, no-`service-install` onboarding) and how (capture worker + SessionStart
+> sync, daemon-alive arbitration).
 
 ## Context
 

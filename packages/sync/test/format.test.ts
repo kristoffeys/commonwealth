@@ -8,6 +8,7 @@ const base: SyncSummary = {
   pushed: true,
   conflicts: [],
   secretsBlocked: [],
+  skippedLocked: false,
 };
 
 describe("formatSyncSummary (#99)", () => {

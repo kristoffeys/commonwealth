@@ -96,13 +96,16 @@ describe("SyncEngine.syncOnce convergence", () => {
     const before = git(fx.alice, ["rev-list", "--count", "HEAD"]);
 
     const summary = await engine.syncOnce();
-    // Contended → this pass did nothing (no commit/push), rather than racing the lock holder.
+    // Contended → this pass did nothing (no commit/push), rather than racing the lock holder. It
+    // reports `skippedLocked` so a lifecycle caller can retry/back off (ADR-0032) instead of
+    // mistaking a lock-skip for "nothing to sync".
     expect(summary).toEqual({
       committed: false,
       pulled: false,
       pushed: false,
       conflicts: [],
       secretsBlocked: [],
+      skippedLocked: true,
     });
     expect(git(fx.alice, ["rev-list", "--count", "HEAD"])).toBe(before);
 

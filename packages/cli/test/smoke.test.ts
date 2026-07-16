@@ -133,19 +133,27 @@ describe("built commonwealth binary", () => {
       expect(health).toMatch(/Brain health: \d+\/100/);
 
       // doctor --json (#134): the built binary emits a structured report resolving the mapped
-      // brain and walking the chain. No daemon runs here, so it exits non-zero — that's the point.
+      // brain and walking the chain. No daemon runs here, but under the daemonless model (ADR-0032)
+      // that is the HEALTHY default — lifecycle sync covers convergence — so the sync link is OK.
       const doc = spawnSync("node", [distEntry, "doctor", "--json"], { env, stdio: "pipe" });
       const report = JSON.parse(doc.stdout.toString()) as {
         ok: boolean;
         brain: string;
-        checks: Array<{ id: string; status: string }>;
+        checks: Array<{ id: string; status: string; detail: string }>;
       };
       expect(report.brain).toBe(brain);
       expect(report.checks.map((c) => c.id)).toEqual(
-        expect.arrayContaining(["brain", "daemon", "remote", "index", "scope"]),
+        expect.arrayContaining(["brain", "daemon", "debt", "remote", "index", "scope"]),
       );
-      expect(report.checks.find((c) => c.id === "daemon")?.status).toBe("fail");
-      expect(doc.status).toBe(1); // a failed link → non-zero exit, so CI can gate on it
+      // Sync health follows the daemonless model (ADR-0032): with no daemon the sync link is OK
+      // (lifecycle sync covers convergence), and fresh uncommitted notes are pending debt, not a
+      // failure. (The overall exit code isn't asserted here — host-integration links depend on the
+      // machine's globally-installed plugin state; the sync links are what this change owns.)
+      const sync = report.checks.find((c) => c.id === "daemon");
+      expect(sync?.status).toBe("ok");
+      expect(sync?.detail).toContain("daemonless");
+      expect(report.checks.find((c) => c.id === "debt")?.status).not.toBe("fail");
+      expect(report.checks.find((c) => c.id === "remote")?.status).not.toBe("fail");
     } finally {
       await fs.rm(scratch, { recursive: true, force: true });
     }

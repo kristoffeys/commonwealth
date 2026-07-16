@@ -51,6 +51,7 @@ describe("commonwealth doctor — diagnose()", () => {
       pidAlive: () => true,
       gitState: () => ({ kind: "tracked", behind: 0 }),
       startDaemon: () => Promise.resolve(true),
+      syncDebt: () => Promise.resolve({ uncommittedNotes: 0, unpushed: 0, oldestMs: null }),
       ...overrides,
     };
   }
@@ -69,6 +70,8 @@ describe("commonwealth doctor — diagnose()", () => {
     expect(check(report, "brain").status).toBe("ok");
     expect(check(report, "curate-runtime").status).toBe("ok");
     expect(check(report, "daemon").status).toBe("ok");
+    expect(check(report, "daemon").detail).toContain("Daemon profile");
+    expect(check(report, "debt").status).toBe("ok");
     expect(check(report, "remote").status).toBe("ok");
     expect(check(report, "index").status).toBe("ok");
     expect(check(report, "scope").status).toBe("ok");
@@ -98,12 +101,35 @@ describe("commonwealth doctor — diagnose()", () => {
     expect(report.checks.map((c) => c.id)).toEqual(["plugin", "curate-runtime", "brain"]);
   });
 
-  it("flags a dead daemon and heals it under --fix", async () => {
-    // No pid file → daemon not running.
-    const failReport = await diagnose(healthyEnv({ pidAlive: () => false }));
-    expect(check(failReport, "daemon").status).toBe("fail");
-    expect(failReport.ok).toBe(false);
+  it("treats a missing daemon as healthy lifecycle (daemonless) sync (ADR-0032)", async () => {
+    // No pid file → no daemon. This is the healthy DEFAULT now, not a failure.
+    const report = await diagnose(healthyEnv({ pidAlive: () => false }));
+    expect(report.ok).toBe(true);
+    const sync = check(report, "daemon");
+    expect(sync.status).toBe("ok");
+    expect(sync.detail).toContain("daemonless");
+  });
 
+  it("reports the daemon profile when a sync daemon is live (ADR-0032)", async () => {
+    await fs.mkdir(path.join(brain, ".commonwealth"), { recursive: true });
+    await fs.writeFile(path.join(brain, ".commonwealth", "sync.pid"), "4242\n");
+    const report = await diagnose(healthyEnv({ pidAlive: (pid) => pid === 4242 }));
+    const sync = check(report, "daemon");
+    expect(sync.status).toBe("ok");
+    expect(sync.detail).toContain("Daemon profile");
+  });
+
+  it("warns (not fails) on a stale daemon pidfile, and --fix restarts the daemon profile", async () => {
+    await fs.mkdir(path.join(brain, ".commonwealth"), { recursive: true });
+    await fs.writeFile(path.join(brain, ".commonwealth", "sync.pid"), "4242\n");
+
+    // Dead recorded pid, no --fix → a soft warning; lifecycle sync still covers convergence.
+    const warnReport = await diagnose(healthyEnv({ pidAlive: () => false }));
+    expect(warnReport.ok).toBe(true);
+    expect(check(warnReport, "daemon").status).toBe("warn");
+    expect(check(warnReport, "daemon").detail).toContain("stale daemon pidfile");
+
+    // Under --fix, the daemon profile is restarted.
     let started: string | null = null;
     const healReport = await diagnose(
       healthyEnv({
@@ -118,6 +144,39 @@ describe("commonwealth doctor — diagnose()", () => {
     expect(started).toBe(brain);
     expect(check(healReport, "daemon").status).toBe("ok");
     expect(healReport.healed).toBe(true);
+  });
+
+  it("warns on aged sync debt, showing its age and pointing at `sync once` (ADR-0032)", async () => {
+    const report = await diagnose(
+      healthyEnv({
+        syncDebt: () =>
+          Promise.resolve({
+            uncommittedNotes: 1,
+            unpushed: 2,
+            oldestMs: Date.now() - 25 * 60 * 60 * 1000, // 25h old → over the 24h threshold
+          }),
+      }),
+    );
+    const debt = check(report, "debt");
+    expect(debt.status).toBe("warn");
+    expect(debt.detail).toContain("1 uncommitted note(s)");
+    expect(debt.detail).toContain("2 unpushed commit(s)");
+    expect(debt.detail).toMatch(/\bold\b/);
+    expect(debt.fix).toBe("commonwealth sync once");
+    // A debt warning does not fail the overall report (it's a warning, not a critical link).
+    expect(report.ok).toBe(true);
+  });
+
+  it("treats fresh sync debt as ok — it flushes at the next session (ADR-0032)", async () => {
+    const report = await diagnose(
+      healthyEnv({
+        syncDebt: () =>
+          Promise.resolve({ uncommittedNotes: 1, unpushed: 0, oldestMs: Date.now() - 60_000 }),
+      }),
+    );
+    const debt = check(report, "debt");
+    expect(debt.status).toBe("ok");
+    expect(debt.detail).toContain("pending");
   });
 
   it("warns on a dangling brain marker that shadows nothing (#68)", async () => {
@@ -297,11 +356,33 @@ describe("commonwealth doctor — diagnose()", () => {
     expect(runtime.fix).toContain("npx cache");
   });
 
-  it("renders the fixes in the text report", async () => {
-    const report = await diagnose(healthyEnv({ pidAlive: () => false }));
+  it("renders per-link fixes in the text report", async () => {
+    // A hard failure (unparseable config) renders a ✗ line with its fix, plus the failed summary.
+    const configPath = path.join(tmp, "config.json");
+    const report = await diagnose(
+      healthyEnv({
+        configParse: () => Promise.resolve({ path: configPath, ok: false, error: "bad json" }),
+      }),
+    );
     const text = formatDoctorText(report);
-    expect(text).toContain("✗ Daemon");
+    expect(text).toContain("✗ Config");
     expect(text).toContain("fix:");
     expect(text).toContain("failed");
+  });
+
+  it("renders a warning line with its fix for aged sync debt", async () => {
+    const report = await diagnose(
+      healthyEnv({
+        syncDebt: () =>
+          Promise.resolve({
+            uncommittedNotes: 0,
+            unpushed: 1,
+            oldestMs: Date.now() - 48 * 60 * 60 * 1000,
+          }),
+      }),
+    );
+    const text = formatDoctorText(report);
+    expect(text).toContain("⚠ Sync debt");
+    expect(text).toContain("commonwealth sync once");
   });
 });

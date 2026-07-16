@@ -3,6 +3,11 @@ coverage/
 pnpm-lock.yaml
 LICENSE
 
+# Generated plugin bundle (gitignored, built by scripts/bundle.mjs) and harness worktrees —
+# generated artifacts, not source; excluded from formatting like dist/.
+vendor/
+.claude/
+
 # Markdown: prettier aligns tables by unicode width, which varies across Node
 # versions and makes emoji tables fail CI nondeterministically. Docs are not
 # prettier-enforced.
