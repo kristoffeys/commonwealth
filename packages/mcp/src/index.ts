@@ -1,3 +1,4 @@
+import { loadBrainConfig } from "@cmnwlth/core";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { resolveServerBrain } from "./brain.js";
 import { createServer } from "./server.js";
@@ -12,9 +13,17 @@ import { createServer } from "./server.js";
  */
 async function main(): Promise<void> {
   const resolved = await resolveServerBrain();
+  // Resolve the human-readable brain name for resource URIs (#217); fall back to the dir basename
+  // (createServer's own default) if the config can't be loaded for any reason.
+  const brainName =
+    resolved.kind === "brain"
+      ? await loadBrainConfig(resolved.brain)
+          .then((c) => c.name)
+          .catch(() => undefined)
+      : undefined;
   const server =
     resolved.kind === "brain"
-      ? createServer(resolved.brain)
+      ? createServer(resolved.brain, { kind: "none" }, brainName)
       : resolved.kind === "corrupt-config"
         ? createServer(null, {
             kind: "corrupt-config",

@@ -1,6 +1,15 @@
-import { NOTE_KINDS, type Note } from "@cmnwlth/core";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import path from "node:path";
+import { NOTE_KINDS, type Note, type NoteKind } from "@cmnwlth/core";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { PROMPTS, promptArgsSchema } from "./prompts.js";
+import {
+  listBrainResources,
+  readKindIndexResource,
+  readMapResource,
+  readNoteResource,
+  RESOURCE_SCHEME,
+} from "./resources.js";
 import {
   askBrainTool,
   listWorkState,
@@ -74,10 +83,14 @@ function brainUnavailable(reason: BrainUnavailable): ToolError {
  * @param unavailable Why no brain is available, used to shape the error when `brainDir` is `null`:
  *   `none` (nothing maps) vs `corrupt-config` (the config file is broken, #210). Ignored when a
  *   brain resolved.
+ * @param brainName Human-readable brain name used in resource URIs (`commonwealth://<name>/…`,
+ *   #217). Defaults to the brain directory's basename (which is also the scaffold's default config
+ *   name); `index.ts` passes the real configured name. Ignored when `brainDir` is `null`.
  */
 export function createServer(
   brainDir: string | null = process.cwd(),
   unavailable: BrainUnavailable = { kind: "none" },
+  brainName: string = brainDir ? path.basename(brainDir) : "commonwealth",
 ): McpServer {
   const server = new McpServer({ name: "commonwealth", version: "0.0.0" });
 
@@ -190,6 +203,10 @@ export function createServer(
     async ({ kind, title, body, tags, author }) => {
       if (brainDir === null) return brainUnavailable(unavailable);
       const result = await remember(brainDir, { kind, title, body, tags, author });
+      // A promoted note lands in canon, so it becomes a new resource — tell subscribed clients to
+      // refresh their listing (#217). In-process trigger only; cross-process sync-driven changes
+      // (a teammate's note arriving via `git pull`) are a follow-up (they need a filesystem watcher).
+      if (result.status === "promoted") server.sendResourceListChanged();
       const text =
         result.status === "promoted"
           ? `Remembered "${title}" as ${result.id} (${result.path}).`
@@ -240,6 +257,107 @@ export function createServer(
       return { content: [{ type: "text", text }], structuredContent: { notes } };
     },
   );
+
+  // --- Prompts (#216) ---------------------------------------------------------------------------
+  // Expose the command set (`ask`/`recall`/`remember`/`decide`/`status`/`promote`) as MCP prompts,
+  // so every MCP client — not just the Claude Code plugin — gets Commonwealth's verbs. Definitions
+  // are ported (single-source) from packages/plugin/commands/*.md; see prompts.ts. They're static,
+  // so we don't emit notifications/prompts/list_changed; registering them advertises the `prompts`
+  // capability. Prompts are just instruction text (they don't touch the brain), so we register them
+  // even when no brain is resolved — the tools they invoke report the "no brain" error themselves.
+  for (const def of PROMPTS) {
+    // Omit argsSchema entirely for a no-argument prompt: an empty zod object shape makes the SDK
+    // require an (empty) arguments object, so `prompts/get` with no arguments fails validation.
+    const argsSchema = def.args.length > 0 ? promptArgsSchema(def) : undefined;
+    server.registerPrompt(
+      def.name,
+      { title: def.title, description: def.description, ...(argsSchema ? { argsSchema } : {}) },
+      (args: Record<string, string | undefined>) => ({
+        messages: [{ role: "user", content: { type: "text", text: def.render(args) } }],
+      }),
+    );
+  }
+
+  // --- Resources (#217) -------------------------------------------------------------------------
+  // Read-only browse/@-mention surface: the map, per-kind indexes, and individual notes. Only when
+  // a brain resolved (no brain → no resources to serve; the tools already explain why). Read
+  // semantics mirror the `read` tool exactly (canon only, superseded marked); see resources.ts.
+  if (brainDir !== null) {
+    const dir = brainDir;
+
+    // The brain map + the per-kind indexes share a one-path-segment shape
+    // (commonwealth://<brain>/COMMONWEALTH.md and commonwealth://<brain>/<kind>). One template
+    // enumerates and serves both; the note template below handles the two-segment note URIs.
+    // Number of path segments after `commonwealth://<brain>/`: 1 for map/index URIs, 2 for notes.
+    const authority = `${RESOURCE_SCHEME}://${brainName}/`;
+    const pathDepth = (uri: string): number => uri.slice(authority.length).split("/").length;
+
+    const kindSet = new Set<string>(NOTE_KINDS);
+    server.registerResource(
+      "commonwealth-overview",
+      new ResourceTemplate(`${RESOURCE_SCHEME}://${brainName}/{segment}`, {
+        list: async () => {
+          const all = await listBrainResources(dir, brainName);
+          return { resources: all.filter((r) => pathDepth(r.uri) === 1) };
+        },
+      }),
+      { description: "The brain map (COMMONWEALTH.md) and per-kind indexes." },
+      async (uri, { segment }) => {
+        const seg = String(segment);
+        if (seg === "COMMONWEALTH.md") {
+          return {
+            contents: [
+              { uri: uri.href, mimeType: "text/markdown", text: await readMapResource(dir) },
+            ],
+          };
+        }
+        if (kindSet.has(seg)) {
+          return {
+            contents: [
+              {
+                uri: uri.href,
+                mimeType: "text/markdown",
+                text: await readKindIndexResource(dir, seg as NoteKind),
+              },
+            ],
+          };
+        }
+        throw new Error(`Unknown resource: ${uri.href}`);
+      },
+    );
+
+    // Individual notes (+ the "…N more" sentinel), all two-segment URIs: <brain>/<kind>/<id>.
+    server.registerResource(
+      "commonwealth-note",
+      new ResourceTemplate(`${RESOURCE_SCHEME}://${brainName}/{kind}/{id}`, {
+        list: async () => {
+          const all = await listBrainResources(dir, brainName);
+          return { resources: all.filter((r) => pathDepth(r.uri) === 2) };
+        },
+      }),
+      { description: "Individual canon notes (superseded ones are readable but marked)." },
+      async (uri, { kind, id }) => {
+        const k = String(kind);
+        const noteId = String(id);
+        if (k === "_more") {
+          return {
+            contents: [
+              {
+                uri: uri.href,
+                mimeType: "text/markdown",
+                text:
+                  "More notes than the list cap exposes. Use the `search` tool or a per-kind " +
+                  "index resource to reach the rest — nothing is hidden, just not enumerated.",
+              },
+            ],
+          };
+        }
+        const text = await readNoteResource(dir, k, noteId);
+        if (text === null) throw new Error(`No canon note ${k}/${noteId} in this brain.`);
+        return { contents: [{ uri: uri.href, mimeType: "text/markdown", text }] };
+      },
+    );
+  }
 
   return server;
 }

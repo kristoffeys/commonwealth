@@ -71,7 +71,12 @@ commonwealth init
    propagation.
 
 > After install, restart the selected agent and open a new session/thread so it loads the plugin.
-> In Claude Code, `/mcp` should list the `commonwealth` server.
+> In Claude Code, `/mcp` should list the `commonwealth` server. Beyond its tools (`search`,
+> `ask`, `read`, `remember`, …), the MCP server exposes the command set as **prompts**
+> (`/mcp__commonwealth__ask`, `remember`, `decide`, `recall`, `status`, `promote`) and the brain
+> as read-only **resources** (`commonwealth://<brain>/…` — the map, per-kind indexes, and
+> individual notes you can @-mention to pin into context), so Cursor/Windsurf/Zed/Claude Desktop
+> users get Commonwealth's verbs and browsing natively, not just Claude Code.
 > In Codex, run `/hooks`, review Commonwealth, and trust the current hook definitions; unreviewed
 > plugin hooks are skipped.
 
