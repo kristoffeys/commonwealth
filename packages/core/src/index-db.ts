@@ -3,7 +3,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { loadBrainConfig } from "./config.js";
 import { cosineSimilarity, embedProvider, type Embedder } from "./embed.js";
-import { listNotes } from "./notes.js";
+import { listNoteFiles, listNotes } from "./notes.js";
 import { loadProjectAliasMap, resolveNoteProject, type ProjectAliasMap } from "./projects.js";
 import { type Note, type NoteKind } from "./schema.js";
 
@@ -133,6 +133,12 @@ export async function buildIndex(
   await fs.mkdir(path.join(brainDir, INDEX_DIR), { recursive: true });
   const notes = await listNotes(brainDir);
 
+  // Snapshot the cheap staleness signature of the note files we are about to index (#234). Stored
+  // alongside the index so a later search can detect hand-edits/adds/removes since this build and
+  // reconcile-on-read. Computed here (from the same file set) so the stored signature always
+  // describes exactly what the index contains.
+  const signature = await computeBrainSignature(brainDir);
+
   // Resolve the embedder BEFORE opening the db and OUTSIDE the sync transaction: embedding is
   // async and better-sqlite3 transactions are synchronous, so all vectors must exist up front.
   // Default (flag off, or resolution/embed fails) is a vector-free build — never a crash — so a
@@ -179,6 +185,15 @@ export async function buildIndex(
           vec: Buffer.from(v.vec.buffer, v.vec.byteOffset, v.vec.byteLength),
         });
       }
+
+      // Persist the staleness signature (#234) in the same transaction, so the index and the
+      // signature describing it always land together (or roll back together).
+      db.exec("DROP TABLE IF EXISTS meta;");
+      db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);");
+      db.prepare("INSERT INTO meta (key, value) VALUES (?, ?);").run(
+        SIGNATURE_KEY,
+        JSON.stringify(signature),
+      );
     });
     rebuild(notes.map(toRow), vectorRows);
 
@@ -316,18 +331,116 @@ function hasFtsTable(db: Database.Database): boolean {
   return row !== undefined;
 }
 
+/** `meta` key under which the note-set staleness signature is stored (#234). */
+const SIGNATURE_KEY = "signature";
+
 /**
- * Escape a user query for FTS5 by wrapping each whitespace-separated token as a
- * quoted string, so punctuation in the query can't be parsed as FTS operators.
- * Empty queries yield "" (which matches nothing).
+ * A cheap fingerprint of the note files on disk (#234): the file COUNT and the MAX mtime across
+ * them. Every change to canon moves at least one of these — an add/remove shifts the count, an
+ * edit (or a replace at the same count) bumps a file's mtime above the previous max — so comparing
+ * it against the signature stored at index-build time detects hand-edits and out-of-band git pulls
+ * without reading a single note body.
  */
-function toMatchQuery(query: string): string {
+interface BrainSignature {
+  count: number;
+  maxMtimeMs: number;
+}
+
+/**
+ * Compute the current {@link BrainSignature} by stat-ing every note file — O(files) stat calls,
+ * no content reads. Files that vanish between the directory walk and the stat are skipped (a
+ * concurrent delete simply lowers the count, which is itself a detected change).
+ */
+async function computeBrainSignature(brainDir: string): Promise<BrainSignature> {
+  const files = await listNoteFiles(brainDir);
+  let maxMtimeMs = 0;
+  let count = 0;
+  for (const rel of files) {
+    try {
+      const st = await fs.stat(path.join(brainDir, rel));
+      count += 1;
+      if (st.mtimeMs > maxMtimeMs) maxMtimeMs = st.mtimeMs;
+    } catch {
+      // Raced with a delete between walk and stat — treat as absent (lower count = a change).
+    }
+  }
+  return { count, maxMtimeMs };
+}
+
+/** Read the signature stored in the index, or `null` when absent (no db / old index / no row). */
+async function readStoredSignature(brainDir: string): Promise<BrainSignature | null> {
+  const file = dbPath(brainDir);
+  try {
+    await fs.access(file);
+  } catch {
+    return null;
+  }
+  const db = new Database(file, { readonly: true });
+  try {
+    const hasTable = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'")
+      .get();
+    if (hasTable === undefined) return null; // index built before #234 → force a reconcile rebuild
+    const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(SIGNATURE_KEY) as
+      { value: string } | undefined;
+    if (!row) return null;
+    const parsed = JSON.parse(row.value) as BrainSignature;
+    if (typeof parsed.count !== "number" || typeof parsed.maxMtimeMs !== "number") return null;
+    return parsed;
+  } catch {
+    return null;
+  } finally {
+    db.close();
+  }
+}
+
+/** How long a per-process staleness check is trusted before we re-stat (bounds rapid re-searches). */
+const RECONCILE_TTL_MS = 5000;
+
+/** Per-process time (epoch ms) of the last staleness check, keyed by resolved brain dir (#234). */
+const reconcileChecked = new Map<string, number>();
+
+/** Reset the reconcile TTL cache — tests only, so a fresh brain dir never inherits a stale stamp. */
+export function __resetReconcileCacheForTests(): void {
+  reconcileChecked.clear();
+}
+
+/**
+ * Reconcile-on-read (#234): before serving results, cheaply detect whether canon changed since the
+ * index was built and, if so, rebuild it — so hand-edited notes and files dropped in by a git pull
+ * are honored WITHOUT the sync daemon or an explicit rebuild. The check is a single {@link
+ * BrainSignature} comparison (O(files) stat calls, no body reads); a mismatch triggers a full
+ * {@link buildIndex} (which re-embeds vectors when a provider is configured, mirroring its normal
+ * gating). The check is memoized per process for {@link RECONCILE_TTL_MS} so a burst of searches
+ * pays it once — the "daemonless tax, paid once when nothing changed" (agentcairn's framing).
+ */
+async function reconcileIfStale(brainDir: string): Promise<void> {
+  const key = path.resolve(brainDir);
+  const now = Date.now();
+  const last = reconcileChecked.get(key);
+  if (last !== undefined && now - last < RECONCILE_TTL_MS) return;
+  reconcileChecked.set(key, now);
+
+  const stored = await readStoredSignature(brainDir);
+  const current = await computeBrainSignature(brainDir);
+  if (stored && stored.count === current.count && stored.maxMtimeMs === current.maxMtimeMs) {
+    return; // nothing changed on disk since the last build
+  }
+  await buildIndex(brainDir);
+}
+
+/**
+ * Split a user query into FTS5 match tokens: each whitespace-separated word wrapped as a quoted
+ * string, so punctuation in the query can't be parsed as an FTS operator. Returns [] for an
+ * empty/whitespace query. The quoting is the shared basis for both the implicit-AND match (tokens
+ * joined by spaces) and the OR fallback (tokens joined by ` OR `, #209).
+ */
+function toMatchTokens(query: string): string[] {
   return query
     .split(/\s+/)
     .map((t) => t.replace(/"/g, ""))
     .filter((t) => t.length > 0)
-    .map((t) => `"${t}"`)
-    .join(" ");
+    .map((t) => `"${t}"`);
 }
 
 /** Hard cap on how long we wait for the query embedding before falling back to lexical (ADR-0025). */
@@ -429,16 +542,24 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 
 /**
  * Lexical + semantic hybrid search over the derived index (ADR-0025). Builds the index on first
- * use if it is missing, but does NOT detect subsequent note additions/edits/removals — the index
- * refreshes only when {@link buildIndex} is called. Callers that need fresh results after writes
- * should rebuild first.
+ * use if it is missing, and reconcile-on-read (#234) rebuilds it when the note files changed since
+ * the last build — so hand-edits and out-of-band git pulls are reflected WITHOUT an explicit
+ * rebuild (the check is a cheap per-process signature comparison; see {@link reconcileIfStale}).
+ *
+ * The lexical layer runs FTS5's implicit-AND first; when that returns nothing and the query has ≥2
+ * tokens it retries the same tokens joined by ` OR ` (#209), so natural-language questions whose
+ * stopwords (did/we/before) would never all co-occur still retrieve — bm25 keeps multi-term
+ * matches ranked above single-term ones. The OR fallback honors the same kind/source/superseded
+ * filters and stale demotion as the AND query.
  *
  * When an embeddings provider is configured and the `semanticSearch` flag is on, the BM25 list is
  * fused with a cosine-ranked list (over the per-note `vectors` table) via reciprocal-rank fusion,
- * so paraphrases and stopword-heavy questions that FTS5's implicit-AND misses still retrieve. All
- * degradation paths (no provider, no vectors, embed failure/timeout) return exactly the lexical
- * result. Semantic candidates are filtered by the SAME note metadata (kind/source/superseded) as
- * lexical hits, and stale notes stay demoted below fresh ones after fusion.
+ * so paraphrases and stopword-heavy questions that FTS5's implicit-AND misses still retrieve. The
+ * lexical list feeding the fusion is the AND result, or the OR-fallback result when AND is empty,
+ * so lexical-OR hits and semantic hits both join RRF. All degradation paths (no provider, no
+ * vectors, embed failure/timeout) return exactly the lexical result. Semantic candidates are
+ * filtered by the SAME note metadata (kind/source/superseded) as lexical hits, and stale notes
+ * stay demoted below fresh ones after fusion.
  *
  * NOTE: with the semantic path active, `score` is the RRF value (Σ 1/(60+rank) over the lists a
  * note appears in), NOT the negated BM25 of the lexical-only path. It remains strictly ordinal —
@@ -470,8 +591,14 @@ export async function search(
     if (!healthy) await buildIndex(brainDir);
   }
 
-  const match = toMatchQuery(query);
-  if (match === "") return [];
+  // Reconcile-on-read (#234): rebuild if canon changed on disk since the index was built.
+  await reconcileIfStale(brainDir);
+
+  const tokens = toMatchTokens(query);
+  if (tokens.length === 0) return [];
+  const match = tokens.join(" ");
+  // OR fallback (#209): only meaningful with ≥2 tokens (a single token's AND and OR are identical).
+  const matchOr = tokens.length >= 2 ? tokens.join(" OR ") : null;
 
   const limit = opts?.limit ?? 20;
   // Resolve the semantic ingredients BEFORE opening the search db (loadVectors uses its own
@@ -480,23 +607,35 @@ export async function search(
 
   const db = new Database(dbPath(brainDir), { readonly: true });
   try {
-    if (!semantic) return lexicalSearch(db, match, opts, limit);
-    return hybridSearch(db, match, opts, limit, semantic);
+    if (!semantic) return lexicalSearch(db, match, matchOr, opts, limit);
+    return hybridSearch(db, match, matchOr, opts, limit, semantic);
   } finally {
     db.close();
   }
 }
 
+/** Raw FTS5 row shape for a lexical query, before mapping to {@link SearchResult}. */
+interface LexRow {
+  id: string;
+  kind: NoteKind;
+  title: string;
+  path: string;
+  source: string;
+  snippet: string;
+  score: number;
+}
+
 /**
- * The lexical-only (FTS5) result — the pre-ADR-0025 behaviour, kept byte-identical for brains
- * with no embeddings provider (or `semanticSearch` off). `score` is negated BM25 (higher = better).
+ * Run the lexical (FTS5) query for one MATCH expression, applying every filter (kind/source/
+ * superseded) and stale demotion. `match` is either the implicit-AND expression or the OR
+ * fallback — the SQL is identical, so both paths share filtering and ordering exactly (#209).
  */
-function lexicalSearch(
+function runLexicalQuery(
   db: Database.Database,
   match: string,
   opts: SearchOptions | undefined,
   limit: number,
-): SearchResult[] {
+): LexRow[] {
   // snippet(): excerpt of the body column (index 4) with matches marked by [ ].
   // bm25() returns a negative-ish score where lower = more relevant, so we negate
   // it to expose a positive score where higher = better.
@@ -523,15 +662,24 @@ function lexicalSearch(
   sql += " ORDER BY (status = 'stale'), bm25(notes_fts) LIMIT ?";
   params.push(limit);
 
-  const rows = db.prepare(sql).all(...params) as Array<{
-    id: string;
-    kind: NoteKind;
-    title: string;
-    path: string;
-    source: string;
-    snippet: string;
-    score: number;
-  }>;
+  return db.prepare(sql).all(...params) as LexRow[];
+}
+
+/**
+ * The lexical-only (FTS5) result — the pre-ADR-0025 behaviour, kept byte-identical for brains
+ * with no embeddings provider (or `semanticSearch` off). `score` is negated BM25 (higher = better).
+ * Runs the implicit-AND query first; if it matches nothing and an OR fallback exists (≥2 tokens),
+ * retries with the OR expression (#209) so stopword-heavy questions still retrieve.
+ */
+function lexicalSearch(
+  db: Database.Database,
+  match: string,
+  matchOr: string | null,
+  opts: SearchOptions | undefined,
+  limit: number,
+): SearchResult[] {
+  let rows = runLexicalQuery(db, match, opts, limit);
+  if (rows.length === 0 && matchOr) rows = runLexicalQuery(db, matchOr, opts, limit);
 
   return rows.map((r) => ({
     id: r.id,
@@ -557,6 +705,7 @@ interface LexCandidate {
 function hybridSearch(
   db: Database.Database,
   match: string,
+  matchOr: string | null,
   opts: SearchOptions | undefined,
   limit: number,
   semantic: { queryVec: Float32Array; vectors: Map<string, Float32Array> },
@@ -572,22 +721,27 @@ function hybridSearch(
   // Lexical candidates: relevance-ordered (bm25 only, no stale demotion — that is applied once,
   // after fusion), filtered like the lexical path, capped at max(limit, CAP) to feed the fusion.
   const cap = Math.max(limit, SEMANTIC_CANDIDATE_CAP);
-  const lexParams: (string | number)[] = [match];
   let lexSql =
     "SELECT id, snippet(notes_fts, 4, '[', ']', '…', 12) AS snippet " +
     "FROM notes_fts WHERE notes_fts MATCH ?";
+  const filterParams: (string | number)[] = [];
   if (kind) {
     lexSql += " AND kind = ?";
-    lexParams.push(kind);
+    filterParams.push(kind);
   }
   if (source) {
     lexSql += " AND source = ?";
-    lexParams.push(source);
+    filterParams.push(source);
   }
   if (!includeSuperseded) lexSql += " AND superseded = 0";
   lexSql += " ORDER BY bm25(notes_fts) LIMIT ?";
-  lexParams.push(cap);
-  const lexRows = db.prepare(lexSql).all(...lexParams) as LexCandidate[];
+  const lexStmt = db.prepare(lexSql);
+  const runLex = (m: string): LexCandidate[] =>
+    lexStmt.all(m, ...filterParams, cap) as LexCandidate[];
+  // OR fallback (#209): when the AND candidate list is empty, the lexical list feeding RRF becomes
+  // the OR result — so lexical-OR hits join the fusion alongside the semantic candidates.
+  let lexRows = runLex(match);
+  if (lexRows.length === 0 && matchOr) lexRows = runLex(matchOr);
 
   // Semantic candidates: cosine over every vector, filtered by the SAME note metadata so a
   // superseded / wrong-kind / wrong-source note can never resurface through the vector side.

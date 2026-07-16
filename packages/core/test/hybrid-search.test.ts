@@ -55,11 +55,13 @@ describe("hybrid semantic retrieval (ADR-0025, #213)", () => {
     const embedder = keywordEmbedder({ shopware: 0, payroll: 1 });
     await buildIndex(dir, { embedder });
 
-    // Sanity: pure lexical (embedder forced off) returns nothing for the stopword query.
+    // FTS5 implicit-AND finds nothing for the stopword query, but the OR fallback (#209) now
+    // retrieves the Shopware note lexically too — so both the lexical-only and the hybrid paths
+    // surface it. Coherent interplay: OR-fallback and semantic hits both feed the fused result.
     const lexical = await search(dir, "did we use shopware before?", { embedder: null });
-    expect(lexical).toHaveLength(0);
+    expect(lexical.map((h) => h.title)).toContain("Ecommerce platform");
 
-    // Hybrid: the semantic side matches the Shopware note.
+    // Hybrid: the fused (lexical-OR ∪ semantic) result still matches the Shopware note.
     const hybrid = await search(dir, "did we use shopware before?", { embedder });
     expect(hybrid.map((h) => h.title)).toContain("Ecommerce platform");
     expect(hybrid[0]!.score).toBeGreaterThan(0);
@@ -104,10 +106,11 @@ describe("hybrid semantic retrieval (ADR-0025, #213)", () => {
     const embedder = keywordEmbedder({ shopware: 0 });
     await buildIndex(dir, { embedder });
 
-    // This stopword-heavy query shares only the "shopware" concept, so FTS5-AND matches nothing —
-    // every hit below therefore comes purely from the semantic side, isolating its filtering.
+    // Stopword-heavy query: FTS5 implicit-AND matches nothing, but both the OR fallback (#209) and
+    // the semantic side surface the shopware notes. The kind/source/superseded filters below apply
+    // identically to the lexical and semantic candidates, so the expected titles hold for the
+    // fused result no matter which list produced a given hit.
     const q = "was shopware ever evaluated for reuse";
-    expect(await search(dir, q, { embedder: null })).toHaveLength(0);
 
     // Default: superseded note is excluded from semantic hits too.
     const canon = await search(dir, q, { embedder });
@@ -191,5 +194,21 @@ describe("hybrid semantic retrieval (ADR-0025, #213)", () => {
     expect(titles[0]).toBe("Alpha both");
     expect(titles).toContain("Beta semantic");
     expect(titles[titles.length - 1]).toBe("Alpha stale");
+  });
+
+  it("feeds lexical-OR hits into the fusion when the semantic side misses (AND→OR→RRF, #209)", async () => {
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Migration",
+      body: "we migrated the storefront to shopware last year",
+    });
+    // The embedder keys on an axis neither the note nor the query hits, so every vector is the
+    // zero vector → cosine 0 → the semantic list is empty. Only the lexical-OR fallback can
+    // surface the note, proving OR-fallback results join the fused list.
+    const embedder = keywordEmbedder({ kubernetes: 0 });
+    await buildIndex(dir, { embedder });
+
+    const hits = await search(dir, "did we use shopware before", { embedder });
+    expect(hits.map((h) => h.title)).toContain("Migration");
   });
 });
