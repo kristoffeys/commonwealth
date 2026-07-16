@@ -2,9 +2,11 @@ import {
   askBrain,
   buildIndex,
   listNotes,
+  manifestStamp,
   readNote,
   regenerateDerived,
   resolveContributorIdentity,
+  resolveProjectManifest,
   resolveProjectSource,
   search,
   type AskResult,
@@ -128,6 +130,14 @@ export async function remember(
   // Attribute the note to the project the MCP is running in (ADR-0015), so it files under
   // <project>/<kind>/ like hook-captured notes. Best-effort: unresolved → unattributed.
   const source = (await resolveProjectSource(process.cwd())) ?? undefined;
+  // Declared engagement identity (ADR-0031): a `.commonwealth/project.json` manifest at/above the
+  // MCP process cwd stamps `project` + a `customer:<slug>` tag; absent → identity resolves from the
+  // alias map / source-as-singleton at read time.
+  const manifest = await resolveProjectManifest(process.cwd());
+  const stamp = manifest ? manifestStamp(manifest) : null;
+  const noteTags = tags ?? [];
+  const stampedTags =
+    stamp?.tag && !noteTags.includes(stamp.tag) ? [...noteTags, stamp.tag] : noteTags;
   const contributor = await resolveContributorIdentity(process.cwd());
   if (!contributor) return { status: "rejected", reason: "missing-contributor-identity" };
   const result = await captureCandidates(
@@ -137,8 +147,9 @@ export async function remember(
         kind,
         title,
         body,
-        tags: tags ?? [],
+        tags: stampedTags,
         ...(source ? { source } : {}),
+        ...(stamp ? { project: stamp.project } : {}),
       },
     ],
     undefined,

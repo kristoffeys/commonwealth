@@ -119,6 +119,9 @@ commonwealth sync start|stop|once         # control the background sync (foregro
 commonwealth service <install|uninstall|status|restart>  # run sync as an OS background service
 commonwealth health                       # freshness / trust score for the brain
 commonwealth map                          # brain-at-a-glance: per-kind counts + top contributors
+commonwealth project list                 # engagement links: which sources are one project
+commonwealth project link <id> <src...>   # link a dev repo + business folder into one engagement
+commonwealth project unlink <id> [<src>]  # undo a link (derived views only; no notes change)
 commonwealth statusline [install]         # ambient status line for Claude Code (see below)
 commonwealth graduate [--suggest]         # propose facts recurring across ≥2 brains to the org-brain
 commonwealth doctor [--fix]               # diagnose (and optionally fix) the setup
@@ -246,6 +249,26 @@ commonwealth add ~/work/new-project      # allowlist + brain mapping + symlink, 
 ```
 
 which wires it to the brain your current directory resolves to (or pass `--brain <dir>`).
+
+### One engagement, many sources (project identity)
+
+A note records **where** it was captured in its `source` (the git `origin` slug for a repo, the
+folder name otherwise) — honest provenance that is never rewritten. But one real engagement often
+spans several sources: a customer's dev repo *and* their business folder. Link them into one
+**project** so every grouped view — `COMMONWEALTH.md`, health — reads as a single engagement:
+
+```bash
+commonwealth project link acme "weareantenna/acme-website" "Acme Website"
+commonwealth project list                 # see the engagement and its member sources
+commonwealth project unlink acme          # undo — derived views only, no note changes
+```
+
+Linking is always explicit (never a fuzzy name-match), it touches **no note files**, and it is
+retroactive: existing notes regroup the moment you link. A working folder can also declare its
+identity up front with a `.commonwealth/project.json` manifest (`{ "project": "acme", "customer":
+"Acme Corp" }`) — capture then stamps the project onto new notes and the customer as a
+`customer:<slug>` tag. The alias map is the retroactive/corrective layer; the manifest is the
+save-time path. (See [ADR-0031](docs/adr/0031-project-identity-resolved-at-read-time.md).)
 
 ## Run sync in the background (a service)
 

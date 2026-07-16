@@ -6,19 +6,28 @@ import {
   brainHealth,
   brainMap,
   computeBrainHealth,
+  computeHealthByProject,
   ensureContributorPerson,
   FEATURE_FLAGS,
+  linkSources,
   listNotes,
   loadBrainConfig,
+  loadProjectAliasMap,
+  manifestStamp,
   type NewNoteInput,
   NOTE_KINDS,
   type NoteKind,
+  persistProjectAliasMap,
   refreshBrainStatus,
+  regenerateDerived,
   resolveBrain,
   resolveBrainDir,
   resolveContributorIdentity,
+  resolveProjectManifest,
   resolveProjectSource,
   setFeature,
+  unlinkSources,
+  buildIndex,
 } from "@cmnwlth/core";
 import { captureCandidates } from "./capture.js";
 import { consolidateCanon } from "./consolidate.js";
@@ -132,6 +141,7 @@ function usage(): void {
       "  commonwealth-curate scope deny <path>",
       "  commonwealth-curate health [--dir <brain>]",
       "  commonwealth-curate map [--dir <brain>]",
+      "  commonwealth-curate project <list | link <id> <src...> | unlink <id> [<src...>]> [--dir <brain>]",
       "  commonwealth-curate status-cache [--dir <brain>]",
       "  commonwealth-curate consolidate [--dry-run] [--dir <brain>]",
       "  commonwealth-curate graduate [--suggest] [--dry-run] [--threshold <n>] [--org-dir <brain>]",
@@ -385,7 +395,22 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
   // Stamp each candidate with its originating project (ADR-0015) from the session cwd, so the
   // note is filed under `<project>/<kind>/`. An explicit per-candidate source is preserved.
   const source = (await resolveProjectSource(cwd)) ?? undefined;
-  const stamped = candidates.map((c) => (c.source ? c : { ...c, source }));
+  // Declared engagement IDENTITY (ADR-0031): if a `.commonwealth/project.json` manifest is present
+  // at/above the session cwd, stamp its `project` into frontmatter and its `customer` as a
+  // `customer:<slug>` tag. Absent → nothing stamped (the alias map or the source-as-singleton
+  // fallback resolves identity at read time). An explicit per-candidate `project` is preserved.
+  const manifest = await resolveProjectManifest(cwd);
+  const stamp = manifest ? manifestStamp(manifest) : null;
+  const stamped = candidates.map((c) => {
+    const withSource = c.source ? c : { ...c, source };
+    if (!stamp) return withSource;
+    const project = withSource.project ?? stamp.project;
+    const tags =
+      stamp.tag && !(withSource.tags ?? []).includes(stamp.tag)
+        ? [...(withSource.tags ?? []), stamp.tag]
+        : withSource.tags;
+    return { ...withSource, project, ...(tags ? { tags } : {}) };
+  });
 
   const contributor = values.force === true ? null : await resolveContributorIdentity(cwd);
   if (values.force !== true && !contributor) {
@@ -584,6 +609,19 @@ async function cmdHealth(dir: string): Promise<void> {
   console.log(`  unverified:   ${h.unverified.count}`);
   console.log(`  contradicted: ${h.contradicted.count}`);
   console.log(`  orphaned:     ${h.orphaned.count}`);
+
+  // Per-resolved-project rollup (ADR-0031): linked sources roll up as one engagement. Shown only
+  // when more than one project is present, so a single-project brain's output is unchanged.
+  const byProject = await computeHealthByProject(dir);
+  if (byProject.length > 1) {
+    console.log("By project:");
+    const width = Math.max(...byProject.map((p) => p.project.length));
+    for (const { project, report } of byProject) {
+      console.log(
+        `  ${project.padEnd(width)}  ${report.score}/100  (${report.total} note${report.total === 1 ? "" : "s"})`,
+      );
+    }
+  }
 }
 
 /** Longest per-kind bar, in `█` chars, at the highest-count kind. Shorter bars scale down. */
@@ -626,6 +664,84 @@ async function cmdMap(dir: string): Promise<void> {
   for (const { author, count } of m.contributors) {
     console.log(`  ${author.padEnd(authorWidth)}  ${count}`);
   }
+}
+
+/**
+ * `project` — curate the brain's project alias map (ADR-0031): the explicit, versioned linking of
+ * capture `source`s into one engagement identity. Subcommands:
+ *   - `list`                             — print the map (project id → customer? + member sources).
+ *   - `link   <projectId> <source...>`   — add sources to a project (creating it), then regenerate.
+ *   - `unlink <projectId> [<source...>]` — remove sources (all if none given), then regenerate.
+ *
+ * Writes go through the guarded {@link persistProjectAliasMap} (refuses to clobber a corrupt map),
+ * and every mutation regenerates the derived router + index so the grouping updates atomically with
+ * the map — linking is retroactive and touches no note file (confirmation over inference: never a
+ * fuzzy auto-merge). Returns a process exit code.
+ */
+async function cmdProject(dir: string, args: string[]): Promise<number> {
+  // `args` still carries the shared `--dir <brain>` (peeled off for VALUE in main but not removed
+  // from the arg list). Re-parse to drop it, so only the real positionals reach the subcommand.
+  const { positionals } = parseArgs({
+    args,
+    options: { dir: { type: "string" } },
+    allowPositionals: true,
+    strict: false,
+  });
+  const [sub, ...rest] = positionals;
+
+  if (!sub || sub === "list") {
+    const map = await loadProjectAliasMap(dir);
+    const ids = Object.keys(map).sort();
+    if (ids.length === 0) {
+      console.log("No project links yet. Use `commonwealth project link <projectId> <source...>`.");
+      return 0;
+    }
+    for (const id of ids) {
+      const entry = map[id]!;
+      const customer = entry.customer ? `  (customer: ${entry.customer})` : "";
+      console.log(`${id}${customer}`);
+      for (const s of [...entry.sources].sort()) console.log(`  - ${s}`);
+    }
+    return 0;
+  }
+
+  if (sub === "link") {
+    const [projectId, ...sources] = rest;
+    if (!projectId || sources.length === 0) {
+      console.error("usage: commonwealth project link <projectId> <source...>");
+      return 2;
+    }
+    await persistProjectAliasMap(dir, (map) => linkSources(map, projectId, sources));
+    await buildIndex(dir);
+    await regenerateDerived(dir);
+    console.log(`Linked ${sources.length} source(s) into "${projectId}".`);
+    return 0;
+  }
+
+  if (sub === "unlink") {
+    const [projectId, ...sources] = rest;
+    if (!projectId) {
+      console.error("usage: commonwealth project unlink <projectId> [<source...>]");
+      return 2;
+    }
+    const current = await loadProjectAliasMap(dir);
+    const entry = current[projectId];
+    if (!entry) {
+      console.error(`No such project "${projectId}".`);
+      return 1;
+    }
+    // No sources given → unlink the whole project (all its sources).
+    const toRemove = sources.length > 0 ? sources : entry.sources;
+    await persistProjectAliasMap(dir, (map) => unlinkSources(map, projectId, toRemove));
+    await buildIndex(dir);
+    await regenerateDerived(dir);
+    console.log(`Unlinked ${toRemove.length} source(s) from "${projectId}".`);
+    return 0;
+  }
+
+  console.error(`Unknown project subcommand: ${sub}`);
+  console.error("usage: commonwealth project <list | link | unlink>");
+  return 2;
 }
 
 /**
@@ -780,6 +896,9 @@ async function main(): Promise<void> {
       break;
     case "map":
       await cmdMap(await requireBrain());
+      break;
+    case "project":
+      process.exitCode = await cmdProject(await requireBrain(), rest);
       break;
     case "status-cache":
       await cmdStatusCache(await requireBrain());

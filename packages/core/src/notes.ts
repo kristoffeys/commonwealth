@@ -21,6 +21,8 @@ export interface NewNoteInput {
   authorRef?: string;
   /** Originating project (git repo identity); recorded as frontmatter `source` (ADR-0015). */
   source?: string;
+  /** Declared engagement identity, recorded as frontmatter `project` (ADR-0031); stamped only when a manifest declares it. */
+  project?: string;
   /** `YYYY-MM-DD`; defaults to today. */
   created?: string;
   /** Extra kind-specific frontmatter fields, validated against the schema. */
@@ -64,6 +66,7 @@ const KEY_ORDER = [
   "attribution_key",
   "email",
   "source",
+  "project",
   "verified",
   "deciders",
   "supersedes",
@@ -142,6 +145,7 @@ export async function writeNote(brainDir: string, input: NewNoteInput): Promise<
     ...(input.author ? { author: input.author } : {}),
     ...(input.authorRef ? { author_ref: input.authorRef } : {}),
     ...(input.source ? { source: input.source } : {}),
+    ...(input.project ? { project: input.project } : {}),
   };
   const frontmatter = Frontmatter.parse(raw);
   const note: Note = { frontmatter, body: input.body.trim(), path: relPath };

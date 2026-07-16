@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import { loadBrainConfig } from "./config.js";
 import { cosineSimilarity, embedProvider, type Embedder } from "./embed.js";
 import { listNotes } from "./notes.js";
+import { loadProjectAliasMap, resolveNoteProject, type ProjectAliasMap } from "./projects.js";
 import { type Note, type NoteKind } from "./schema.js";
 
 export interface SearchOptions {
@@ -738,64 +739,93 @@ function sourceOf(note: Note): string {
     : UNATTRIBUTED;
 }
 
-/** Sort project labels alphabetically, with the unattributed bucket always last. */
+/** RESOLVED project label for a note (ADR-0031); unattributed notes group under the sentinel. */
+function projectOf(note: Note, aliasMap: ProjectAliasMap): string {
+  return resolveNoteProject(note, aliasMap) ?? UNATTRIBUTED;
+}
+
+/** Sort project/source labels alphabetically, with the unattributed bucket always last. */
 function bySourceLabel(a: string, b: string): number {
   if (a === UNATTRIBUTED) return b === UNATTRIBUTED ? 0 : 1;
   if (b === UNATTRIBUTED) return -1;
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/** Render one project's active work-state + recent decisions as router list items. */
+function renderProjectBody(lines: string[], group: Note[]): void {
+  const active = group.filter(isActiveWorkState).sort(byId);
+  // Superseded decisions are archaeology — never inject them into every session's router (#133).
+  const decisions = group
+    .filter((n) => n.frontmatter.kind === "decision" && !isSuperseded(n))
+    .sort(byCreatedDesc);
+  lines.push("**Active work-state**");
+  if (active.length === 0) {
+    lines.push("- _None._");
+  } else {
+    for (const n of active) {
+      const status = n.frontmatter.kind === "work-state" ? n.frontmatter.status : "";
+      lines.push(`- [${inlineText(n.frontmatter.title)}](${n.path}) — ${status}`);
+    }
+  }
+  lines.push("");
+  lines.push("**Recent decisions**");
+  if (decisions.length === 0) {
+    lines.push("- _None._");
+  } else {
+    for (const n of decisions) {
+      lines.push(`- [${inlineText(n.frontmatter.title)}](${n.path}) — ${n.frontmatter.created}`);
+    }
+  }
+  lines.push("");
+}
+
 /**
- * The generated router, grouped by originating project (ADR-0015): a section per project with
- * its active work-state and recent decisions, so a shared brain reads project-by-project.
+ * The generated router, grouped by RESOLVED project identity (ADR-0031). A section per project;
+ * when a project unions MORE THAN ONE `source` (linked via the alias map), each source renders as a
+ * `### <source>` provenance subhead so the divide stays legible — capture provenance is preserved,
+ * only the grouping changes. A single-source project (the default, and every unlinked source) renders
+ * flat, byte-identical to the pre-ADR-0031 per-source router. `aliasMap` is a derivation input, so
+ * linking/unlinking reorganizes this file with no note edits and rebuilds deterministically (ADR-0003).
  */
-function commonwealthMarkdown(notes: Note[]): string {
+function commonwealthMarkdown(notes: Note[], aliasMap: ProjectAliasMap): string {
   const lines: string[] = [];
   lines.push("# Commonwealth");
   lines.push("");
   lines.push("> Generated router. Do not edit by hand — regenerated from the note set (ADR-0003).");
   lines.push("");
 
-  const bySource = new Map<string, Note[]>();
+  const byProject = new Map<string, Note[]>();
   for (const n of notes) {
-    const key = sourceOf(n);
-    (bySource.get(key) ?? bySource.set(key, []).get(key)!).push(n);
+    const key = projectOf(n, aliasMap);
+    (byProject.get(key) ?? byProject.set(key, []).get(key)!).push(n);
   }
-  const sources = [...bySource.keys()].sort(bySourceLabel);
-  if (sources.length === 0) {
+  const projects = [...byProject.keys()].sort(bySourceLabel);
+  if (projects.length === 0) {
     lines.push("_No notes yet._");
     lines.push("");
     return lines.join("\n");
   }
 
-  for (const source of sources) {
-    const group = bySource.get(source)!;
-    const active = group.filter(isActiveWorkState).sort(byId);
-    // Superseded decisions are archaeology — never inject them into every session's router (#133).
-    const decisions = group
-      .filter((n) => n.frontmatter.kind === "decision" && !isSuperseded(n))
-      .sort(byCreatedDesc);
-    lines.push(`## ${inlineText(source)}`);
+  for (const project of projects) {
+    const group = byProject.get(project)!;
+    lines.push(`## ${inlineText(project)}`);
     lines.push("");
-    lines.push("**Active work-state**");
-    if (active.length === 0) {
-      lines.push("- _None._");
-    } else {
-      for (const n of active) {
-        const status = n.frontmatter.kind === "work-state" ? n.frontmatter.status : "";
-        lines.push(`- [${inlineText(n.frontmatter.title)}](${n.path}) — ${status}`);
+
+    // Distinct provenance sources within this project. >1 means sources were linked into one
+    // engagement — surface each as a provenance subhead; otherwise render flat (unchanged default).
+    const sources = [...new Set(group.map(sourceOf))].sort(bySourceLabel);
+    if (sources.length > 1) {
+      for (const source of sources) {
+        lines.push(`### ${inlineText(source)}`);
+        lines.push("");
+        renderProjectBody(
+          lines,
+          group.filter((n) => sourceOf(n) === source),
+        );
       }
-    }
-    lines.push("");
-    lines.push("**Recent decisions**");
-    if (decisions.length === 0) {
-      lines.push("- _None._");
     } else {
-      for (const n of decisions) {
-        lines.push(`- [${inlineText(n.frontmatter.title)}](${n.path}) — ${n.frontmatter.created}`);
-      }
+      renderProjectBody(lines, group);
     }
-    lines.push("");
   }
 
   return lines.join("\n");
@@ -829,8 +859,15 @@ function indexMarkdown(dirRel: string, notes: Note[]): string {
  */
 export async function regenerateDerived(brainDir: string): Promise<void> {
   const notes = await listNotes(brainDir);
+  // The alias map is a derivation INPUT (ADR-0031), loaded like brain config — linking sources
+  // reorganizes the router with zero note edits, and the output stays a pure function of the inputs.
+  const aliasMap = await loadProjectAliasMap(brainDir);
 
-  await fs.writeFile(path.join(brainDir, "COMMONWEALTH.md"), commonwealthMarkdown(notes), "utf8");
+  await fs.writeFile(
+    path.join(brainDir, "COMMONWEALTH.md"),
+    commonwealthMarkdown(notes, aliasMap),
+    "utf8",
+  );
 
   // One INDEX.md per directory that actually contains notes — works for both the flat kind
   // root and per-project subtrees without assuming a fixed set of folders.
