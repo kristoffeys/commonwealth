@@ -222,13 +222,13 @@ const KIND_FOLDERS = new Set<string>(Object.values(KIND_DIR));
 const NON_NOTE_DIRS = new Set([".git", ".commonwealth", "index", "staging", "node_modules"]);
 
 /**
- * List all notes, optionally filtered to one kind. Layout-agnostic (ADR-0015): notes may live
- * at the kind root (`<kind>/<id>.md`, unattributed) or under a per-project subtree
- * (`<project>/<kind>/<id>.md`). A file is a note when its PARENT folder is a kind folder and it
- * is not the generated `INDEX.md`; the authoritative kind comes from frontmatter. Skips derived
- * (`index/`), local (`staging/`), and vcs dirs so canon never includes staged/derived files.
+ * List the repo-relative paths of every note file under `brainDir`, WITHOUT reading or parsing
+ * them. Same discovery rule as {@link listNotes} (parent folder is a kind folder, `.md`, not the
+ * generated `INDEX.md`; derived/local/vcs dirs skipped) — but O(dir entries) with no file reads,
+ * so callers that only need the file set (e.g. the cheap staleness signature for reconcile-on-read,
+ * #234) don't pay the parse cost. Sorted for a stable order.
  */
-export async function listNotes(brainDir: string, kind?: NoteKind): Promise<Note[]> {
+export async function listNoteFiles(brainDir: string): Promise<string[]> {
   const found: string[] = [];
 
   async function walk(absDir: string): Promise<void> {
@@ -254,9 +254,21 @@ export async function listNotes(brainDir: string, kind?: NoteKind): Promise<Note
   }
 
   await walk(brainDir);
+  return found.sort();
+}
+
+/**
+ * List all notes, optionally filtered to one kind. Layout-agnostic (ADR-0015): notes may live
+ * at the kind root (`<kind>/<id>.md`, unattributed) or under a per-project subtree
+ * (`<project>/<kind>/<id>.md`). A file is a note when its PARENT folder is a kind folder and it
+ * is not the generated `INDEX.md`; the authoritative kind comes from frontmatter. Skips derived
+ * (`index/`), local (`staging/`), and vcs dirs so canon never includes staged/derived files.
+ */
+export async function listNotes(brainDir: string, kind?: NoteKind): Promise<Note[]> {
+  const found = await listNoteFiles(brainDir);
 
   const notes: Note[] = [];
-  for (const rel of found.sort()) {
+  for (const rel of found) {
     // Resilience (#80): one malformed/corrupt note (bad frontmatter, hand-edit, partial write)
     // must NOT take down the whole read path — listNotes feeds search, the index, and the derived
     // router, so a single throw here was a brain-wide read outage. Skip the bad note with a

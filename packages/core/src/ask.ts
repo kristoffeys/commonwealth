@@ -8,8 +8,9 @@ import { search } from "./index-db.js";
  * agent cannot fabricate provenance). A coverage signal lets the caller/agent decline gracefully
  * when the brain doesn't actually cover the question, instead of inventing an answer.
  *
- * Retrieval quality is whatever `search` provides (FTS5 today, embeddings later — #107); `ask` is
- * agnostic to it and improves for free when that lands.
+ * Retrieval quality is whatever `search` provides — lexical FTS5 with an OR fallback for
+ * stopword-heavy questions (#209), fused with semantic embeddings when configured (ADR-0025); `ask`
+ * is agnostic to it and improves for free as that layer evolves.
  */
 
 /** One citation-anchored hit: enough to cite and to decide whether to `read` the full note. */

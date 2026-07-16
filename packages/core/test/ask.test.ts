@@ -9,7 +9,6 @@ import {
   initBrain,
   loadBrainConfig,
   saveBrainConfig,
-  search,
   writeNote,
 } from "../src/index.js";
 
@@ -88,8 +87,9 @@ describe("askBrain", () => {
     try {
       await buildIndex(dir); // resolves the hosted provider → vectors populated
       const q = "did we ever use shopware before?";
-      // Lexical-only proves the gap: FTS5-AND on the stopword-heavy query matches nothing.
-      expect(await search(dir, q, { embedder: null })).toEqual([]);
+      // FTS5 implicit-AND on this stopword-heavy query matches nothing; the OR fallback (#209) now
+      // retrieves the note lexically, and the config-resolved hybrid path does too. Either way ask
+      // reports coverage instead of a false "nothing matched" — the interplay stays coherent.
       const result = await askBrain(dir, q);
       expect(result.coverage.matched).toBe(true);
       expect(result.coverage.topScore).toBeGreaterThan(0);
