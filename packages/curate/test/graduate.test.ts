@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { graduateToOrgBrain } from "../src/graduate.js";
 import { reject } from "../src/review.js";
 import { listStaged } from "../src/staging.js";
-import { loadTombstonedKeys, tombstonePath } from "../src/tombstone.js";
+import { loadTombstonedKeys, tombstoneDir } from "../src/tombstone.js";
 
 // Org-brain graduation (#110, ADR-0023): detect facts recurring across ≥2 project brains and stage
 // them into the org-brain for manual review.
@@ -267,6 +267,6 @@ describe("graduateToOrgBrain — reject-tombstones (#172)", () => {
 
     // Still present and unchanged after the rebuild.
     expect(await loadTombstonedKeys(org)).toEqual(before);
-    await expect(fs.stat(tombstonePath(org))).resolves.toBeTruthy();
+    await expect(fs.stat(tombstoneDir(org))).resolves.toBeTruthy();
   });
 });

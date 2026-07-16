@@ -10,11 +10,22 @@ import path from "node:path";
  * identity so subsequent passes skip it (visibly, with a suppressed count — never silently).
  *
  * The store lives in the ORG-BRAIN and is SHARED + VERSIONED: rejecting a cross-brain candidate is
- * org-level curation state — the whole team should agree "this did not graduate" — so it is a
- * committed file (`<org>/.commonwealth/graduation-tombstones.json`), synced like `config.json`, not
- * per-user local state. It sits under `.commonwealth/`, which {@link verifyBrain} treats as a
- * non-note dir, so it round-trips through derived rebuild / `verify-restore` untouched and survives
- * a fresh clone.
+ * org-level curation state — the whole team should agree "this did not graduate" — so it is
+ * committed and synced with the brain, not per-user local state. It sits under `.commonwealth/`,
+ * which {@link verifyBrain} treats as a non-note dir, so it round-trips through derived rebuild /
+ * `verify-restore` untouched and survives a fresh clone.
+ *
+ * SHAPE — one tombstone per file, mirroring the codebase's concurrency doctrine (ADR-0003). Each
+ * cluster is its own file `graduation-tombstones/<clusterKey>.json`, written once via tmp+rename and
+ * NEVER rewritten. That per-file shape is what actually makes cross-writer merges conflict-free:
+ * two teammates who reject different clusters on different branches produce an add/add of DISTINCT
+ * files, which git merges cleanly — the union-merge guarantee ADR-0003 gives one-fact-per-file
+ * atomic notes. A single shared JSON blob would NOT have this property: concurrent edits collide on
+ * the same lines (the closing brace, the sorted key list) and cannot be union-merged, because a
+ * mechanically merged JSON blob would be syntactically invalid. Because a tombstone file is never
+ * mutated after creation, there is also no guarded-writer clobber path (#78) — nothing ever
+ * rewrites a file that might have been corrupted underneath us, so a torn file can never destroy a
+ * sibling's tombstone.
  *
  * Candidate identity reuses graduation's existing similarity keying: the cross-brain clustering
  * (cosine + lexical) decides which origin notes group together, and each surviving cluster records
@@ -23,17 +34,14 @@ import path from "node:path";
  * materially different cluster (different origins) is unaffected. No new matching scheme is invented.
  */
 
-/** Relative path of the tombstone store within a brain. */
-const TOMBSTONE_REL = path.join(".commonwealth", "graduation-tombstones.json");
+/** Relative path of the per-cluster tombstone directory within a brain. */
+const TOMBSTONE_DIR_REL = path.join(".commonwealth", "graduation-tombstones");
 
-/** On-disk store version, so a future format change is detectable. */
-const STORE_VERSION = 1;
-
-/** One recorded rejection, keyed by {@link graduationClusterKey}. */
+/** One recorded rejection. Written once as `<clusterKey>.json`; never mutated afterwards. */
 export interface GraduationTombstone {
   /** Sorted, deduped `<source>/<id>` origin refs the rejected cluster spanned (audit + re-key). */
   refs: string[];
-  /** Title of the rejected candidate, for the human-facing suppressed summary and audit trail. */
+  /** Title of the rejected candidate, for the audit trail. */
   title: string;
   /** Note kind of the rejected candidate. */
   kind: string;
@@ -41,15 +49,14 @@ export interface GraduationTombstone {
   rejectedAt: string;
 }
 
-/** The full tombstone store: version + entries keyed by cluster key. */
-interface TombstoneStore {
-  version: number;
-  tombstones: Record<string, GraduationTombstone>;
+/** Absolute path to a brain's graduation-tombstone directory. */
+export function tombstoneDir(brainDir: string): string {
+  return path.join(brainDir, TOMBSTONE_DIR_REL);
 }
 
-/** Absolute path to a brain's graduation-tombstone store. */
-export function tombstonePath(brainDir: string): string {
-  return path.join(brainDir, TOMBSTONE_REL);
+/** Absolute path to a single cluster's tombstone file. */
+function tombstoneFile(brainDir: string, key: string): string {
+  return path.join(tombstoneDir(brainDir), `${key}.json`);
 }
 
 /**
@@ -62,68 +69,80 @@ export function graduationClusterKey(refs: string[]): string {
   return createHash("sha256").update(canonical.join("\n")).digest("hex").slice(0, 16);
 }
 
-/** Read the tombstone store, tolerating a missing/torn/foreign file by returning an empty store. */
-async function readStore(brainDir: string): Promise<TombstoneStore> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(tombstonePath(brainDir), "utf8");
-  } catch {
-    return { version: STORE_VERSION, tombstones: {} };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { version: STORE_VERSION, tombstones: {} };
-  }
-  const obj = (
-    typeof parsed === "object" && parsed !== null ? parsed : {}
-  ) as Partial<TombstoneStore>;
-  const tombstones =
-    typeof obj.tombstones === "object" && obj.tombstones !== null
-      ? (obj.tombstones as Record<string, GraduationTombstone>)
-      : {};
-  return { version: STORE_VERSION, tombstones };
-}
-
 /**
- * Persist the tombstone store as pretty JSON with keys in sorted order (so concurrent teammates who
- * reject different candidates produce line-disjoint diffs that union-merge cleanly, ADR-0003) and a
- * trailing newline. Atomic tmp+rename, mirroring {@link saveBrainConfig}.
+ * The set of tombstoned cluster keys in a brain (empty when the store is absent). The key is the
+ * `<key>.json` filename; the file's content is validated so a single torn tombstone is skipped with
+ * a breadcrumb rather than trusted blindly. Crucially, one bad file affects only itself — there is
+ * no shared blob to take the rest down with it.
  */
-async function writeStore(brainDir: string, store: TombstoneStore): Promise<void> {
-  const file = tombstonePath(brainDir);
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const ordered: Record<string, GraduationTombstone> = {};
-  for (const key of Object.keys(store.tombstones).sort()) ordered[key] = store.tombstones[key]!;
-  const out = { version: STORE_VERSION, tombstones: ordered };
-  const tmp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, `${JSON.stringify(out, null, 2)}\n`, "utf8");
-  await fs.rename(tmp, file);
-}
-
-/** The set of tombstoned cluster keys in a brain (empty when the store is absent). */
 export async function loadTombstonedKeys(brainDir: string): Promise<Set<string>> {
-  const store = await readStore(brainDir);
-  return new Set(Object.keys(store.tombstones));
+  const dir = tombstoneDir(brainDir);
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return new Set();
+  }
+  const keys = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    const key = entry.name.slice(0, -".json".length);
+    const abs = path.join(dir, entry.name);
+    let raw: string;
+    try {
+      raw = await fs.readFile(abs, "utf8");
+    } catch {
+      continue; // vanished between readdir and read — treat as absent
+    }
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        !Array.isArray((parsed as { refs?: unknown }).refs)
+      ) {
+        throw new Error("not a tombstone record (missing refs[])");
+      }
+    } catch (err) {
+      process.stderr.write(
+        `[commonwealth-curate] skipping unreadable tombstone ${entry.name}: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
+      continue;
+    }
+    keys.add(key);
+  }
+  return keys;
 }
 
 /**
- * Record a rejected graduation cluster. Idempotent: re-rejecting the same cluster overwrites its
- * entry (keeping the latest timestamp) rather than duplicating it. Returns the cluster key written.
+ * Record a rejected graduation cluster as its own file. Idempotent and non-destructive: if the
+ * cluster is already tombstoned the existing file is left untouched (a re-reject is a no-op), so a
+ * tombstone file is only ever created, never rewritten — which is what keeps concurrent writers
+ * conflict-free and sidesteps the guarded-writer clobber risk entirely (#78). Returns the key.
  */
 export async function addTombstone(
   brainDir: string,
   entry: { refs: string[]; title: string; kind: string },
 ): Promise<string> {
   const key = graduationClusterKey(entry.refs);
-  const store = await readStore(brainDir);
-  store.tombstones[key] = {
+  const file = tombstoneFile(brainDir, key);
+  try {
+    await fs.access(file);
+    return key; // already tombstoned — never rewrite
+  } catch {
+    // not present — create it below
+  }
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const record: GraduationTombstone = {
     refs: [...new Set(entry.refs)].sort(),
     title: entry.title,
     kind: entry.kind,
     rejectedAt: new Date().toISOString(),
   };
-  await writeStore(brainDir, store);
+  const tmp = `${file}.${process.pid}.tmp`;
+  await fs.writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  await fs.rename(tmp, file);
   return key;
 }

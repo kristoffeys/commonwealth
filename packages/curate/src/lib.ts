@@ -33,7 +33,7 @@ export {
   addTombstone,
   graduationClusterKey,
   loadTombstonedKeys,
-  tombstonePath,
+  tombstoneDir,
   type GraduationTombstone,
 } from "./tombstone.js";
 export { listStaged, stageNote, stagedAbsPath, stagingRoot } from "./staging.js";
