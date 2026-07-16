@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildIndex, regenerateDerived, search } from "../src/index-db";
 import { writeNote } from "../src/notes";
+import { linkSources, persistProjectAliasMap, unlinkSources } from "../src/projects";
 
 let dir: string;
 
@@ -194,6 +195,96 @@ describe("project provenance (ADR-0015)", () => {
     // A per-project-per-kind INDEX.md is written in the note's own folder.
     const idx = await fs.readFile(path.join(dir, "acme-one", "work-state", "INDEX.md"), "utf8");
     expect(idx).toContain("WS one");
+  });
+});
+
+describe("project identity grouping (ADR-0031)", () => {
+  async function seedTwoSources() {
+    await writeNote(dir, {
+      kind: "work-state",
+      title: "Storefront WIP",
+      body: "building the storefront",
+      source: "weareantenna/acme-website",
+    });
+    await writeNote(dir, {
+      kind: "decision",
+      title: "Kickoff scope",
+      body: "agreed the engagement scope in the kickoff meeting",
+      source: "Acme Website",
+    });
+  }
+
+  it("renders two sections when the sources are NOT linked", async () => {
+    await seedTwoSources();
+    await regenerateDerived(dir);
+    const md = await fs.readFile(path.join(dir, "COMMONWEALTH.md"), "utf8");
+    expect(md).toContain("## Acme Website");
+    expect(md).toContain("## weareantenna/acme-website");
+    // No project unified them, so no provenance subheads.
+    expect(md).not.toContain("### ");
+  });
+
+  it("collapses two linked sources into ONE project section with provenance subheads", async () => {
+    await seedTwoSources();
+    await persistProjectAliasMap(dir, (m) =>
+      linkSources(m, "acme-engagement", ["weareantenna/acme-website", "Acme Website"]),
+    );
+    await regenerateDerived(dir);
+    const md = await fs.readFile(path.join(dir, "COMMONWEALTH.md"), "utf8");
+    const lines = md.split("\n");
+
+    // One engagement section (line-exact so a `##` heading isn't matched inside a `###` subhead)...
+    expect(lines).toContain("## acme-engagement");
+    expect(lines).not.toContain("## Acme Website");
+    expect(lines).not.toContain("## weareantenna/acme-website");
+    // ...with each source listed as a provenance subhead.
+    expect(lines).toContain("### Acme Website");
+    expect(lines).toContain("### weareantenna/acme-website");
+    // Both sources' notes still appear (provenance preserved, only grouping changed).
+    expect(md).toContain("Storefront WIP");
+    expect(md).toContain("Kickoff scope");
+  });
+
+  it("restores two sections after unlinking (derived-only, no note edits)", async () => {
+    await seedTwoSources();
+    await persistProjectAliasMap(dir, (m) =>
+      linkSources(m, "acme-engagement", ["weareantenna/acme-website", "Acme Website"]),
+    );
+    await regenerateDerived(dir);
+    await persistProjectAliasMap(dir, (m) =>
+      unlinkSources(m, "acme-engagement", ["weareantenna/acme-website", "Acme Website"]),
+    );
+    await regenerateDerived(dir);
+    const md = await fs.readFile(path.join(dir, "COMMONWEALTH.md"), "utf8");
+    expect(md).toContain("## Acme Website");
+    expect(md).toContain("## weareantenna/acme-website");
+    expect(md).not.toContain("## acme-engagement");
+  });
+
+  it("is byte-identical across two rebuilds while linked (determinism, ADR-0003)", async () => {
+    await seedTwoSources();
+    await persistProjectAliasMap(dir, (m) =>
+      linkSources(m, "acme-engagement", ["weareantenna/acme-website", "Acme Website"]),
+    );
+    await regenerateDerived(dir);
+    const first = await fs.readFile(path.join(dir, "COMMONWEALTH.md"), "utf8");
+    await regenerateDerived(dir);
+    const second = await fs.readFile(path.join(dir, "COMMONWEALTH.md"), "utf8");
+    expect(second).toBe(first);
+  });
+
+  it("groups a manifest-declared project (frontmatter) as one section", async () => {
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Declared fact",
+      body: "captured under a declared project",
+      source: "weareantenna/acme-website",
+      project: "acme-engagement",
+    });
+    await regenerateDerived(dir);
+    const md = await fs.readFile(path.join(dir, "COMMONWEALTH.md"), "utf8");
+    expect(md).toContain("## acme-engagement");
+    expect(md).not.toContain("## weareantenna/acme-website");
   });
 });
 

@@ -2,8 +2,14 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { brainHealth, computeBrainHealth } from "../src/health";
+import {
+  brainHealth,
+  computeBrainHealth,
+  healthByProject,
+  UNATTRIBUTED_PROJECT,
+} from "../src/health";
 import { writeNote } from "../src/notes";
+import type { ProjectAliasMap } from "../src/projects";
 import type { Note } from "../src/schema";
 
 const NOW = "2026-07-04";
@@ -108,5 +114,40 @@ describe("computeBrainHealth (from disk)", () => {
     expect(h.total).toBe(2);
     expect(h.score).toBeGreaterThanOrEqual(0);
     expect(h.score).toBeLessThanOrEqual(100);
+  });
+});
+
+describe("healthByProject (ADR-0031)", () => {
+  it("rolls up per resolved project, linked sources counting as one engagement", () => {
+    const notes = [
+      mem("a", { source: "weareantenna/acme-website" }),
+      mem("b", { source: "Acme Website" }),
+      mem("c", { source: "other/repo" }),
+    ];
+    const aliasMap: ProjectAliasMap = {
+      "acme-eng": { sources: ["weareantenna/acme-website", "Acme Website"] },
+    };
+    const rollup = healthByProject(notes, aliasMap, { now: NOW });
+    const labels = rollup.map((r) => r.project);
+    // Two acme sources collapse into one engagement; other/repo stays a singleton.
+    expect(labels).toEqual(["acme-eng", "other/repo"]);
+    expect(rollup.find((r) => r.project === "acme-eng")?.report.total).toBe(2);
+    expect(rollup.find((r) => r.project === "other/repo")?.report.total).toBe(1);
+  });
+
+  it("buckets unattributed notes under the sentinel, sorted last", () => {
+    const notes = [mem("a", { source: "z/repo" }), mem("b")];
+    const rollup = healthByProject(notes, {}, { now: NOW });
+    expect(rollup.map((r) => r.project)).toEqual(["z/repo", UNATTRIBUTED_PROJECT]);
+  });
+
+  it("prefers a note's declared frontmatter project over the alias map", () => {
+    const notes = [mem("a", { source: "weareantenna/acme-website", project: "declared" })];
+    const aliasMap: ProjectAliasMap = {
+      "acme-eng": { sources: ["weareantenna/acme-website"] },
+    };
+    expect(healthByProject(notes, aliasMap, { now: NOW }).map((r) => r.project)).toEqual([
+      "declared",
+    ]);
   });
 });

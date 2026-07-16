@@ -2,8 +2,13 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveProjectSource, slugFromRemote } from "../src/source";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  manifestStamp,
+  resolveProjectManifest,
+  resolveProjectSource,
+  slugFromRemote,
+} from "../src/source";
 
 let root: string;
 
@@ -53,5 +58,116 @@ describe("resolveProjectSource", () => {
 
   it("returns null for empty input", async () => {
     expect(await resolveProjectSource("")).toBeNull();
+  });
+});
+
+async function writeManifest(dir: string, contents: unknown): Promise<void> {
+  const cw = path.join(dir, ".commonwealth");
+  await fs.mkdir(cw, { recursive: true });
+  await fs.writeFile(
+    path.join(cw, "project.json"),
+    typeof contents === "string" ? contents : JSON.stringify(contents),
+    "utf8",
+  );
+}
+
+describe("resolveProjectManifest", () => {
+  it("finds a manifest declared in a parent directory (walk-up)", async () => {
+    const folder = path.join(root, "acme");
+    const deep = path.join(folder, "sub", "deep");
+    await fs.mkdir(deep, { recursive: true });
+    await writeManifest(folder, { project: "acme-engagement", customer: "Acme Corp" });
+    expect(await resolveProjectManifest(deep)).toEqual({
+      project: "acme-engagement",
+      customer: "Acme Corp",
+    });
+  });
+
+  it("returns null when no manifest exists at or above cwd", async () => {
+    const plain = path.join(root, "plain");
+    await fs.mkdir(plain, { recursive: true });
+    expect(await resolveProjectManifest(plain)).toBeNull();
+  });
+
+  it("omits customer when the manifest declares only a project", async () => {
+    const folder = path.join(root, "proj-only");
+    await fs.mkdir(folder, { recursive: true });
+    await writeManifest(folder, { project: "just-a-project" });
+    expect(await resolveProjectManifest(folder)).toEqual({ project: "just-a-project" });
+  });
+
+  it("tolerates unknown keys (e.g. members) without processing them", async () => {
+    const folder = path.join(root, "with-members");
+    await fs.mkdir(folder, { recursive: true });
+    await writeManifest(folder, {
+      project: "p",
+      customer: "C",
+      members: ["a@x.com"],
+      extra: 1,
+    });
+    expect(await resolveProjectManifest(folder)).toEqual({ project: "p", customer: "C" });
+  });
+
+  it("treats a malformed manifest as absent AND emits one stderr breadcrumb", async () => {
+    const folder = path.join(root, "broken");
+    await fs.mkdir(folder, { recursive: true });
+    await writeManifest(folder, "{ not valid json");
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await resolveProjectManifest(folder)).toBeNull();
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0]?.[0]).toContain("malformed project manifest");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("treats a manifest missing a project string as absent (with a breadcrumb)", async () => {
+    const folder = path.join(root, "no-project");
+    await fs.mkdir(folder, { recursive: true });
+    await writeManifest(folder, { customer: "Only Customer" });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await resolveProjectManifest(folder)).toBeNull();
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("does not climb above the enclosing git repo root", async () => {
+    // Manifest sits ABOVE the repo root; a walk from inside the repo must not reach it.
+    await writeManifest(root, { project: "outer-should-not-leak" });
+    const repo = path.join(root, "inner-repo");
+    const deep = path.join(repo, "src");
+    await fs.mkdir(deep, { recursive: true });
+    execFileSync("git", ["init", "-q", repo]);
+    expect(await resolveProjectManifest(deep)).toBeNull();
+  });
+
+  it("finds a manifest committed at the git repo root", async () => {
+    const repo = path.join(root, "declared-repo");
+    const deep = path.join(repo, "src", "deep");
+    await fs.mkdir(deep, { recursive: true });
+    execFileSync("git", ["init", "-q", repo]);
+    await writeManifest(repo, { project: "repo-engagement" });
+    expect(await resolveProjectManifest(deep)).toEqual({ project: "repo-engagement" });
+  });
+
+  it("returns null for empty input", async () => {
+    expect(await resolveProjectManifest("")).toBeNull();
+  });
+});
+
+describe("manifestStamp", () => {
+  it("maps customer to a customer:<slug> tag and keeps the project id", () => {
+    expect(manifestStamp({ project: "acme-eng", customer: "Acme Corp" })).toEqual({
+      project: "acme-eng",
+      tag: "customer:acme-corp",
+    });
+  });
+
+  it("omits the tag when no customer is declared", () => {
+    expect(manifestStamp({ project: "acme-eng" })).toEqual({ project: "acme-eng" });
   });
 });

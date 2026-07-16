@@ -55,6 +55,15 @@ const baseShape = {
    */
   source: z.string().optional(),
   /**
+   * Declared engagement IDENTITY, distinct from the capture PROVENANCE in `source` (ADR-0031).
+   * Stamped at capture only when a `.commonwealth/project.json` manifest DECLARES it in the working
+   * folder/repo — so a customer's business folder and dev repo(s) file under one project id without
+   * rewriting `source`. Optional and additive: absent means "resolve identity from the alias map or
+   * fall back to `source` as a singleton project" (see `resolveNoteProject`). Never rewritten on an
+   * existing note — retroactive linking uses the read-time alias map, not a frontmatter edit.
+   */
+  project: z.string().optional(),
+  /**
    * Opt-in marker that this note may **graduate** to the org-brain — the audience-widening,
    * cross-trust-boundary promotion of knowledge that recurs across ≥2 project brains (ADR-0023,
    * #168, #110). Absent/`false` means the note stays in its repo; only `graduate: true` makes it

@@ -1,5 +1,6 @@
 import { today } from "./ids.js";
 import { listNotes } from "./notes.js";
+import { loadProjectAliasMap, resolveNoteProject, type ProjectAliasMap } from "./projects.js";
 import type { Note } from "./schema.js";
 
 /**
@@ -138,4 +139,50 @@ export async function computeBrainHealth(
   opts: HealthOptions = {},
 ): Promise<HealthReport> {
   return brainHealth(await listNotes(brainDir), opts);
+}
+
+/** Sentinel label for notes with no resolved project (unattributed) in a per-project rollup. */
+export const UNATTRIBUTED_PROJECT = "(unattributed)";
+
+/** A brain-health rollup for one resolved engagement (ADR-0031). */
+export interface ProjectHealth {
+  /** Resolved project id (or {@link UNATTRIBUTED_PROJECT} for notes with no identity). */
+  project: string;
+  /** The health report over just this project's notes. */
+  report: HealthReport;
+}
+
+/**
+ * Roll up brain health PER RESOLVED PROJECT (ADR-0031): group notes by {@link resolveNoteProject}
+ * against `aliasMap` — so sources linked into one engagement roll up together and the score reflects
+ * the engagement, not the accident of which repo/folder a fact was captured in — then compute a
+ * {@link HealthReport} per group. Pure; sorted by project id with the unattributed bucket last for
+ * determinism. `orphaned` is still computed within each group (inbound links across projects are
+ * rare and a cross-project link is exactly the kind of orphan a rollup should surface).
+ */
+export function healthByProject(
+  notes: Note[],
+  aliasMap: ProjectAliasMap,
+  opts: HealthOptions = {},
+): ProjectHealth[] {
+  const groups = new Map<string, Note[]>();
+  for (const n of notes) {
+    const project = resolveNoteProject(n, aliasMap) ?? UNATTRIBUTED_PROJECT;
+    (groups.get(project) ?? groups.set(project, []).get(project)!).push(n);
+  }
+  const labels = [...groups.keys()].sort((a, b) => {
+    if (a === UNATTRIBUTED_PROJECT) return b === UNATTRIBUTED_PROJECT ? 0 : 1;
+    if (b === UNATTRIBUTED_PROJECT) return -1;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+  return labels.map((project) => ({ project, report: brainHealth(groups.get(project)!, opts) }));
+}
+
+/** Load a brain's notes + alias map and roll up {@link healthByProject}. Read-only. */
+export async function computeHealthByProject(
+  brainDir: string,
+  opts: HealthOptions = {},
+): Promise<ProjectHealth[]> {
+  const [notes, aliasMap] = await Promise.all([listNotes(brainDir), loadProjectAliasMap(brainDir)]);
+  return healthByProject(notes, aliasMap, opts);
 }

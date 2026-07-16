@@ -12,6 +12,7 @@ export * from "./attribution.js";
 export * from "./registry.js";
 export * from "./clone.js";
 export * from "./source.js";
+export * from "./projects.js";
 export * from "./health.js";
 export * from "./map.js";
 export * from "./status.js";

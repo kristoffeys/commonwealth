@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { slugify } from "./ids.js";
 
 const pexec = promisify(execFile);
 
@@ -37,6 +38,99 @@ export async function repoIdentity(cwd: string): Promise<string | null> {
   if (!root) return null;
   const remote = await originUrl(root);
   return remote ? slugFromRemote(remote) : null;
+}
+
+/**
+ * A DECLARED engagement identity read from a `.commonwealth/project.json` manifest (ADR-0031).
+ * `project` is the canonical engagement id; `customer` is the optional human/business name. A
+ * `members` key may appear in a manifest (written by the future wizard) — we tolerate but do not
+ * process it here.
+ */
+export interface ProjectManifest {
+  project: string;
+  customer?: string;
+}
+
+/** Manifest path relative to a working folder/repo. */
+const MANIFEST_REL = path.join(".commonwealth", "project.json");
+
+/**
+ * Resolve the DECLARED project identity for `cwd` by walking up to the nearest
+ * `.commonwealth/project.json` manifest (ADR-0031) — the save-time, primary identity path.
+ *
+ * The walk mirrors {@link resolveProjectSource}'s discipline: it starts at `cwd` and climbs, but
+ * never above the nearest ancestor git repo's root (a committed manifest lives at the repo root, so
+ * the root is the highest dir searched); for a non-git folder it climbs to the filesystem root.
+ * Returns `{ project, customer? }` from the first manifest found, or `null` when none declares one.
+ *
+ * Never throws. A manifest that is unreadable, unparseable, or missing a usable `project` string is
+ * treated as absent — but a PRESENT-yet-malformed manifest emits one stderr breadcrumb first, so a
+ * corrupt declaration surfaces loudly rather than silently degrading to "no project" (the
+ * loud-corrupt-config lesson from #210).
+ */
+export async function resolveProjectManifest(cwd: string): Promise<ProjectManifest | null> {
+  if (typeof cwd !== "string" || cwd.length === 0) return null;
+  const start = path.resolve(cwd);
+  const gitRoot = findGitRoot(start);
+  let dir = start;
+  for (;;) {
+    const manifest = readManifest(path.join(dir, MANIFEST_REL));
+    if (manifest) return manifest;
+    // Boundary: never climb above the enclosing git repo's root (the highest dir a committed
+    // manifest can live in); for a non-git folder, stop at the filesystem root.
+    if (gitRoot && dir === gitRoot) return null;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/** Read + validate one manifest file. Missing → null; malformed-but-present → breadcrumb + null. */
+function readManifest(file: string): ProjectManifest | null {
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch {
+    return null; // absent (or unreadable) — the ordinary "no manifest here" case
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.error(
+      `[commonwealth] ignoring malformed project manifest at ${file}: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    console.error(
+      `[commonwealth] ignoring malformed project manifest at ${file}: not a JSON object`,
+    );
+    return null;
+  }
+  const obj = parsed as Record<string, unknown>;
+  const project = typeof obj.project === "string" && obj.project.length > 0 ? obj.project : null;
+  if (!project) {
+    console.error(
+      `[commonwealth] ignoring project manifest at ${file}: missing a "project" string`,
+    );
+    return null;
+  }
+  const customer =
+    typeof obj.customer === "string" && obj.customer.length > 0 ? obj.customer : undefined;
+  return customer ? { project, customer } : { project };
+}
+
+/**
+ * The capture stamp a {@link ProjectManifest} contributes (ADR-0031): the declared `project` id
+ * (written to frontmatter `project`) and, when the manifest names a `customer`, a `customer:<slug>`
+ * TAG rather than new frontmatter — tags already exist and are searchable, keeping the schema
+ * surface small. Pure; the caller merges these onto each captured candidate.
+ */
+export function manifestStamp(manifest: ProjectManifest): { project: string; tag?: string } {
+  const tag = manifest.customer ? `customer:${slugify(manifest.customer)}` : undefined;
+  return tag ? { project: manifest.project, tag } : { project: manifest.project };
 }
 
 /** Nearest ancestor of `startDir` (inclusive) containing a `.git`, or null if none. */

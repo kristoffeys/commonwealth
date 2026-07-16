@@ -336,6 +336,57 @@ describe("built binary", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("project link/list/unlink round-trips and regenerates the router (ADR-0031)", async () => {
+    const brain = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-project-cli-"));
+    await initBrain(brain, { name: "project-cli-brain" });
+    await writeNote(brain, {
+      kind: "work-state",
+      title: "Storefront WIP",
+      body: "building the storefront",
+      source: "weareantenna/acme-website",
+    });
+    await writeNote(brain, {
+      kind: "decision",
+      title: "Kickoff scope",
+      body: "agreed the engagement scope in the kickoff meeting",
+      source: "Acme Website",
+    });
+
+    const run = (args: string[]) =>
+      spawnSync("node", [distEntry, ...args, "--dir", brain], { cwd: repoRoot, encoding: "utf8" });
+
+    // link → one project section in the regenerated router, both sources as provenance subheads.
+    const linked = run([
+      "project",
+      "link",
+      "acme-engagement",
+      "weareantenna/acme-website",
+      "Acme Website",
+    ]);
+    expect(linked.status).toBe(0);
+    let md = await fs.readFile(path.join(brain, "COMMONWEALTH.md"), "utf8");
+    expect(md.split("\n")).toContain("## acme-engagement");
+    expect(md.split("\n")).toContain("### Acme Website");
+    // Line-exact so a `##` heading isn't matched inside the `### Acme Website` subhead.
+    expect(md.split("\n")).not.toContain("## Acme Website");
+
+    // list → shows the project and its member sources.
+    const listed = run(["project", "list"]);
+    expect(listed.status).toBe(0);
+    expect(listed.stdout).toContain("acme-engagement");
+    expect(listed.stdout).toContain("weareantenna/acme-website");
+
+    // unlink → derived router restored to two per-source sections (no note edits).
+    const unlinked = run(["project", "unlink", "acme-engagement"]);
+    expect(unlinked.status).toBe(0);
+    md = await fs.readFile(path.join(brain, "COMMONWEALTH.md"), "utf8");
+    expect(md).toContain("## Acme Website");
+    expect(md).toContain("## weareantenna/acme-website");
+    expect(md).not.toContain("## acme-engagement");
+
+    await fs.rm(brain, { recursive: true, force: true });
+  });
+
   it("errors clearly (exit 1) when no brain is configured for the cwd (#69)", async () => {
     const plain = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-nobrain-"));
     const env = { ...process.env, COMMONWEALTH_REGISTRY: path.join(plain, "registry.json") };

@@ -144,6 +144,7 @@ function printUsage(): void {
       "  commonwealth emit      [--commit]              write brain context for Cursor/Copilot/Codex into this repo",
       "  commonwealth health                            freshness/trust rollup for the brain",
       "  commonwealth map                               brain-at-a-glance: per-kind counts + contributors",
+      "  commonwealth project   <list | link <id> <src...> | unlink <id> [<src...>]>   link sources into one engagement",
       "  commonwealth statusline  [install|uninstall]   Claude Code status line (brain · freshness · pending)",
       "  commonwealth consolidate  [--dry-run]          supersede near-duplicate canon notes",
       "  commonwealth graduate  [--suggest] [--dry-run]  promote knowledge recurring across ≥2 brains to the org-brain",
@@ -258,6 +259,8 @@ export async function run(argv: string[]): Promise<number> {
       return delegateCurate(["health"]);
     case "map":
       return delegateCurate(["map"]);
+    case "project":
+      return delegateCurate(["project", ...rest]);
     case "statusline":
       return cmdStatusline(rest);
     case "consolidate":
