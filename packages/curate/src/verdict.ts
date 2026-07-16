@@ -25,9 +25,20 @@ export interface CurationVerdict {
   reason?: string;
 }
 
-/** A capture candidate that may carry an LLM {@link CurationVerdict} from the hook layer. */
+/**
+ * A capture candidate that may carry an LLM {@link CurationVerdict} from the hook layer, plus the
+ * ids of the deterministic nearest-canon neighbors it was classified against.
+ *
+ * `neighborIds` is pipeline METADATA, not model output: the hook derives it from `curate neighbors`
+ * (which ranks against real canon, offline) and carries it across the classify → capture boundary.
+ * It is the allow-list a verdict's `targetId` is clamped to — so a prompt-injected classifier that
+ * emits a `targetId` referencing an arbitrary note (to drop a real fact) is rejected as malformed
+ * and degraded to DISTINCT. Absent (a trusted direct caller, e.g. a seed import) → the clamp does
+ * not apply; those callers are not the injection surface.
+ */
 export interface AnnotatedCandidate extends NewNoteInput {
   verdict?: unknown;
+  neighborIds?: string[];
 }
 
 const JUDGE_VALUES = new Set(["durable", "trivia"]);
@@ -72,7 +83,28 @@ export function parseVerdict(raw: unknown): CurationVerdict | undefined {
 /** The result of applying a verdict to one candidate before it reaches the deterministic gate. */
 export type VerdictPlan =
   | { action: "reject"; reason: "llm-trivia" | "llm-duplicate"; duplicateOf?: string }
-  | { action: "stage"; input: NewNoteInput; supersedes?: string; contradicts?: string };
+  | {
+      action: "stage";
+      input: NewNoteInput;
+      supersedes?: string;
+      contradicts?: string;
+      /** Set when a consolidation verdict was CLAMPED to DISTINCT (unsafe target); an audit reason. */
+      clamped?: string;
+    };
+
+/** Context {@link planCandidate} clamps consolidation targets against (defense in depth). */
+export interface PlanContext {
+  /**
+   * All ids that currently exist in canon + staging. A `duplicate` verdict whose `targetId` is not
+   * among them is clamped to DISTINCT even when it slipped the neighbor-set check — a fact is never
+   * dropped in favor of a note that does not exist (belt-and-braces over the neighbor clamp).
+   */
+  existingIds?: Set<string>;
+}
+
+/** The audit reasons a consolidation verdict can be clamped to DISTINCT for. */
+export const CLAMP_NOT_NEIGHBOR = "target-not-in-neighbor-set";
+export const CLAMP_NOT_IN_CANON = "duplicate-target-not-in-canon";
 
 /**
  * The `contradicted` tag {@link @cmnwlth/core!computeBrainHealth} already counts (#107/#214). A
@@ -88,9 +120,17 @@ export const CONTRADICTED_TAG = "contradicted";
  * back to its consolidation target after the gate (which may reject other candidates and break
  * positional alignment). `contradicts` additionally injects the `contradicts` frontmatter field and
  * the {@link CONTRADICTED_TAG}. Pure apart from the random id suffix.
+ *
+ * **Target clamping (the injection defense).** A consolidation verdict may only drop (`duplicate`)
+ * or merge (`supersedes`/`contradicts`) a candidate against a note the DETERMINISTIC neighbor step
+ * actually surfaced for THIS candidate. When `candidate.neighborIds` is present (always so in the
+ * hook pipeline), a `targetId` outside that set is treated as malformed → DISTINCT with an audit
+ * `clamped` reason. `duplicate` additionally requires the target to exist in canon+staging
+ * ({@link PlanContext.existingIds}), so a fabricated id can never destructively drop a real fact
+ * even on a trusted path. This upholds ADR-0030's fail-safe: only a VALID verdict changes behavior.
  */
-export function planCandidate(candidate: AnnotatedCandidate): VerdictPlan {
-  const { verdict: rawVerdict, ...base } = candidate;
+export function planCandidate(candidate: AnnotatedCandidate, ctx: PlanContext = {}): VerdictPlan {
+  const { verdict: rawVerdict, neighborIds, ...base } = candidate;
   const verdict = parseVerdict(rawVerdict);
 
   // Durability judge first: trivia never reaches the gate (logged, never staged).
@@ -98,31 +138,37 @@ export function planCandidate(candidate: AnnotatedCandidate): VerdictPlan {
     return { action: "reject", reason: "llm-trivia" };
   }
 
-  if (verdict?.consolidation === "duplicate" && verdict.targetId) {
-    return { action: "reject", reason: "llm-duplicate", duplicateOf: verdict.targetId };
-  }
+  const consolidation = verdict?.consolidation ?? "distinct";
+  const targetId = verdict?.targetId;
+  if (consolidation !== "distinct" && targetId) {
+    // Clamp 1 (all kinds): the target MUST be one of this candidate's deterministic neighbors.
+    // Skip only when no neighbor set was transported (a trusted, non-pipeline caller).
+    if (Array.isArray(neighborIds) && !neighborIds.includes(targetId)) {
+      return { action: "stage", input: base, clamped: CLAMP_NOT_NEIGHBOR };
+    }
 
-  if (
-    (verdict?.consolidation === "supersedes" || verdict?.consolidation === "contradicts") &&
-    verdict.targetId
-  ) {
-    // Trusted, pre-assigned id: survives the gate + promotion, so a post-gate step can reliably
-    // find THIS note (by id) to wire the supersession / read back the contradiction flag.
+    if (consolidation === "duplicate") {
+      // Clamp 2 (duplicate only, destructive path): the target must actually exist. Neighbors are
+      // canon-derived so this is redundant when the neighbor clamp ran, but it also guards the
+      // no-neighborIds path where a fabricated id would otherwise silently drop the candidate.
+      if (ctx.existingIds && !ctx.existingIds.has(targetId)) {
+        return { action: "stage", input: base, clamped: CLAMP_NOT_IN_CANON };
+      }
+      return { action: "reject", reason: "llm-duplicate", duplicateOf: targetId };
+    }
+
+    // supersedes / contradicts: stage with a trusted, pre-assigned id (survives gate + promotion).
     const id = makeNoteId(base.title, base.created ?? today());
-    if (verdict.consolidation === "supersedes") {
+    if (consolidation === "supersedes") {
       // Stamp the forward link `supersedes: [targetId]` on the new note (bidirectional with the
       // target's `superseded_by`, and the pending-queue annotation when autoPromote is off). Valid
       // for decisions; kept via frontmatter passthrough for memory.
-      const fields = { ...(base.fields ?? {}), supersedes: [verdict.targetId] };
-      return { action: "stage", input: { ...base, id, fields }, supersedes: verdict.targetId };
+      const fields = { ...(base.fields ?? {}), supersedes: [targetId] };
+      return { action: "stage", input: { ...base, id, fields }, supersedes: targetId };
     }
     const tags = [...new Set([...(base.tags ?? []), CONTRADICTED_TAG])];
-    const fields = { ...(base.fields ?? {}), contradicts: [verdict.targetId] };
-    return {
-      action: "stage",
-      input: { ...base, id, tags, fields },
-      contradicts: verdict.targetId,
-    };
+    const fields = { ...(base.fields ?? {}), contradicts: [targetId] };
+    return { action: "stage", input: { ...base, id, tags, fields }, contradicts: targetId };
   }
 
   // DISTINCT / durable / malformed → today's behavior exactly.

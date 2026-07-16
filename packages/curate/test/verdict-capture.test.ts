@@ -102,6 +102,57 @@ describe("planCandidate", () => {
     const plan = planCandidate({ ...base });
     expect(plan).toEqual({ action: "stage", input: base });
   });
+
+  it("clamps a consolidation whose targetId is NOT in the candidate's neighbor set → distinct", () => {
+    const base = {
+      kind: "memory",
+      title: "T",
+      body: "a body long enough to pass the gate",
+    } as const;
+    // neighborIds present (the pipeline case) but the verdict cites a note never surfaced for it.
+    for (const consolidation of ["duplicate", "supersedes", "contradicts"] as const) {
+      const plan = planCandidate({
+        ...base,
+        neighborIds: ["real-neighbor-1"],
+        verdict: { consolidation, targetId: "arbitrary-id" },
+      });
+      expect(plan).toMatchObject({ action: "stage", clamped: "target-not-in-neighbor-set" });
+    }
+  });
+
+  it("acts on a consolidation whose targetId IS a declared neighbor", () => {
+    const base = {
+      kind: "memory",
+      title: "T",
+      body: "a body long enough to pass the gate",
+    } as const;
+    const plan = planCandidate(
+      {
+        ...base,
+        neighborIds: ["real-neighbor-1"],
+        verdict: { consolidation: "duplicate", targetId: "real-neighbor-1" },
+      },
+      { existingIds: new Set(["real-neighbor-1"]) },
+    );
+    expect(plan).toMatchObject({
+      action: "reject",
+      reason: "llm-duplicate",
+      duplicateOf: "real-neighbor-1",
+    });
+  });
+
+  it("clamps a duplicate whose target does not exist in canon, even with no neighbor set", () => {
+    const base = {
+      kind: "memory",
+      title: "T",
+      body: "a body long enough to pass the gate",
+    } as const;
+    const plan = planCandidate(
+      { ...base, verdict: { consolidation: "duplicate", targetId: "totally-made-up-id" } },
+      { existingIds: new Set(["some-real-id"]) },
+    );
+    expect(plan).toMatchObject({ action: "stage", clamped: "duplicate-target-not-in-canon" });
+  });
 });
 
 describe("captureCandidates applies verdicts", () => {
@@ -236,5 +287,75 @@ describe("captureCandidates applies verdicts", () => {
     expect(result.superseded).toHaveLength(0);
     const target = await readNote(brainDir, "memory/2026-07-01-jwt-a1.md");
     expect(target.frontmatter.kind === "memory" && target.frontmatter.status).toBe("active");
+  });
+
+  it("verifier probe: a duplicate verdict with a made-up targetId → candidate SURVIVES (not dropped)", async () => {
+    const cands: AnnotatedCandidate[] = [
+      {
+        kind: "memory",
+        title: "A genuinely durable fact",
+        body: body("the deploy pipeline requires a named release owner for every production push"),
+        verdict: { consolidation: "duplicate", targetId: "totally-made-up-id" },
+      },
+    ];
+    const result = await captureCandidates(brainDir, cands);
+    // The fabricated target does not exist in canon → clamp to DISTINCT → the fact is KEPT.
+    expect(result.staged).toHaveLength(1);
+    expect(result.clamped).toBe(1);
+    expect(result.rejected).toHaveLength(0);
+    expect(await listNotes(brainDir)).toHaveLength(1);
+  });
+
+  it("injection: a duplicate targetId that is real canon but NOT this candidate's neighbor → survives", async () => {
+    // A real, unrelated canon note (would be a valid duplicate target for SOME other candidate).
+    await seedCanon(
+      "2026-07-01-cache-b2",
+      "Edge cache TTL",
+      body("five minute edge TTL"),
+      "memory",
+    );
+    const cands: AnnotatedCandidate[] = [
+      {
+        kind: "memory",
+        title: "Unrelated durable fact about auth",
+        body: body("auth tokens now rotate every twenty-four hours via the gateway"),
+        // The candidate's OWN neighbor set does not include the cited target — injection attempt.
+        neighborIds: ["2026-07-01-something-else"],
+        verdict: { consolidation: "duplicate", targetId: "2026-07-01-cache-b2" },
+      },
+    ];
+    const result = await captureCandidates(brainDir, cands);
+    expect(result.staged).toHaveLength(1);
+    expect(result.clamped).toBe(1);
+    expect(result.rejected).toHaveLength(0);
+  });
+
+  it("batched injection: an injected sibling verdict cannot drop a legitimate sibling", async () => {
+    await seedCanon("2026-07-01-jwt-a1", "Auth uses JWT", body("we use JWT tokens"), "memory");
+    const cands: AnnotatedCandidate[] = [
+      // Sibling A: legitimately a duplicate of its neighbor → correctly dropped.
+      {
+        kind: "memory",
+        title: "JWT auth restated",
+        body: body("the service authenticates with JWT tokens"),
+        neighborIds: ["2026-07-01-jwt-a1"],
+        verdict: { consolidation: "duplicate", targetId: "2026-07-01-jwt-a1" },
+      },
+      // Sibling B: a real, independent fact the injected batch tries to drop by citing A's target,
+      // which is NOT in B's neighbor set → clamp → B survives.
+      {
+        kind: "memory",
+        title: "Deploys need a release owner",
+        body: body("every production deploy must name one explicit release owner"),
+        neighborIds: [],
+        verdict: { consolidation: "duplicate", targetId: "2026-07-01-jwt-a1" },
+      },
+    ];
+    const result = await captureCandidates(brainDir, cands);
+    // A dropped (valid), B kept (clamped) — the injection could not take out the sibling.
+    expect(result.clamped).toBe(1);
+    const titles = (await listNotes(brainDir)).map((n) => n.frontmatter.title);
+    expect(titles).toContain("Deploys need a release owner");
+    expect(titles).not.toContain("JWT auth restated");
   });
 });

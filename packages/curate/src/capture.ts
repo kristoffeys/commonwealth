@@ -9,7 +9,7 @@ import {
 } from "@cmnwlth/core";
 import { curate, type CurateResult, type Curator } from "./curate.js";
 import { approve, reject } from "./review.js";
-import { reassignStagedContributor } from "./staging.js";
+import { listStaged, reassignStagedContributor } from "./staging.js";
 import { planCandidate, type AnnotatedCandidate } from "./verdict.js";
 
 async function rollbackStagedAttribution(
@@ -58,6 +58,13 @@ export interface CaptureResult extends CurateResult {
   contradictions: ConsolidationLink[];
   /** Count of candidates the durability judge filtered as trivia (logged, never staged). */
   triviaFiltered: number;
+  /**
+   * Count of consolidation verdicts CLAMPED to DISTINCT (ADR-0030): a `duplicate`/`supersedes`/
+   * `contradicts` whose `targetId` was outside the candidate's neighbor set (or, for duplicate, not
+   * in canon). The candidate is kept as-is — a misbehaving/injected classifier can never drop a
+   * fact — and this count makes that visible in the audit trail rather than silent.
+   */
+  clamped: number;
 }
 
 export interface CaptureOptions {
@@ -92,22 +99,41 @@ export async function captureCandidates(
 ): Promise<CaptureResult> {
   // (1) Apply verdicts BEFORE attribution/gating. Trivia + duplicate never reach the gate; the rest
   // become plain NewNoteInputs (supersedes/contradicts carry a trusted id + stamped frontmatter).
+  //
+  // Build the allow-list a consolidation `targetId` is clamped against: all ids in canon + staging.
+  // A verdict citing a note outside the candidate's neighbor set (or, for duplicate, outside this
+  // set) is degraded to DISTINCT — so an injected classifier can never drop a real fact (ADR-0030).
+  const canonAtEntry = await listNotes(brainDir);
+  const stagedAtEntry = await listStaged(brainDir);
+  const existingIds = new Set<string>([
+    ...canonAtEntry.map((n) => n.frontmatter.id),
+    ...stagedAtEntry.map((n) => n.frontmatter.id),
+  ]);
+
   const preRejected: CurateResult["rejected"] = [];
   const toStage: NewNoteInput[] = [];
   const supersedesById = new Map<string, string>();
   const contradictsById = new Map<string, string>();
   let triviaFiltered = 0;
+  let clamped = 0;
   for (const candidate of candidates) {
-    const plan = planCandidate(candidate);
+    const plan = planCandidate(candidate, { existingIds });
     if (plan.action === "reject") {
       if (plan.reason === "llm-trivia") triviaFiltered += 1;
-      const { verdict: _drop, ...bare } = candidate;
+      const { verdict: _drop, neighborIds: _n, ...bare } = candidate;
       preRejected.push({
         candidate: bare,
         reason: plan.reason,
         ...(plan.duplicateOf ? { duplicateOf: plan.duplicateOf } : {}),
       });
       continue;
+    }
+    if (plan.clamped) {
+      clamped += 1;
+      console.error(
+        `[commonwealth-curate] verdict clamped to distinct (${plan.clamped}); ` +
+          `keeping candidate "${plan.input.title}" rather than dropping it against an unvetted target.`,
+      );
     }
     toStage.push(plan.input);
     if (plan.supersedes && plan.input.id) supersedesById.set(plan.input.id, plan.supersedes);
@@ -160,10 +186,11 @@ export async function captureCandidates(
   }
   const superseded: ConsolidationLink[] = [];
   if (autoPromote) {
-    const canon = await listNotes(brainDir);
     for (const [id, targetId] of supersedesById) {
       if (!stagedIds.has(id)) continue;
-      const target = canon.find((n) => n.frontmatter.id === targetId);
+      // The target is pre-existing canon (a superseder's target came from the neighbor set), so it
+      // was captured at entry — reuse that snapshot rather than re-listing after promotion.
+      const target = canonAtEntry.find((n) => n.frontmatter.id === targetId);
       // Only supersede-able kinds carry status/superseded_by; supersedeNote no-ops otherwise. A
       // missing/unknown target is left alone — never drop or merge against a note we can't find.
       if (!target) continue;
@@ -179,6 +206,7 @@ export async function captureCandidates(
     superseded,
     contradictions,
     triviaFiltered,
+    clamped,
     ...(contributorPersonId ? { contributorPersonId } : {}),
   };
 }

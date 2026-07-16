@@ -419,7 +419,8 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
     result.superseded.length > 0 ||
     result.contradictions.length > 0 ||
     result.triviaFiltered > 0 ||
-    duplicates > 0
+    duplicates > 0 ||
+    result.clamped > 0
   ) {
     console.log(
       VERDICT_SUMMARY_PREFIX +
@@ -428,6 +429,7 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
           contradicted: result.contradictions.length,
           trivia: result.triviaFiltered,
           duplicate: duplicates,
+          clamped: result.clamped,
         }),
     );
   }

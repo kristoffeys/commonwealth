@@ -94,6 +94,7 @@ describe("parseVerdictSummary", () => {
       contradicted: 1,
       trivia: 2,
       duplicate: 0,
+      clamped: 0,
     });
   });
 
@@ -115,6 +116,15 @@ describe("endReceiptMessage with curation verdicts", () => {
     expect(msg).toContain("superseded an older note");
     expect(msg).toContain("flagged as a contradiction");
     expect(msg).toContain("filtered as trivia");
+  });
+
+  it("surfaces a clamped verdict so a misbehaving classifier is visible", () => {
+    const msg = endReceiptMessage({
+      captured: 1,
+      notes: [{ kind: "memory", title: "Kept fact", promoted: true }],
+      verdicts: { superseded: 0, contradicted: 0, trivia: 0, duplicate: 0, clamped: 1 },
+    });
+    expect(msg).toContain("clamped to distinct");
   });
 
   it("explains a zero-capture that the judge filtered as trivia", () => {

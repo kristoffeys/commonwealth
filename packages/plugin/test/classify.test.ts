@@ -85,7 +85,30 @@ describe("createClassifier", () => {
       targetId: "old-1",
     });
     expect(res.candidates[1].verdict).toMatchObject({ judge: "trivia" });
-    // Neighbors are stripped from the candidates handed onward to capture.
+    // Neighbors are stripped, but their IDS are transported as the clamp allow-list for capture.
+    expect(res.candidates[0]).not.toHaveProperty("neighbors");
+    expect(res.candidates[0].neighborIds).toEqual(["old-1"]);
+    expect(res.candidates[1].neighborIds).toEqual([]);
+  });
+
+  it("transports neighbor ids (not the neighbor objects) across the classify → capture boundary", async () => {
+    const run = vi.fn(async () => ({
+      code: 0,
+      stdout: JSON.stringify([
+        { index: 0, judge: "durable", consolidation: "distinct", targetId: "" },
+      ]),
+      stderr: "",
+    }));
+    const classifier = createClassifier({ host: "claude", run });
+    const res = await classifier.classify({
+      candidates: [
+        withNeighbors("A", [
+          { id: "n-1", kind: "memory", title: "One", excerpt: "..." },
+          { id: "n-2", kind: "memory", title: "Two", excerpt: "..." },
+        ]),
+      ],
+    });
+    expect(res.candidates[0].neighborIds).toEqual(["n-1", "n-2"]);
     expect(res.candidates[0]).not.toHaveProperty("neighbors");
   });
 

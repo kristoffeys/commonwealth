@@ -189,11 +189,17 @@ export function createClassifier({
         return { ok: false, reason: "malformed-output", host, runtime, code: 0 };
       }
       // Annotate each candidate with its verdict (by index); an unmatched candidate stays
-      // unannotated → DISTINCT downstream. Strip the neighbors — capture doesn't need them.
+      // unannotated → DISTINCT downstream. Replace the bulky neighbor objects with just their ids
+      // (`neighborIds`): capture doesn't need the excerpts, but it DOES need the id allow-list to
+      // clamp a verdict's targetId — so an injected classifier can't cite an arbitrary note to drop
+      // a real fact. This is deterministic pipeline metadata, never model output.
       const annotated = candidates.map((candidate, index) => {
-        const { neighbors: _drop, ...rest } = candidate;
+        const { neighbors, ...rest } = candidate;
+        const neighborIds = Array.isArray(neighbors)
+          ? neighbors.map((n) => n?.id).filter((id) => typeof id === "string")
+          : [];
         const verdict = byIndex.get(index);
-        return verdict ? { ...rest, verdict } : { ...rest };
+        return { ...rest, neighborIds, ...(verdict ? { verdict } : {}) };
       });
       return { ok: true, candidates: annotated };
     },

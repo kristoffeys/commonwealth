@@ -462,6 +462,7 @@ export function parseVerdictSummary(stdout) {
           contradicted: Number(parsed.contradicted) || 0,
           trivia: Number(parsed.trivia) || 0,
           duplicate: Number(parsed.duplicate) || 0,
+          clamped: Number(parsed.clamped) || 0,
         };
       }
     } catch {
@@ -486,6 +487,9 @@ function verdictClause(verdicts) {
     );
   if (verdicts.trivia > 0) parts.push(`${verdicts.trivia} filtered as trivia`);
   if (verdicts.duplicate > 0) parts.push(`${verdicts.duplicate} dropped as duplicate(s)`);
+  // Surface a clamped verdict so a misbehaving/injected classifier is visible, not silent.
+  if (verdicts.clamped > 0)
+    parts.push(`${verdicts.clamped} verdict(s) clamped to distinct (unsafe target)`);
   return parts.length > 0 ? ` (${parts.join(", ")})` : "";
 }
 
