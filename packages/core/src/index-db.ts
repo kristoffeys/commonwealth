@@ -336,10 +336,11 @@ const SIGNATURE_KEY = "signature";
 
 /**
  * A cheap fingerprint of the note files on disk (#234): the file COUNT and the MAX mtime across
- * them. Every change to canon moves at least one of these — an add/remove shifts the count, an
- * edit (or a replace at the same count) bumps a file's mtime above the previous max — so comparing
- * it against the signature stored at index-build time detects hand-edits and out-of-band git pulls
- * without reading a single note body.
+ * them. In practice every change to canon moves at least one of these — an add/remove shifts the
+ * count, and a normal edit stamps mtime "now", above the previous max. Known blind spot: an edit
+ * whose mtime is deliberately backdated below the untouched max on a non-max file, at constant
+ * count, is missed until the next build — acceptable, since only tooling that rewrites mtimes
+ * (not editors, not git) produces that shape. Comparison reads stats only, never note bodies.
  */
 interface BrainSignature {
   count: number;

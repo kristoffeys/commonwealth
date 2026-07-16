@@ -164,6 +164,30 @@ describe("hybrid semantic retrieval (ADR-0025, #213)", () => {
     expect(hits.map((h) => h.title)).toEqual(["Deploy"]);
   });
 
+  it("semantic-only guard (#213): a note reachable by NO lexical path still surfaces via vectors", async () => {
+    // "gamma" appears in the query, so FTS-AND is satisfiable via this note and the
+    // OR fallback never fires — any hit for "Delta semantic" can ONLY come from the
+    // vector tier. This test fails if the semantic tier is disabled or broken, restoring
+    // the isolation the reframed #213 tests above lost to the #209 OR fallback.
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Gamma lexical",
+      body: "gamma pipeline documented here",
+    });
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Delta semantic",
+      body: "delta concept described",
+    });
+    const embedder = keywordEmbedder({ gamma: 0, delta: 1 });
+    await buildIndex(dir, { embedder });
+    // Query maps onto BOTH axes semantically but only "gamma" lexically (AND non-empty).
+    const hits = await search(dir, "gamma delta", { embedder });
+    const titles = hits.map((h) => h.title);
+    expect(titles).toContain("Gamma lexical");
+    expect(titles).toContain("Delta semantic"); // semantic-only arrival — the guard
+  });
+
   it("ranks a note matched by BOTH lists above single-list hits (RRF), stale still demoted", async () => {
     // Contains BOTH query tokens → a lexical (FTS-AND) hit, AND both semantic axes.
     await writeNote(dir, {
