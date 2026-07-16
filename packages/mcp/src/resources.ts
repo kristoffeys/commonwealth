@@ -179,8 +179,7 @@ export async function readNoteResource(
   const fm = note.frontmatter;
   let banner = "";
   if (isSuperseded(note)) {
-    const by =
-      "superseded_by" in fm && fm.superseded_by ? ` by \`${fm.superseded_by}\`` : "";
+    const by = "superseded_by" in fm && fm.superseded_by ? ` by \`${fm.superseded_by}\`` : "";
     banner = `> ⚠️ **Superseded**${by} — kept for history; prefer the note that replaced it.\n\n`;
   }
   return `${banner}# ${fm.title}\n\n${note.body}`;

@@ -168,8 +168,16 @@ export const PROMPTS: PromptDef[] = [
     commandFile: "decide.md",
     args: [
       { name: "what", description: "The decision that was made", required: true },
-      { name: "why", description: "The rationale: problem, options weighed, why this one won", required: false },
-      { name: "deciders", description: "Who decided (comma-separated names/handles)", required: false },
+      {
+        name: "why",
+        description: "The rationale: problem, options weighed, why this one won",
+        required: false,
+      },
+      {
+        name: "deciders",
+        description: "Who decided (comma-separated names/handles)",
+        required: false,
+      },
     ],
     driftAnchors: [
       "Deliberately record a **decision**",
@@ -199,7 +207,7 @@ export const PROMPTS: PromptDef[] = [
         "- **Status** — `accepted` for a decision that's been taken, `proposed` if it's still a proposal.",
         "",
         "Then record it by calling the `commonwealth` MCP server's **`remember`** tool with " +
-          "`kind: \"decision\"`, a short decision statement as the `title`, and the what/why/options/" +
+          '`kind: "decision"`, a short decision statement as the `title`, and the what/why/options/' +
           "assumptions in the `body`. Report the note id back to the user; if it was staged (not " +
           "promoted), remind them it is pending review until promoted.",
       ]
@@ -235,7 +243,11 @@ export const PROMPTS: PromptDef[] = [
     description: "Approve staged notes into canon (or list what is pending)",
     commandFile: "promote.md",
     args: [
-      { name: "ids", description: "Space-separated note ids to approve (empty = list pending)", required: false },
+      {
+        name: "ids",
+        description: "Space-separated note ids to approve (empty = list pending)",
+        required: false,
+      },
     ],
     driftAnchors: [
       "Approve one or more **staged** notes into the brain's canonical folders (ADR-0007).",
