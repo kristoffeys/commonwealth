@@ -197,7 +197,10 @@ commonwealth graduate --suggest           # scan wired brains; stage recurring f
 A note is only ever considered when it carries `graduate: true`, and even then it must recur
 across **≥2 distinct brains** to be proposed. Candidates are **staged for manual review** in the
 org-brain (with `sources:` back-links to where they came from) — never auto-promoted across the
-trust boundary, regardless of any brain's `autoPromote`. See [ADR-0023](docs/adr/0023-org-brain-graduation.md).
+trust boundary, regardless of any brain's `autoPromote`. Rejecting a candidate records a
+**reject-tombstone** in the org-brain, so the same cluster is not re-proposed on the next run (it is
+skipped with a `(previously rejected — N suppressed)` note); `commonwealth graduate --include-rejected`
+resurfaces them. See [ADR-0023](docs/adr/0023-org-brain-graduation.md).
 
 ### Route projects to brains (rules)
 
