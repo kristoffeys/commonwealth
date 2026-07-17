@@ -34,6 +34,15 @@ export interface BrainConfig {
    */
   embeddings: EmbeddingsConfig;
   /**
+   * Action-time contradiction guard (ADR-0033). Tuning for the PreToolUse hook that warns when a
+   * pending Write/Edit/Bash looks like it contradicts a recorded `decision` note. Inert unless the
+   * `contradictionGuard` feature flag is on AND an embeddings provider resolves (ADR-0021). `mode`
+   * chooses `warn` (default — inject a non-blocking `additionalContext` nudge, the tool still runs)
+   * or `ask` (opt-in — escalate to a permission prompt); `threshold` is the conservative cosine
+   * floor at/above which a decision is surfaced (high by default so false positives stay rare).
+   */
+  contradictionGuard: ContradictionGuardConfig;
+  /**
    * **Shared** brain-resolution rules (ADR-0024 §5): the `origin: "shared"` half of the ruleset,
    * committed here so it syncs to the whole team. Each entry is a **matcher only** (`repo` / `org`
    * / `prefix`) plus an optional `deny` — it carries NO brain path (a route means "capture into
@@ -43,6 +52,15 @@ export interface BrainConfig {
    * rule for the same matcher overrides. Personal `local` denies never land here. Defaults to `[]`.
    */
   sharedRules: Rule[];
+}
+
+/**
+ * Action-time contradiction guard tuning (ADR-0033). `mode` is `warn` (non-blocking, default) or
+ * `ask` (opt-in escalation); `threshold` is the cosine floor for surfacing a decision.
+ */
+export interface ContradictionGuardConfig {
+  mode: "warn" | "ask";
+  threshold: number;
 }
 
 /**
@@ -141,11 +159,30 @@ export const FEATURE_FLAGS: ReadonlyArray<{
       "— any classifier failure fails open to today's DISTINCT behavior. Set false to skip the pass.",
     default: true,
   },
+  {
+    name: "contradictionGuard",
+    description:
+      "Action-time contradiction guard (ADR-0033): a PreToolUse hook that, before Write/Edit/Bash " +
+      "runs, checks whether the pending change looks like it contradicts a recorded decision note " +
+      "and surfaces it. Default OFF (unlike the other semantic flags) because it fires on the " +
+      "tool hot path — a team opts in explicitly. Also inert unless an embeddings provider resolves " +
+      "(ADR-0021). Non-blocking by default (a warning injected into context; the tool still runs); " +
+      "see contradictionGuard.mode to escalate to an ask prompt, and .threshold to tune the floor.",
+    default: false,
+  },
 ];
 
 /** Default embeddings config (ADR-0021): local provider, inert until `semanticDedup` is on. */
 export function defaultEmbeddingsConfig(): EmbeddingsConfig {
   return { provider: "local", threshold: 0.85 };
+}
+
+/**
+ * Default contradiction-guard tuning (ADR-0033): non-blocking `warn` mode and a deliberately high
+ * cosine floor (0.82) so the guard nudges rarely and errs toward missing over crying wolf.
+ */
+export function defaultContradictionGuardConfig(): ContradictionGuardConfig {
+  return { mode: "warn", threshold: 0.82 };
 }
 
 /** Build the default `features` map from {@link FEATURE_FLAGS} (each flag at its default). */
@@ -170,6 +207,7 @@ export function defaultBrainConfig(name: string): BrainConfig {
     features: defaultFeatures(),
     secretScan: { entropy: false, allowlist: [] },
     embeddings: defaultEmbeddingsConfig(),
+    contradictionGuard: defaultContradictionGuardConfig(),
     sharedRules: [],
   };
 }
@@ -242,6 +280,10 @@ export async function loadBrainConfig(brainDir: string): Promise<BrainConfig> {
     },
     secretScan: normalizeSecretScan(obj.secretScan, defaults.secretScan),
     embeddings: normalizeEmbeddings(obj.embeddings, defaults.embeddings),
+    contradictionGuard: normalizeContradictionGuard(
+      obj.contradictionGuard,
+      defaults.contradictionGuard,
+    ),
     // Shared rules (ADR-0024 §5): keep only well-formed matcher(+deny) entries; a malformed one is
     // dropped rather than throwing (mirrors the per-user ruleset's defensive parse).
     sharedRules: Array.isArray(obj.sharedRules)
@@ -269,6 +311,21 @@ function normalizeEmbeddings(raw: unknown, fallback: EmbeddingsConfig): Embeddin
     ...(typeof obj.endpoint === "string" ? { endpoint: obj.endpoint } : {}),
     ...(typeof obj.apiKeyEnv === "string" ? { apiKeyEnv: obj.apiKeyEnv } : {}),
   };
+}
+
+/** Coerce a config file's `contradictionGuard` block into the typed shape, per-field fallback. */
+function normalizeContradictionGuard(
+  raw: unknown,
+  fallback: ContradictionGuardConfig,
+): ContradictionGuardConfig {
+  if (typeof raw !== "object" || raw === null) return fallback;
+  const obj = raw as Partial<ContradictionGuardConfig>;
+  const mode = obj.mode === "warn" || obj.mode === "ask" ? obj.mode : fallback.mode;
+  const threshold =
+    typeof obj.threshold === "number" && Number.isFinite(obj.threshold)
+      ? obj.threshold
+      : fallback.threshold;
+  return { mode, threshold };
 }
 
 /** Coerce a config file's `secretScan` into the typed shape, falling back to defaults per field. */

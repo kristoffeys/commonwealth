@@ -40,6 +40,7 @@ import { graduateToOrgBrain } from "./graduate.js";
 import { formatContext } from "./context.js";
 import { curate } from "./curate.js";
 import { computeNeighbors } from "./neighbors.js";
+import { checkContradiction } from "./contradiction.js";
 import { reassignStagedContributor } from "./staging.js";
 import { selectRelevant, selectRelevantDiagnostics, type RelevantHit } from "./relevance.js";
 import { approve, approveAll, listPending, reject } from "./review.js";
@@ -142,6 +143,7 @@ function usage(): void {
       "  commonwealth-curate context [--dir <brain>] [--cwd <dir>] [--query <q>] [--limit <n>]",
       "  commonwealth-curate capture [--dir <brain>] [--cwd <dir>] [--from <json-file>]",
       "  commonwealth-curate neighbors [--dir <brain>] [--cwd <dir>] [--from <json-file>] [--k <n>]",
+      "  commonwealth-curate contradiction-check [--dir <brain>] [--cwd <dir>] [--summary <text>] [--threshold <n>]",
       "  commonwealth-curate scope show",
       "  commonwealth-curate scope check [--cwd <dir>]",
       "  commonwealth-curate scope allow <path>",
@@ -597,6 +599,43 @@ async function cmdNeighbors(explicitDir: string | undefined, args: string[]): Pr
   const k = values.k !== undefined ? Number.parseInt(values.k, 10) : undefined;
   const result = await computeNeighbors(dir, candidates, {
     ...(k !== undefined && Number.isFinite(k) && k > 0 ? { k } : {}),
+  });
+  console.log(JSON.stringify(result));
+}
+
+/**
+ * `contradiction-check` — the embeddings invocation path the PreToolUse contradiction guard reuses
+ * (ADR-0033). Reads a compact change summary (from `--summary` or stdin), resolves the scoped brain,
+ * and prints the {@link ContradictionResult} JSON: whether the flag is on, whether a provider
+ * resolved, and the nearest `decision` note at/above the threshold. Out-of-scope / no-brain prints a
+ * disabled result so the hook does no work and fails open.
+ */
+async function cmdContradiction(explicitDir: string | undefined, args: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      dir: { type: "string" },
+      cwd: { type: "string" },
+      summary: { type: "string" },
+      threshold: { type: "string" },
+    },
+    allowPositionals: false,
+  });
+
+  const cwd = typeof values.cwd === "string" ? values.cwd : process.cwd();
+  const resolved = await resolveScopedBrain(explicitDir ?? values.dir, cwd);
+  if ("skip" in resolved) {
+    console.log(JSON.stringify({ enabled: false, provider: false, match: null }));
+    return;
+  }
+
+  const summary = typeof values.summary === "string" ? values.summary : await readStdin();
+  const thresholdRaw =
+    typeof values.threshold === "string" ? Number.parseFloat(values.threshold) : undefined;
+  const result = await checkContradiction(resolved.brain, summary, {
+    ...(thresholdRaw !== undefined && Number.isFinite(thresholdRaw)
+      ? { threshold: thresholdRaw }
+      : {}),
   });
   console.log(JSON.stringify(result));
 }
@@ -1171,6 +1210,9 @@ async function main(): Promise<void> {
       break;
     case "neighbors":
       await cmdNeighbors(explicitDir, rest);
+      break;
+    case "contradiction-check":
+      await cmdContradiction(explicitDir, rest);
       break;
     case "scope":
       await cmdScope(rest);

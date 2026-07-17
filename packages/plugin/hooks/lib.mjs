@@ -81,6 +81,31 @@ const SESSION_END_SYNC_TIMEOUT_MS = 60_000;
 export const DISABLE_HOOKS_ENV = "COMMONWEALTH_DISABLE_HOOKS";
 
 /**
+ * Hard timeout (ms) on the action-time contradiction guard's embeddings check (ADR-0033). The guard
+ * fires on EVERY Write/Edit/Bash when enabled, so it must never add perceptible latency: past this
+ * budget we abandon the check and ALLOW the tool (fail-open). Deliberately tight — the guard is a
+ * best-effort nudge, not a gate, so a cold/slow embedder simply means "no warning this time".
+ */
+export const GUARD_TIMEOUT_MS = 300;
+
+/**
+ * Bound on the summary text embedded per change (ADR-0033): we embed a COMPACT description of the
+ * change (command / new content / edited text), never whole files, and cap it here so a huge write
+ * can't blow the embed cost or the prompt.
+ */
+const GUARD_SUMMARY_MAX = 2000;
+
+/** Minimum meaningful payload length to bother embedding — below this we skip (a trivial edit). */
+const GUARD_SUMMARY_MIN = 12;
+
+/** Subprocess cap for the curate `contradiction-check` child; the {@link GUARD_TIMEOUT_MS} race
+ * abandons it well before this, but it still bounds a stranded child. */
+const CONTRADICTION_SUBPROCESS_TIMEOUT_MS = 5_000;
+
+/** The tools the contradiction guard inspects (mirrors the hooks.json PreToolUse matcher). */
+const GUARD_TOOLS = new Set(["Write", "Edit", "MultiEdit", "Bash"]);
+
+/**
  * Ordered, deduped list of directories to try as the session's working directory. The
  * hook-supplied cwd comes first (it's the harness's answer and normally correct), then
  * `$CLAUDE_PROJECT_DIR`, then `process.cwd()`.
@@ -801,6 +826,203 @@ export function attachReceipt(output, receiptMessage) {
 }
 
 // ---------------------------------------------------------------------------------------
+// Action-time contradiction guard (ADR-0033). A PreToolUse hook that, before a Write/Edit/Bash
+// runs, checks whether the pending change looks like it contradicts a recorded `decision` note and
+// surfaces it. Conservative by construction: opt-in (default off), non-blocking by default (a
+// context nudge, not a gate), decision-notes-only, fail-open under a hard time budget, deduped once
+// per decision per session, and gated by a high similarity threshold. The pure control flow lives
+// here (deps-injected for tests); `realDeps()` supplies the embeddings + marker wiring.
+// ---------------------------------------------------------------------------------------
+
+/** `str` as a trimmed string, or "" for a non-string. */
+function guardStr(value) {
+  return typeof value === "string" ? value : "";
+}
+
+/**
+ * Reduce a PreToolUse `tool_input` to the COMPACT text worth embedding (ADR-0033): the command for
+ * Bash, the new content for Write, the added/new text for Edit/MultiEdit — never whole files, and
+ * bounded to {@link GUARD_SUMMARY_MAX}. Returns "" when there is nothing meaningful to embed (an
+ * unknown tool, or a payload below {@link GUARD_SUMMARY_MIN}), so the guard skips trivial changes.
+ *
+ * @param {string} toolName
+ * @param {unknown} toolInput
+ * @returns {string}
+ */
+export function summarizeToolInput(toolName, toolInput) {
+  if (!toolInput || typeof toolInput !== "object") return "";
+  const ti = toolInput;
+  let label = "";
+  let payload = "";
+  switch (toolName) {
+    case "Bash":
+      label = guardStr(ti.description);
+      payload = guardStr(ti.command);
+      break;
+    case "Write":
+      label = guardStr(ti.file_path);
+      payload = guardStr(ti.content);
+      break;
+    case "Edit":
+    case "MultiEdit":
+      label = guardStr(ti.file_path);
+      payload = Array.isArray(ti.edits)
+        ? ti.edits.map((e) => guardStr(e?.new_string)).join(" ")
+        : guardStr(ti.new_string);
+      break;
+    default:
+      return "";
+  }
+  if (payload.trim().length < GUARD_SUMMARY_MIN) return "";
+  return `${label} ${payload}`.replace(/\s+/g, " ").trim().slice(0, GUARD_SUMMARY_MAX);
+}
+
+/**
+ * Resolve `promise`, or bail after `ms` — the guard's fail-open time budget (ADR-0033). Never
+ * rejects: resolves `{ value }` on success, `{ timedOut: true }` when the budget wins, or
+ * `{ error }` when the promise rejects. A late rejection AFTER the timeout is still consumed by the
+ * attached handler, so a slow/hung embedder can never surface an unhandled rejection.
+ *
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} ms
+ * @returns {Promise<{ value: T } | { timedOut: true } | { error: unknown }>}
+ */
+function guardTimeout(promise, ms) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = globalThis.setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve({ timedOut: true });
+      }
+    }, ms);
+    timer.unref?.();
+    Promise.resolve(promise).then(
+      (value) => {
+        if (!settled) {
+          settled = true;
+          globalThis.clearTimeout(timer);
+          resolve({ value });
+        }
+      },
+      (error) => {
+        if (!settled) {
+          settled = true;
+          globalThis.clearTimeout(timer);
+          resolve({ error });
+        }
+        // else: rejection arrived after the timeout already resolved — swallowed here, so no
+        // unhandled rejection escapes.
+      },
+    );
+  });
+}
+
+/** The per-session dedup key: the session id when present, else the cwd (matches capture marks). */
+function guardSessionKey(input) {
+  return String(input?.session_id || input?.cwd || "default");
+}
+
+/**
+ * Build the PreToolUse output for a detected contradiction (ADR-0033). In the default `warn` mode it
+ * returns a NON-BLOCKING `additionalContext` nudge (the tool still runs); in the opt-in `ask` mode
+ * it returns `permissionDecision: "ask"` so the user is prompted. Pure; returns null for a malformed
+ * match. The message names the decision as a `[[id]]` wikilink and cites the note path.
+ *
+ * @param {{ id: string, title?: string, path?: string, score?: number }} match
+ * @param {"warn" | "ask"} mode
+ * @returns {object | null}
+ */
+export function buildContradictionOutput(match, mode) {
+  if (!match || typeof match.id !== "string" || match.id.length === 0) return null;
+  const title = typeof match.title === "string" && match.title.length > 0 ? match.title : match.id;
+  const cited = typeof match.path === "string" && match.path.length > 0 ? match.path : match.id;
+  const message =
+    `⚠ This change may contradict decision [[${match.id}]]: ${title} — ` +
+    `your pending change is semantically close to this recorded team decision. Cited: ${cited}`;
+  if (mode === "ask") {
+    return {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "ask",
+        permissionDecisionReason: message,
+      },
+    };
+  }
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      additionalContext: message,
+    },
+  };
+}
+
+/**
+ * PreToolUse contradiction guard (ADR-0033). Returns the hook's stdout payload (a warning /
+ * ask output) or null to write nothing (the tool proceeds unchanged). The control flow is
+ * conservative at every step:
+ *  1. only the guarded tools (Write/Edit/Bash) with a valid cwd, and only an in-scope brain;
+ *  2. a CHEAP config gate first (`loadGuardConfig` reads config.json only): flag off or no
+ *     embeddings provider → complete no-op with ZERO embedding work — the default-off common case;
+ *  3. embed only a compact change summary; skip when there's nothing meaningful to embed;
+ *  4. run the embeddings check under a hard {@link GUARD_TIMEOUT_MS} budget — timeout OR any error
+ *     ALLOWS the tool (fail-open) with at most one stderr breadcrumb;
+ *  5. session-dedup: warn once per decision per session, never on every keystroke.
+ *
+ * @param {{ cwd?: string, tool_name?: string, tool_input?: unknown, session_id?: string }} input
+ * @param {object} deps  resolveBrain / loadGuardConfig / findContradiction / wasWarned / markWarned.
+ * @returns {Promise<object | null>}
+ */
+export async function contradictionGuard(input, deps) {
+  // Recursion guard (#104), belt-and-suspenders with the entry: the extraction/classifier
+  // `claude -p` children run with this set, so their tool calls must never re-fire the guard.
+  if (process.env[DISABLE_HOOKS_ENV] === "1") return null;
+
+  const inputCwd = input?.cwd;
+  if (typeof inputCwd !== "string" || inputCwd.length === 0) return null;
+  const toolName = input?.tool_name;
+  if (typeof toolName !== "string" || !GUARD_TOOLS.has(toolName)) return null;
+
+  // In-scope brain only (the scope gate); a denied/none cwd guards nothing.
+  const resolved = await resolveSessionBrain(inputCwd, deps);
+  if (resolved.kind !== "brain") return null;
+  const brain = resolved.brain;
+  const cwd = resolved.cwd;
+
+  // Cheap gate FIRST — reads config.json, no embedding. Flag off (default) or no provider → no-op.
+  const cfg = await deps.loadGuardConfig(brain);
+  if (!cfg || cfg.enabled !== true || cfg.hasProvider !== true) return null;
+
+  const summary = summarizeToolInput(toolName, input?.tool_input);
+  if (summary.length === 0) return null;
+
+  const outcome = await guardTimeout(
+    deps.findContradiction({ brain, cwd, summary, threshold: cfg.threshold }),
+    GUARD_TIMEOUT_MS,
+  );
+  if ("timedOut" in outcome) {
+    console.error("[commonwealth] contradiction-guard: check exceeded time budget; allowing.");
+    return null;
+  }
+  if ("error" in outcome) {
+    const err = outcome.error;
+    console.error(
+      `[commonwealth] contradiction-guard: check failed (${err instanceof Error ? err.message : err}); allowing.`,
+    );
+    return null;
+  }
+  const match = outcome.value;
+  if (!match || typeof match.id !== "string") return null;
+
+  const key = guardSessionKey(input);
+  if (await deps.wasWarned(key, match.id)) return null;
+  await deps.markWarned(key, match.id);
+
+  return buildContradictionOutput(match, cfg.mode === "ask" ? "ask" : "warn");
+}
+
+// ---------------------------------------------------------------------------------------
 // Production dependencies. These are only imported/used at runtime by the real hooks, never
 // by the unit tests (which inject fakes), so importing this module is cheap and side-effect
 // free until `realDeps()` is called.
@@ -1366,6 +1588,111 @@ export function realDeps(overrides = {}) {
       .catch(() => {});
   }
 
+  /**
+   * Cheap, embedding-free gate for the contradiction guard (ADR-0033): read the brain's
+   * config.json directly (no subprocess) and report whether the `contradictionGuard` flag is on,
+   * the mode/threshold, and whether an embeddings provider is configured at all. This is what lets
+   * the default-off common case cost a single file read on the tool hot path. Never throws — a
+   * missing/unparseable config reports disabled (the feature is strictly opt-in).
+   */
+  async function loadGuardConfig(brain) {
+    try {
+      const parsed = JSON.parse(
+        await fs.readFile(path.join(brain, ".commonwealth", "config.json"), "utf8"),
+      );
+      const features =
+        parsed?.features && typeof parsed.features === "object" ? parsed.features : {};
+      const guard =
+        parsed?.contradictionGuard && typeof parsed.contradictionGuard === "object"
+          ? parsed.contradictionGuard
+          : {};
+      const embeddings =
+        parsed?.embeddings && typeof parsed.embeddings === "object" ? parsed.embeddings : {};
+      // Mirror core's default (provider "local") when the block is absent, so the cheap gate agrees
+      // with what the subprocess would resolve; "none" (or an explicit absent provider string).
+      const provider = typeof embeddings.provider === "string" ? embeddings.provider : "local";
+      return {
+        enabled: features.contradictionGuard === true,
+        mode: guard.mode === "ask" ? "ask" : "warn",
+        threshold:
+          typeof guard.threshold === "number" && Number.isFinite(guard.threshold)
+            ? guard.threshold
+            : 0.82,
+        hasProvider: provider === "local" || provider === "hosted",
+      };
+    } catch {
+      return { enabled: false, mode: "warn", threshold: 0.82, hasProvider: false };
+    }
+  }
+
+  /**
+   * Run the curate `contradiction-check` child (ADR-0033) — the embeddings invocation path the
+   * guard reuses rather than hand-rolling — passing the compact change summary on stdin and the
+   * brain in `$COMMONWEALTH_BRAIN_DIR`. Returns the nearest decision `match` (or null). The guard
+   * wraps this in its own {@link GUARD_TIMEOUT_MS} race, so a slow child is abandoned there; this
+   * timeout only bounds a stranded process. Never throws — a non-zero exit / unparseable output is
+   * treated as "no contradiction" (fail-open).
+   */
+  async function findContradiction({ brain, cwd, summary, threshold }) {
+    const args = ["contradiction-check", "--cwd", cwd];
+    if (typeof threshold === "number" && Number.isFinite(threshold)) {
+      args.push("--threshold", String(threshold));
+    }
+    const res = await runCurate(args, {
+      input: summary,
+      env: { COMMONWEALTH_BRAIN_DIR: brain },
+      timeoutMs: CONTRADICTION_SUBPROCESS_TIMEOUT_MS,
+    });
+    if (res.code !== 0) return null;
+    let parsed;
+    try {
+      parsed = JSON.parse(res.stdout.trim());
+    } catch {
+      return null;
+    }
+    return parsed && parsed.match && typeof parsed.match.id === "string" ? parsed.match : null;
+  }
+
+  /**
+   * Per-session set of decision ids already warned about (ADR-0033 session-dedup), stored next to
+   * the receipt like the capture marks. One file per session so concurrent sessions never contend.
+   */
+  function guardMarkPath(key) {
+    const safe = String(key || "default")
+      .replace(/[^A-Za-z0-9_.-]/g, "_")
+      .slice(0, 128);
+    return path.join(path.dirname(receiptPath()), `contradiction-warned-${safe}.json`);
+  }
+
+  /** True if `id` was already warned about this session. Never throws (absent file → false). */
+  async function wasWarned(key, id) {
+    try {
+      const parsed = JSON.parse(await fs.readFile(guardMarkPath(key), "utf8"));
+      return Array.isArray(parsed?.ids) && parsed.ids.includes(id);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Record `id` as warned this session (best-effort; a hook must never break the session). */
+  async function markWarned(key, id) {
+    try {
+      const p = guardMarkPath(key);
+      let ids = [];
+      try {
+        const parsed = JSON.parse(await fs.readFile(p, "utf8"));
+        if (Array.isArray(parsed?.ids)) ids = parsed.ids;
+      } catch {
+        // First warning this session — start a fresh set.
+      }
+      if (!ids.includes(id)) ids.push(id);
+      await fs.mkdir(path.dirname(p), { recursive: true });
+      await fs.writeFile(p, JSON.stringify({ ids }), "utf8");
+    } catch {
+      // Non-fatal: at worst the guard re-warns about the same decision later this session.
+    }
+  }
+
   return {
     resolveBrain: realResolveBrain,
     getContext,
@@ -1382,6 +1709,10 @@ export function realDeps(overrides = {}) {
     syncOnce,
     spawnDetachedSync,
     isDaemonRunning: daemonIsRunning,
+    loadGuardConfig,
+    findContradiction,
+    wasWarned,
+    markWarned,
   };
 }
 

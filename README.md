@@ -390,6 +390,16 @@ commonwealth config set semanticDedup true   # smarter dedup (see below)
   clean without human review. Runs in the plugin hook layer over the same host runtime as capture,
   so it is inert without a runtime (behaves exactly like today); any classifier failure fails open
   to the deterministic gate. Set `false` to skip the pass.
+- **`contradictionGuard`** (default **off**) — an action-time contradiction guard
+  ([ADR-0033](docs/adr/0033-action-time-contradiction-guard.md)): a PreToolUse hook that, before a
+  Write/Edit/Bash runs, checks whether the pending change looks like it contradicts a recorded
+  `decision` note (reusing the `semanticDedup`/`semanticSearch` vectors) and surfaces it. Default
+  **off** because it fires on the tool hot path; inert without an embeddings provider. **Non-blocking
+  by default** — it injects a one-line warning into the agent's context and the tool still runs; set
+  `contradictionGuard.mode` to `ask` (from `warn`) in the brain config to escalate to a permission
+  prompt instead. Conservative by design: decision-notes-only, a hard 300ms fail-open time budget (a
+  slow/cold embedder simply means no warning), one nudge per decision per session, and a high
+  similarity floor (`contradictionGuard.threshold`, default `0.82`) so it fires rarely.
 
 ## Docs
 
