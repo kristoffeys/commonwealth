@@ -30,6 +30,42 @@ export interface SearchOptions {
    * {@link EMBED_QUERY_TIMEOUT_MS}; exposed mainly so tests can exercise the timeout path.
    */
   embedTimeoutMs?: number;
+  /**
+   * Strict retrieval (#236, after MAMA's strict mode): the minimum lexical support a candidate needs
+   * to survive fusion. Default `0` = today's permissive behavior (no candidate is ever dropped).
+   * Support is the count of distinct query tokens with a lexical anchor on the note, where an anchor
+   * is EITHER the note arriving in the (OR-expanded, #209) lexical candidate list — which already
+   * gives it support ≥ 1 — OR a query token appearing in the note's title/tags. So `1` keeps every
+   * lexically-arrived hit and every title/tag-keyword hit but rejects pure vector noise: an
+   * embedding-near note with zero lexical/title/tag overlap. Only ever prunes SEMANTIC-only
+   * candidates in the hybrid path; the lexical-only path is untouched (every lexical hit has
+   * support ≥ 1 by construction), so lexical brains stay byte-identical regardless of this value.
+   */
+  minLexicalSupport?: number;
+  /**
+   * Attach per-result {@link ResultDiagnostics} provenance (#236) explaining WHY each hit ranked:
+   * its lexical/semantic ranks, fused score, and evidence tier. Off by default and purely additive —
+   * when unset, results carry no `diagnostics` field and the retrieval path is unchanged (no extra
+   * allocations). Surfaced through `ask` hits and `recall --verbose`.
+   */
+  diagnostics?: boolean;
+}
+
+/**
+ * Per-result retrieval provenance (#236): where a hit came from and how it scored, so an agent (or
+ * `recall --verbose`) can see the evidence class behind a citation instead of trusting an opaque
+ * rank. In the hybrid path `rrfScore` is the fused reciprocal-rank score; in the lexical-only path
+ * there is no fusion, so it is the (negated BM25) lexical score and `semanticRank` is always null.
+ */
+export interface ResultDiagnostics {
+  /** 1-based rank in the lexical (BM25 / OR-fallback) candidate list, or null if absent from it. */
+  lexicalRank: number | null;
+  /** 1-based rank in the semantic (cosine) candidate list, or null if absent / no semantic path. */
+  semanticRank: number | null;
+  /** The scalar this result was ranked by (fused RRF in hybrid; negated BM25 in lexical-only). */
+  rrfScore: number;
+  /** Evidence class: in both lists (`hybrid`), lexical-only, or semantic-only. */
+  tier: "lexical" | "semantic" | "hybrid";
 }
 
 export interface SearchResult {
@@ -43,6 +79,8 @@ export interface SearchResult {
   snippet: string;
   /** Relevance score (higher = better). */
   score: number;
+  /** Retrieval provenance — present only when {@link SearchOptions.diagnostics} is set (#236). */
+  diagnostics?: ResultDiagnostics;
 }
 
 /** Repo-relative location of the derived, disposable SQLite index. */
@@ -444,6 +482,18 @@ function toMatchTokens(query: string): string[] {
     .map((t) => `"${t}"`);
 }
 
+/**
+ * The bare, lowercased query tokens (the unquoted basis of {@link toMatchTokens}) — used by strict
+ * retrieval (#236) to test title/tag keyword presence when scoring a candidate's lexical support.
+ */
+function toRawTokens(query: string): string[] {
+  return query
+    .split(/\s+/)
+    .map((t) => t.replace(/"/g, ""))
+    .filter((t) => t.length > 0)
+    .map((t) => t.toLowerCase());
+}
+
 /** Hard cap on how long we wait for the query embedding before falling back to lexical (ADR-0025). */
 const EMBED_QUERY_TIMEOUT_MS = 3000;
 /** How many cosine candidates to fuse with the lexical list (full scan is fine at brain scale). */
@@ -455,6 +505,8 @@ const RRF_K = 60;
 interface NoteMeta {
   kind: NoteKind;
   title: string;
+  /** Space-joined tags — part of a note's title/tag keyword surface for strict support (#236). */
+  tags: string;
   path: string;
   source: string;
   status: string;
@@ -609,7 +661,7 @@ export async function search(
   const db = new Database(dbPath(brainDir), { readonly: true });
   try {
     if (!semantic) return lexicalSearch(db, match, matchOr, opts, limit);
-    return hybridSearch(db, match, matchOr, opts, limit, semantic);
+    return hybridSearch(db, query, match, matchOr, opts, limit, semantic);
   } finally {
     db.close();
   }
@@ -682,7 +734,12 @@ function lexicalSearch(
   let rows = runLexicalQuery(db, match, opts, limit);
   if (rows.length === 0 && matchOr) rows = runLexicalQuery(db, matchOr, opts, limit);
 
-  return rows.map((r) => ({
+  // Strict retrieval (#236) is a no-op here: the lexical-only path has no semantic-only candidates
+  // to guard against — every hit arrived lexically (support ≥ 1) — so `minLexicalSupport` never
+  // drops a row and this path stays byte-identical to the pre-#236 behavior. Diagnostics, when
+  // requested, describe the lexical ranking directly (no fusion happened).
+  const withDiagnostics = opts?.diagnostics === true;
+  return rows.map((r, i) => ({
     id: r.id,
     kind: r.kind,
     title: r.title,
@@ -690,6 +747,16 @@ function lexicalSearch(
     ...(r.source ? { source: r.source } : {}),
     snippet: r.snippet,
     score: r.score,
+    ...(withDiagnostics
+      ? {
+          diagnostics: {
+            lexicalRank: i + 1,
+            semanticRank: null,
+            rrfScore: r.score,
+            tier: "lexical",
+          } satisfies ResultDiagnostics,
+        }
+      : {}),
   }));
 }
 
@@ -705,6 +772,7 @@ interface LexCandidate {
  */
 function hybridSearch(
   db: Database.Database,
+  query: string,
   match: string,
   matchOr: string | null,
   opts: SearchOptions | undefined,
@@ -760,6 +828,13 @@ function hybridSearch(
   scored.sort((a, b) => b.sim - a.sim || compareId(a.id, b.id));
   const semRows = scored.slice(0, SEMANTIC_CANDIDATE_CAP);
 
+  // 1-based rank of each note in each list — the RRF inputs, and also the diagnostics (#236) and
+  // the "did it arrive lexically?" signal that strict support keys off.
+  const lexRank = new Map<string, number>();
+  lexRows.forEach((r, i) => lexRank.set(r.id, i + 1));
+  const semRank = new Map<string, number>();
+  semRows.forEach((r, i) => semRank.set(r.id, i + 1));
+
   // Reciprocal-rank fusion: a note's score is the sum of 1/(k + rank) over each list it appears
   // in (rank is 1-based). RRF sidesteps normalising BM25's and cosine's incomparable scales.
   const rrf = new Map<string, number>();
@@ -767,15 +842,40 @@ function hybridSearch(
   semRows.forEach((r, i) => rrf.set(r.id, (rrf.get(r.id) ?? 0) + 1 / (RRF_K + i + 1)));
 
   const lexById = new Map(lexRows.map((r) => [r.id, r]));
-  // Bodies only for the semantic-only hits (no FTS snippet) that will actually be returned.
+
+  // Strict retrieval (#236): a candidate's lexical support is the number of distinct query tokens
+  // with a lexical anchor on it. Arriving in the (OR-expanded, #209) lexical list is itself an
+  // anchor — such a note has support ≥ 1 — so strict mode only ever prunes SEMANTIC-only candidates
+  // that also lack any query keyword in their title/tags: pure vector noise. `minLexicalSupport: 0`
+  // (default) keeps everything (support ≥ 0 is always true), preserving today's behavior exactly.
+  const minSupport = opts?.minLexicalSupport ?? 0;
+  const rawTokens = minSupport > 0 ? toRawTokens(query) : [];
+  const supportOf = (id: string): number => {
+    const inLex = lexById.has(id);
+    let titleTagHits = 0;
+    if (rawTokens.length > 0) {
+      const m = meta.get(id)!;
+      const hay = `${m.title} ${m.tags}`.toLowerCase();
+      for (const t of rawTokens) if (hay.includes(t)) titleTagHits += 1;
+    }
+    return inLex ? Math.max(1, titleTagHits) : titleTagHits;
+  };
+
+  const withDiagnostics = opts?.diagnostics === true;
+  const keptIds = [...rrf.keys()].filter((id) => minSupport === 0 || supportOf(id) >= minSupport);
+
+  // Bodies only for the semantic-only hits (no FTS snippet) that survive and will be returned.
   const bodies = loadBodies(
     db,
-    [...rrf.keys()].filter((id) => !lexById.has(id)),
+    keptIds.filter((id) => !lexById.has(id)),
   );
 
-  const fused = [...rrf.keys()].map((id) => {
+  const fused = keptIds.map((id) => {
     const m = meta.get(id)!;
     const snippet = lexById.get(id)?.snippet ?? plainSnippet(bodies.get(id) ?? "");
+    const lr = lexRank.get(id) ?? null;
+    const sr = semRank.get(id) ?? null;
+    const rrfScore = rrf.get(id)!;
     const result: SearchResult = {
       id,
       kind: m.kind,
@@ -783,7 +883,17 @@ function hybridSearch(
       path: m.path,
       ...(m.source ? { source: m.source } : {}),
       snippet,
-      score: rrf.get(id)!,
+      score: rrfScore,
+      ...(withDiagnostics
+        ? {
+            diagnostics: {
+              lexicalRank: lr,
+              semanticRank: sr,
+              rrfScore,
+              tier: lr !== null && sr !== null ? "hybrid" : lr !== null ? "lexical" : "semantic",
+            } satisfies ResultDiagnostics,
+          }
+        : {}),
     };
     return { result, stale: m.status === "stale" };
   });
@@ -802,11 +912,12 @@ function hybridSearch(
 /** Load id→metadata for every indexed note (cheap: no body). */
 function loadNoteMeta(db: Database.Database): Map<string, NoteMeta> {
   const rows = db
-    .prepare("SELECT id, kind, title, path, source, status, superseded FROM notes_fts")
+    .prepare("SELECT id, kind, title, tags, path, source, status, superseded FROM notes_fts")
     .all() as Array<{
     id: string;
     kind: NoteKind;
     title: string;
+    tags: string;
     path: string;
     source: string;
     status: string;
@@ -817,6 +928,7 @@ function loadNoteMeta(db: Database.Database): Map<string, NoteMeta> {
     map.set(r.id, {
       kind: r.kind,
       title: r.title,
+      tags: r.tags,
       path: r.path,
       source: r.source,
       status: r.status,

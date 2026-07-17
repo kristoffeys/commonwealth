@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { writeNote } from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { selectRelevant } from "../src/relevance.js";
+import { selectRelevant, selectRelevantDiagnostics } from "../src/relevance.js";
 
 let brainDir: string;
 
@@ -30,6 +30,40 @@ describe("selectRelevant", () => {
 
     const results = await selectRelevant(brainDir, { query: "kubernetes ingress" });
     expect(results.map((n) => n.frontmatter.id)).toContain(match.frontmatter.id);
+  });
+
+  it("keeps a #213 OR-fallback paraphrase hit under the strict injection floor (#236)", async () => {
+    // Injection is the first strict adopter (minLexicalSupport = 1). The right note has no query
+    // keyword in its TITLE, but the #209 OR-fallback gives it lexical arrival (body says "shopware")
+    // → support ≥ 1 → it still surfaces. This guards the #213 done-criterion for injected context.
+    const match = await writeNote(brainDir, {
+      kind: "memory",
+      title: "Ecommerce platform",
+      body: "The storefront was built on Shopware for the migration project.",
+    });
+    await writeNote(brainDir, {
+      kind: "memory",
+      title: "Payroll",
+      body: "Notes about the payroll spreadsheet and quarterly taxes.",
+    });
+
+    const results = await selectRelevant(brainDir, { query: "did we use shopware before?" });
+    expect(results.map((n) => n.frontmatter.id)).toContain(match.frontmatter.id);
+  });
+
+  it("selectRelevantDiagnostics attaches per-hit retrieval provenance (#236)", async () => {
+    await writeNote(brainDir, {
+      kind: "memory",
+      title: "Kubernetes ingress quirk",
+      body: "The kubernetes ingress controller drops websocket upgrades without an annotation.",
+    });
+
+    const hits = await selectRelevantDiagnostics(brainDir, "kubernetes ingress");
+    expect(hits.length).toBeGreaterThan(0);
+    const d = hits[0]!.result.diagnostics;
+    expect(d).toBeDefined();
+    expect(d!.lexicalRank).toBe(1);
+    expect(["lexical", "hybrid", "semantic"]).toContain(d!.tier);
   });
 
   it("returns active work-state and excludes done", async () => {

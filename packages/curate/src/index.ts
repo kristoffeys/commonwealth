@@ -38,7 +38,7 @@ import { formatContext } from "./context.js";
 import { curate } from "./curate.js";
 import { computeNeighbors } from "./neighbors.js";
 import { reassignStagedContributor } from "./staging.js";
-import { selectRelevant } from "./relevance.js";
+import { selectRelevant, selectRelevantDiagnostics, type RelevantHit } from "./relevance.js";
 import { approve, approveAll, listPending, reject } from "./review.js";
 import { addAllow, addDeny, loadUserConfig } from "./scope.js";
 import type { AnnotatedCandidate } from "./verdict.js";
@@ -310,6 +310,7 @@ async function cmdContext(explicitDir: string | undefined, args: string[]): Prom
       cwd: { type: "string" },
       query: { type: "string" },
       limit: { type: "string" },
+      verbose: { type: "boolean" },
     },
     allowPositionals: false,
   });
@@ -326,14 +327,52 @@ async function cmdContext(explicitDir: string | undefined, args: string[]): Prom
   }
   const dir = resolved.brain;
 
-  const limit = values.limit !== undefined ? Number.parseInt(values.limit, 10) : undefined;
+  const parsedLimit = values.limit !== undefined ? Number.parseInt(values.limit, 10) : undefined;
+  const limit = parsedLimit !== undefined && Number.isFinite(parsedLimit) ? parsedLimit : undefined;
+  const query =
+    typeof values.query === "string" && values.query.trim().length > 0 ? values.query : undefined;
+
+  // `--verbose` (#236): when there's a query, use the diagnostics-carrying selection so we can print
+  // per-hit retrieval provenance to stderr, then render the same notes as the normal context to
+  // stdout. Both paths run the identical strict injection search, so the provenance describes
+  // exactly what was selected. Without a query there is no search to explain — fall through.
+  if (values.verbose === true && query !== undefined) {
+    const hits = await selectRelevantDiagnostics(dir, query, limit);
+    process.stderr.write(formatRecallDiagnostics(query, hits));
+    const rendered = formatContext(hits.map((h) => h.note));
+    if (rendered.length > 0) console.log(rendered);
+    return;
+  }
+
   const notes = await selectRelevant(dir, {
-    ...(typeof values.query === "string" ? { query: values.query } : {}),
-    ...(limit !== undefined && Number.isFinite(limit) ? { limit } : {}),
+    ...(query !== undefined ? { query } : {}),
+    ...(limit !== undefined ? { limit } : {}),
   });
 
   const rendered = formatContext(notes);
   if (rendered.length > 0) console.log(rendered);
+}
+
+/**
+ * Human-readable retrieval provenance for `recall --verbose` (#236): one line per hit showing its
+ * evidence tier and lexical/semantic ranks, so the operator can see WHY each note was selected
+ * (and, by absence, what strict mode pruned). Goes to stderr — the stdout context is the injection
+ * contract.
+ */
+function formatRecallDiagnostics(query: string, hits: RelevantHit[]): string {
+  const lines = [`retrieval diagnostics for "${query}" — ${hits.length} hit(s)`];
+  if (hits.length === 0) {
+    lines.push("  (no hits survived the strict lexical-support floor)");
+  }
+  for (const { result: r } of hits) {
+    const d = r.diagnostics;
+    const lex = d?.lexicalRank ?? "—";
+    const sem = d?.semanticRank ?? "—";
+    const tier = d?.tier ?? "lexical";
+    const score = (d?.rrfScore ?? r.score).toFixed(4);
+    lines.push(`  [${tier}] lex:${lex} sem:${sem} score:${score}  ${r.title} (${r.id})`);
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 /**

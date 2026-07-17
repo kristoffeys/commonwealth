@@ -37,6 +37,11 @@ export {
   type GraduationTombstone,
 } from "./tombstone.js";
 export { listStaged, stageNote, stagedAbsPath, stagingRoot } from "./staging.js";
-export { selectRelevant } from "./relevance.js";
+export {
+  selectRelevant,
+  selectRelevantDiagnostics,
+  INJECTION_MIN_LEXICAL_SUPPORT,
+  type RelevantHit,
+} from "./relevance.js";
 export { formatContext } from "./context.js";
 export { addAllow, addDeny, loadUserConfig } from "./scope.js";

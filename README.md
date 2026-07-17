@@ -117,7 +117,7 @@ rest — every command resolves the right brain from the current directory autom
 commonwealth add <folder> [--brain <dir>] # wire another folder to the brain, in one go
 commonwealth registry <show|route|allow|deny|remove|default|pull>  # brain-resolution rules (see below)
 commonwealth status                       # last capture outcome + review queue + sync state
-commonwealth recall <query>               # search the brain
+commonwealth recall <query> [--verbose]   # search the brain (--verbose shows per-hit retrieval provenance)
 commonwealth ask <question> [--answer]    # cited retrieval; --answer synthesizes a cited answer via a headless model
 commonwealth reseed [<repo>] [--all]      # mine repo(s) into the brain again
 commonwealth pending                      # notes awaiting review
@@ -355,7 +355,10 @@ commonwealth config set semanticDedup true   # smarter dedup (see below)
   paraphrases and stopword-heavy questions ("did we use Shopware before?") still find the note.
   Inert for brains with no provider (behaves exactly like lexical-only), and set it `false` to force
   lexical-only even with a provider. Reuses the same vectors as `semanticDedup`, so existing brains
-  need one index rebuild to backfill vectors for notes captured before either was enabled.
+  need one index rebuild to backfill vectors for notes captured before either was enabled. Per-prompt
+  context injection runs a **strict** variant that rejects vector-only noise (an embedding-near note
+  with no lexical/title/tag overlap); `commonwealth recall --verbose` shows the per-hit provenance
+  (lexical/semantic rank, fused score, evidence tier) behind each result.
 - **`llmCurator`** (default **on**) — an LLM curation pass in the capture pipeline
   ([ADR-0030](docs/adr/0030-llm-curation-pass.md)): a durability judge filters trivia the length
   check can't, and a consolidation classifier catches paraphrased updates (supersedes the older
