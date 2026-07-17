@@ -127,6 +127,7 @@ commonwealth ask <question> [--answer]    # cited retrieval; --answer synthesize
 commonwealth reseed [<repo>] [--all]      # mine repo(s) into the brain again
 commonwealth pending                      # notes awaiting review
 commonwealth promote <id...> | --all      # approve staged notes into canon
+commonwealth promote --all --pr           # open a brain-repo PR to review the promotion instead
 commonwealth reject <id...>               # discard staged notes
 commonwealth sync once                    # sync now (lifecycle hooks do this automatically)
 commonwealth sync start|stop              # opt into/out of the continuous daemon profile
@@ -171,6 +172,23 @@ commonwealth config set autoPromote false   # require manual review
 commonwealth pending                         # see what's waiting
 commonwealth promote <id...> | --all         # approve into canon
 ```
+
+#### Review as a pull request
+
+Non-terminal teammates (designers, PMs) and teams that want an auditable trail can review
+promotions as a normal pull request on the brain repo instead of approving locally:
+
+```bash
+commonwealth promote <id...> | --all --pr    # branch + commit the canon adds, push, open a PR
+```
+
+This needs a git remote (`origin`) and the GitHub CLI (`gh`); local-only brains keep the plain
+`promote`. **Merging the PR is the promotion** — the adds are union-merge-safe (one fact per file,
+ADR-0003). **Closing it is the rejection** — nothing enters canon. Because the staging queue is
+per-user and gitignored (ADR-0008), the PR branch carries the canon adds only; your local staged
+copies are cleared automatically the next time you run `promote`/`status` after the PR merges, and
+no teammate's queue is ever touched. Scaffolded brains ship a commented-out `.github/CODEOWNERS`
+sample so a team can gate `decisions/` behind a lead's review with a one-line uncomment.
 
 ### Ambient status line
 

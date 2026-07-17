@@ -170,7 +170,7 @@ function printUsage(): void {
       "  commonwealth graduate  [--suggest] [--dry-run]  promote knowledge recurring across ≥2 brains to the org-brain",
       "  commonwealth sync      <start | stop | once>   control/run the sync daemon",
       "  commonwealth pending                           list notes awaiting review",
-      "  commonwealth promote   <id...> | --all         approve staged notes into canon",
+      "  commonwealth promote   <id...> | --all [--pr]  approve staged notes into canon (--pr opens a review PR)",
       "  commonwealth reject    <id...>                 discard staged notes",
       "  commonwealth registry  <show | route | allow | deny | remove | default>  brain-resolution rules",
       "  commonwealth service   <install | uninstall | status | restart>  run sync as a background service",
@@ -297,6 +297,11 @@ export async function run(argv: string[]): Promise<number> {
     case "pending":
       return delegateCurate(["list"]);
     case "promote":
+      // `--pr` opens a brain-repo pull request instead of promoting locally (#215). Strip the flag
+      // and route to curate's promote-pr; --all/ids pass through.
+      if (rest.includes("--pr")) {
+        return delegateCurate(["promote-pr", ...rest.filter((a) => a !== "--pr")]);
+      }
       return delegateCurate(rest.includes("--all") ? ["approve-all"] : ["approve", ...rest]);
     case "reject":
       return delegateCurate(["reject", ...rest]);

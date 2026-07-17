@@ -41,6 +41,16 @@ const BRAIN_ENTRIES = new Set<string>([
 
 const GITATTRIBUTES = ["COMMONWEALTH.md merge=union", "**/INDEX.md merge=union", ""].join("\n");
 
+// A commented-out sample so `promote --pr` (#215) teams can gate sensitive canon behind a lead's
+// review with one uncomment. Off by default — an active CODEOWNERS rule with no owner set would
+// block every PR. Recognized by GitHub/GitLab at `.github/CODEOWNERS`.
+const CODEOWNERS = [
+  "# Commonwealth CODEOWNERS — require a lead's review on `promote --pr` for sensitive paths.",
+  "# Uncomment and set an owner (a @user or @org/team) to gate decisions/ behind review:",
+  "# decisions/ @your-org/leads",
+  "",
+].join("\n");
+
 // `staging/` is the per-user review queue — local only, never synced (ADR-0008).
 // `.commonwealth/sync.lock` is a per-process runtime lock (#100); like `index/` it is disposable
 // local state that must never be committed — otherwise a bulk op (e.g. `project adopt`) that holds
@@ -192,6 +202,9 @@ export async function initBrain(dir: string, opts: InitBrainOptions = {}): Promi
   // absent-only: they're static, but re-writing them serves no purpose and keeps init a no-op.
   await writeFileIfAbsent(path.join(dir, ".gitattributes"), GITATTRIBUTES);
   await writeFileIfAbsent(path.join(dir, ".gitignore"), GITIGNORE);
+  // Commented-out CODEOWNERS sample (#215): teams using `promote --pr` uncomment one line to gate
+  // decisions/ behind a lead's review. Absent-only so a team that filled it in is never clobbered.
+  await writeFileIfAbsent(path.join(dir, ".github", "CODEOWNERS"), CODEOWNERS);
 
   // Minimal generated router placeholder; real content comes from regenerateDerived.
   const commonwealth = [
