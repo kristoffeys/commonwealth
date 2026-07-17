@@ -152,7 +152,7 @@ function printUsage(): void {
       "Usage:",
       "  commonwealth demo                              60-second throwaway sandbox brain (no setup)",
       "  commonwealth init      [flags]                 onboard: build, create/join brain, plugin, daemon",
-      "  commonwealth add       [<folder>...] [--brain <dir>] [--remote <url>]",
+      "  commonwealth add       [<folder>...] [--brain <dir>] [--remote <url>] [--no-ci]",
       "                                                 wire folder(s) to an existing brain (allowlist +",
       "                                                 routing rule + brains/ symlink) in one go",
       "  commonwealth org-brain <set <dir> [--remote <url>] | show>   designate/show the org-brain (graduation target)",
@@ -162,7 +162,7 @@ function printUsage(): void {
       "  commonwealth doctor    [--fix] [--json]        diagnose the install/sync chain; --fix restarts a dead daemon",
       "  commonwealth verify-restore [--from-remote] [--json]   clone + prove full disaster recovery (CI gate)",
       "  commonwealth emit      [--commit]              write brain context for Cursor/Copilot/Codex into this repo",
-      "  commonwealth health                            freshness/trust rollup for the brain",
+      "  commonwealth health    [--fail-under-capture <ratio>]   freshness/trust + capture-coverage rollup (CI gate)",
       "  commonwealth map                               brain-at-a-glance: per-kind counts + contributors",
       "  commonwealth project   <list | link <id> <src...> | unlink <id> [<src...>] | adopt <id> [--dry-run]>   link/adopt engagement identity",
       "  commonwealth statusline  [install|uninstall]   Claude Code status line (brain · freshness · pending)",
@@ -185,7 +185,7 @@ function printUsage(): void {
       "init flags: [--brain <dir>] [--yes] [--reseed] [--auto-adr] [--remote <url>]",
       "            [--sync <dir,dir,...>] [--seed-repo <dir,dir,...>]",
       "            [--agent <claude|codex|both>]",
-      "            [--no-scope] [--no-seed] [--no-plugin] [--no-daemon] [--no-build]",
+      "            [--no-scope] [--no-seed] [--no-plugin] [--no-daemon] [--no-build] [--no-ci]",
       "",
       "`init` is a single idempotent command: it builds the workspace (if needed), creates or",
       "joins the brain, syncs one or more folders into it (allowlist + a global routing rule",
@@ -208,6 +208,7 @@ function printUsage(): void {
       "  --no-plugin     Skip installing the Commonwealth plugin",
       "  --no-daemon     Skip starting the sync daemon",
       "  --no-build      Skip the workspace build even if dist artifacts are missing",
+      "  --no-ci         Skip writing the CI disaster-recovery workflow (only relevant with --remote)",
       "",
     ].join("\n"),
   );
@@ -282,7 +283,7 @@ export async function run(argv: string[]): Promise<number> {
       return delegateSync([sub, ...rest.slice(1)]);
     }
     case "health":
-      return delegateCurate(["health"]);
+      return delegateCurate(["health", ...rest]);
     case "map":
       return delegateCurate(["map"]);
     case "project":
@@ -512,11 +513,14 @@ async function cmdStatusline(rest: string[]): Promise<number> {
  * cwd; with no `--brain`, uses the brain the cwd already resolves to.
  */
 async function cmdAdd(rest: string[]): Promise<number> {
+  // `--no-ci` has no parseArgs negation; consume it first, then parse the remainder.
+  const ci = !rest.includes("--no-ci");
+  const args = rest.filter((a) => a !== "--no-ci");
   let values: { brain?: string; remote?: string };
   let positionals: string[];
   try {
     ({ values, positionals } = parseArgs({
-      args: rest,
+      args,
       options: { brain: { type: "string" }, remote: { type: "string" } },
       allowPositionals: true,
     }));
@@ -531,6 +535,7 @@ async function cmdAdd(rest: string[]): Promise<number> {
       folders: positionals,
       ...(values.brain !== undefined ? { brain: values.brain } : {}),
       ...(values.remote !== undefined ? { remote: values.remote } : {}),
+      ci,
       cwd: process.cwd(),
     },
     defaultAddDeps(),
@@ -545,12 +550,20 @@ async function cmdInit(rest: string[]): Promise<number> {
   }
 
   // parseArgs has no native negation; consume --no-* flags first and derive the gates.
-  const negations = ["--no-scope", "--no-seed", "--no-plugin", "--no-daemon", "--no-build"];
+  const negations = [
+    "--no-scope",
+    "--no-seed",
+    "--no-plugin",
+    "--no-daemon",
+    "--no-build",
+    "--no-ci",
+  ];
   const scope = !rest.includes("--no-scope");
   const seed = !rest.includes("--no-seed");
   const plugin = !rest.includes("--no-plugin");
   const daemon = !rest.includes("--no-daemon");
   const build = !rest.includes("--no-build");
+  const ci = !rest.includes("--no-ci");
   const positional = rest.filter((a) => !negations.includes(a));
 
   let values: {
@@ -647,6 +660,8 @@ async function cmdInit(rest: string[]): Promise<number> {
       // The wizard already confirmed; runOnboard must not prompt again (opts.yes is true).
       opts = outcome.opts;
       opts.agent = agent;
+      // --no-ci is a plain flag (the wizard doesn't prompt for it); honor it either way.
+      opts.ci = ci;
     } else {
       // --yes (interactive or not): defaults + explicit flags, non-interactive. The
       // non-interactive-without-yes case already returned above.
@@ -664,6 +679,7 @@ async function cmdInit(rest: string[]): Promise<number> {
         scope,
         autoAdr: values["auto-adr"],
         remote: values.remote,
+        ci,
         syncFolders,
         seedRepos,
       };
@@ -676,7 +692,7 @@ async function cmdInit(rest: string[]): Promise<number> {
         `staged=${result.staged} scopedFolders=${result.scopedFolders} ` +
         `mappedFolders=${result.mappedFolders} seededRepos=${result.seededRepos} ` +
         `scope=${result.scope} autoAdr=${result.autoAdr} ` +
-        `remote=${result.remote} agent=${agent} plugin=${result.plugin} context=${result.context} ` +
+        `remote=${result.remote} ci=${result.ci} agent=${agent} plugin=${result.plugin} context=${result.context} ` +
         `daemon=${result.daemon} ` +
         `scopeConfig=${result.scopeConfigPath}\n`,
     );

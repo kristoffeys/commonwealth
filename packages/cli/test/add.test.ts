@@ -11,12 +11,14 @@ function fakeDeps(overrides: Partial<AddDeps> = {}): {
   calls: {
     allowed: string[];
     registered: Array<{ folder: string; brainDir: string; remote?: string }>;
+    ciWrites: string[];
     logs: string[];
   };
 } {
   const calls = {
     allowed: [] as string[],
     registered: [] as Array<{ folder: string; brainDir: string; remote?: string }>,
+    ciWrites: [] as string[],
     logs: [] as string[],
   };
   const deps: AddDeps = {
@@ -29,6 +31,10 @@ function fakeDeps(overrides: Partial<AddDeps> = {}): {
     registerBrain: async (folder, brainDir, remote) => {
       calls.registered.push({ folder, brainDir, ...(remote !== undefined ? { remote } : {}) });
       return { added: true, updated: false, linked: true };
+    },
+    writeCiWorkflow: async (brainDir) => {
+      calls.ciWrites.push(brainDir);
+      return { written: true };
     },
     log: (m) => calls.logs.push(m),
     ...overrides,
@@ -89,6 +95,32 @@ describe("runAdd", () => {
 
     expect(code).toBe(0);
     expect(calls.registered[0]?.remote).toBe("git@example:override.git");
+  });
+
+  it("CI (#220): ships the disaster-recovery workflow when the brain has a remote", async () => {
+    const { deps, calls } = fakeDeps();
+    const code = await runAdd({ folders: ["/work/app"], cwd: "/work" }, deps);
+
+    expect(code).toBe(0);
+    expect(calls.ciWrites).toEqual(["/brains/team"]);
+  });
+
+  it("CI (#220): --no-ci (ci:false) skips the workflow even with a remote", async () => {
+    const { deps, calls } = fakeDeps();
+    const code = await runAdd({ folders: ["/work/app"], cwd: "/work", ci: false }, deps);
+
+    expect(code).toBe(0);
+    expect(calls.ciWrites).toEqual([]);
+  });
+
+  it("CI (#220): no workflow when the brain has no remote (nothing to clone)", async () => {
+    const { deps, calls } = fakeDeps({
+      resolveBrain: async () => ({ brain: "/brains/team" }),
+    });
+    const code = await runAdd({ folders: ["/work/app"], cwd: "/work" }, deps);
+
+    expect(code).toBe(0);
+    expect(calls.ciWrites).toEqual([]);
   });
 
   it("exits 2 and wires nothing when any folder is not a directory", async () => {

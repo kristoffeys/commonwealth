@@ -4,7 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadBrainConfig, setFeature } from "../src/config";
-import { initBrain } from "../src/scaffold";
+import {
+  CI_WORKFLOW_REL,
+  ciWorkflowContent,
+  cliMajorPin,
+  initBrain,
+  scaffoldCiWorkflow,
+} from "../src/scaffold";
 import { SCHEMA_VERSION } from "../src/schema";
 
 let dir: string;
@@ -156,5 +162,65 @@ describe("initBrain", () => {
     const after = await loadBrainConfig(dir);
     expect(after.features.autoPromote).toBe(false);
     expect(after.remotes).toEqual(["git@github.com:acme/brain.git"]);
+  });
+});
+
+/**
+ * CI disaster-recovery workflow scaffolding (#220). `scaffoldCiWorkflow` writes
+ * `.github/workflows/commonwealth-ci.yml`, pinned to the CLI major, and is emit-style idempotent —
+ * a re-scaffold never clobbers a user-modified workflow.
+ */
+describe("scaffoldCiWorkflow (#220)", () => {
+  const workflowAt = (root: string) => path.join(root, CI_WORKFLOW_REL);
+
+  it("writes the workflow at .github/workflows/commonwealth-ci.yml", async () => {
+    const res = await scaffoldCiWorkflow(dir);
+    expect(res.written).toBe(true);
+    expect(res.path).toBe(workflowAt(dir));
+    const body = await fs.readFile(workflowAt(dir), "utf8");
+    expect(body).toContain("verify-restore --from-remote --json");
+  });
+
+  it("pins the run step to the CLI major version (@<major>)", async () => {
+    await scaffoldCiWorkflow(dir);
+    const body = await fs.readFile(workflowAt(dir), "utf8");
+    const major = cliMajorPin();
+    expect(major).toMatch(/^\d+$/);
+    expect(body).toContain(`@cmnwlth/cli@${major} verify-restore`);
+    // A bare major pin, never a full X.Y.Z (that would defeat the "compatible line" intent).
+    expect(body).not.toMatch(/@cmnwlth\/cli@\d+\.\d+\.\d+/);
+  });
+
+  it("produces YAML that parses at a basic structural level", () => {
+    const body = ciWorkflowContent("0");
+    // No hard tabs (YAML forbids them for indentation).
+    expect(body).not.toMatch(/\t/);
+    // The required top-level keys are present and left-anchored.
+    for (const key of ["name:", "on:", "jobs:"]) {
+      expect(body.split("\n").some((l) => l.startsWith(key))).toBe(true);
+    }
+    // Every non-blank, non-comment line is either a key or a list item — a crude well-formedness check.
+    for (const line of body.split("\n")) {
+      if (line.trim() === "" || line.trim().startsWith("#")) continue;
+      expect(line).toMatch(/^\s*([\w".-]+:|- )/);
+    }
+    expect(body).toContain("actions/checkout@v4");
+  });
+
+  it("is idempotent — a re-scaffold does NOT clobber a user-modified workflow (skips it)", async () => {
+    await scaffoldCiWorkflow(dir);
+    const edited = "name: my-custom-ci\n# hand-tuned by the team\n";
+    await fs.writeFile(workflowAt(dir), edited, "utf8");
+
+    const res = await scaffoldCiWorkflow(dir);
+    expect(res.written).toBe(false);
+    expect(res.skipped).toBe("exists");
+    // The user's edits survive untouched.
+    expect(await fs.readFile(workflowAt(dir), "utf8")).toBe(edited);
+  });
+
+  it("initBrain does NOT write the workflow — CI scaffolding is remote-gated by the caller", async () => {
+    await initBrain(dir, { name: "no-ci-by-default" });
+    await expect(fs.stat(workflowAt(dir))).rejects.toThrow();
   });
 });

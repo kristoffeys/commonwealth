@@ -50,6 +50,12 @@ export type OnboardOptions = {
   /** Add this URL as the brain's git `origin` remote. Default: undefined (skip). */
   remote?: string;
   /**
+   * Ship the `commonwealth-ci.yml` disaster-recovery workflow when the brain has a remote (#220).
+   * Default: true. `false` (the `--no-ci` opt-out) skips it. No-op without a remote — CI has
+   * nothing to clone.
+   */
+  ci?: boolean;
+  /**
    * Folders to sync into this brain: each is added to the capture allowlist and wired to the
    * brain via the global user registry (plus a convenience symlink). Default: `[cwd]` (#61).
    */
@@ -94,6 +100,11 @@ export interface OnboardDeps {
   setAutoAdr(brainDir: string, on: boolean): Promise<{ set: boolean; skipped?: string }>;
   /** Add `url` as the brain's git `origin` remote unless one already exists. */
   setRemote(brainDir: string, url: string): Promise<{ set: boolean; skipped?: string }>;
+  /**
+   * Write the `commonwealth-ci.yml` disaster-recovery workflow into the brain (#220), idempotently
+   * (a pre-existing file is left untouched). `written` reflects whether this call wrote it.
+   */
+  writeCiWorkflow(brainDir: string): Promise<{ written: boolean; skipped?: string }>;
   /**
    * Idempotently install the Commonwealth plugin (global MCP + session hooks) via the repo
    * marketplace with the `claude` CLI. No brain dir is needed — the plugin + its SessionStart
@@ -142,6 +153,8 @@ export interface OnboardResult {
   autoAdr: string;
   /** Short brain-remote status string (e.g. `set`, `origin exists`, `skipped`). */
   remote: string;
+  /** Short CI-workflow status string (e.g. `written`, `exists`, `skipped`, `no remote`). */
+  ci: string;
   /** Short plugin-install status string (e.g. `installed`, `skipped`). */
   plugin: string;
   /** Codex AGENTS.md context emission status. */
@@ -175,6 +188,9 @@ export async function runOnboard(
   const doScope = opts.scope !== false;
   const doAutoAdr = opts.autoAdr === true;
   const doRemote = typeof opts.remote === "string" && opts.remote.trim().length > 0;
+  // Ship the CI disaster-recovery workflow only when there IS a remote (nothing to clone otherwise)
+  // and the `--no-ci` opt-out wasn't passed (#220).
+  const doCi = doRemote && opts.ci !== false;
   // Install the plugin unless explicitly disabled.
   const doPlugin = opts.plugin !== false;
   const agent = opts.agent ?? "claude";
@@ -222,6 +238,7 @@ export async function runOnboard(
         scope: "skipped",
         autoAdr: "skipped",
         remote: "skipped",
+        ci: "skipped",
         plugin: "skipped",
         context: "skipped",
         daemon: "skipped",
@@ -305,6 +322,15 @@ export async function runOnboard(
     deps.log(`Remote: ${remote}`);
   }
 
+  // CI disaster-recovery workflow (#220): only with a remote, and idempotent — a pre-existing
+  // (possibly user-edited) workflow is left untouched.
+  let ci = doRemote ? "skipped" : "no remote";
+  if (doCi) {
+    const res = await deps.writeCiWorkflow(brainDir);
+    ci = res.skipped ?? (res.written ? "written" : "exists");
+    deps.log(`CI workflow: ${ci}`);
+  }
+
   let plugin = "skipped";
   if (doPlugin) {
     const res = await deps.installPlugin(agent);
@@ -356,7 +382,7 @@ export async function runOnboard(
   deps.log(
     `Done. mode=${initResult.mode} brain=${brainDir} staged=${staged} ` +
       `scopedFolders=${scopedFolders} mappedFolders=${mappedFolders} seededRepos=${seededRepos} ` +
-      `scope=${scope} autoAdr=${autoAdr} remote=${remote} agent=${agent} plugin=${plugin} ` +
+      `scope=${scope} autoAdr=${autoAdr} remote=${remote} ci=${ci} agent=${agent} plugin=${plugin} ` +
       `context=${context} daemon=${daemon}. ` +
       `Scope config: ${scopeConfigPath}. ` +
       `${nextSession} here and ask it something your team knows.`,
@@ -374,6 +400,7 @@ export async function runOnboard(
     scope,
     autoAdr,
     remote,
+    ci,
     plugin,
     context,
     daemon,

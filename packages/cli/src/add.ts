@@ -25,6 +25,11 @@ export interface AddOptions {
    * remote carried by the invocation dir's existing mapping, when the brain came from one.
    */
   remote?: string;
+  /**
+   * Ship the `commonwealth-ci.yml` disaster-recovery workflow into the brain when a remote is
+   * known (#220). Default: true. `false` (the `--no-ci` opt-out) skips it. No-op without a remote.
+   */
+  ci?: boolean;
   /** Invocation directory: the default folder target AND where the default brain resolves from. */
   cwd: string;
 }
@@ -54,6 +59,11 @@ export interface AddDeps {
     mapFailed?: string;
     linkSkipped?: string;
   }>;
+  /**
+   * Write the `commonwealth-ci.yml` disaster-recovery workflow into the brain (#220), idempotently
+   * (a pre-existing file is left untouched). `written` reflects whether this call wrote it.
+   */
+  writeCiWorkflow(brainDir: string): Promise<{ written: boolean; skipped?: string }>;
   /** Progress/diagnostic sink (stderr in production). */
   log(m: string): void;
 }
@@ -128,6 +138,14 @@ export async function runAdd(opts: AddOptions, deps: AddDeps): Promise<number> {
     if (reg.linkSkipped) deps.log(`add: symlink skipped for ${brainDir}: ${reg.linkSkipped}`);
   }
 
+  // Ship the CI disaster-recovery workflow when this brain has a remote to clone from (#220),
+  // unless opted out. Idempotent — a pre-existing (possibly user-edited) workflow is left as-is.
+  if (remote && opts.ci !== false) {
+    const res = await deps.writeCiWorkflow(brainDir);
+    const status = res.skipped ?? (res.written ? "written" : "exists");
+    deps.log(`add: CI workflow ${status} for ${brainDir}`);
+  }
+
   deps.log(
     `add: ${folders.length - failures}/${folders.length} folder(s) wired to ${brainDir}` +
       (remote ? ` (remote ${remote})` : ""),
@@ -170,6 +188,7 @@ export function defaultAddDeps(): AddDeps {
         return { added: false, updated: false, linked: false, mapFailed: (err as Error).message };
       }
     },
+    writeCiWorkflow: (brainDir) => core.scaffoldCiWorkflow(brainDir),
     log: (m) => {
       process.stderr.write(`${m}\n`);
     },

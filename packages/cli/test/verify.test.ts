@@ -94,6 +94,33 @@ describe("runVerifyRestore", () => {
     ).rejects.toThrow(/No Commonwealth brain/);
   });
 
+  it("catches a deliberately broken note, naming the file (the #220 CI gate's command)", async () => {
+    // The `commonwealth-ci.yml` workflow (#220) runs exactly this command. Prove locally that a
+    // corrupted note pushed into the brain makes it FAIL and names the offending file — no network,
+    // no real Actions runner.
+    const report = await runVerifyRestore(
+      { fromRemote: false },
+      env({
+        clone: async (_source, dest) => {
+          await initBrain(dest, { name: "restored" });
+          await writeNote(dest, { kind: "memory", title: "A", body: "recovered fact" });
+          await regenerateDerived(dest);
+          // Corrupt the brain: a schema-invalid note file.
+          await fs.writeFile(
+            path.join(dest, "memory", "broken.md"),
+            "---\nnot: a note\n---\ngarbage\n",
+          );
+          return true;
+        },
+      }),
+    );
+    expect(report.ok).toBe(false);
+    const schema = report.result?.checks.find((c) => c.id === "schema");
+    expect(schema?.ok).toBe(false);
+    expect(schema?.offenders?.some((o) => o.includes("broken.md"))).toBe(true);
+    expect(formatVerifyRestore(report)).toContain("Restore FAILED");
+  });
+
   it("renders the proof with an RPO line and per-check marks", async () => {
     const report = await runVerifyRestore({ fromRemote: false }, env());
     const text = formatVerifyRestore(report);

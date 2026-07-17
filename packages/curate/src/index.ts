@@ -5,6 +5,8 @@ import {
   attributeNoteInputs,
   brainHealth,
   brainMap,
+  type CaptureCoverage,
+  captureCoverage,
   computeBrainHealth,
   computeHealthByProject,
   ensureContributorPerson,
@@ -15,6 +17,7 @@ import {
   loadProjectAliasMap,
   manifestStamp,
   type NewNoteInput,
+  readCaptureLog,
   NOTE_KINDS,
   type NoteKind,
   persistProjectAliasMap,
@@ -141,7 +144,7 @@ function usage(): void {
       "  commonwealth-curate scope check [--cwd <dir>]",
       "  commonwealth-curate scope allow <path>",
       "  commonwealth-curate scope deny <path>",
-      "  commonwealth-curate health [--dir <brain>]",
+      "  commonwealth-curate health [--dir <brain>] [--fail-under-capture <ratio>]",
       "  commonwealth-curate map [--dir <brain>]",
       "  commonwealth-curate project <list | link <id> <src...> | unlink <id> [<src...>]",
       "      | adopt <id> [--dry-run]> [--dir <brain>]",
@@ -640,11 +643,95 @@ async function cmdFeature(dir: string, args: string[]): Promise<void> {
   }
 }
 
+/** Percent-format a coverage ratio (0..1) or "—" when there is no data. */
+function pct(ratio: number | null): string {
+  return ratio === null ? "—" : `${Math.round(ratio * 100)}%`;
+}
+
+/** Trend arrow for the short-vs-prior-window direction. */
+function trendArrow(trend: CaptureCoverage["trend"]): string {
+  switch (trend) {
+    case "up":
+      return "↑ improving";
+    case "down":
+      return "↓ declining";
+    case "flat":
+      return "→ steady";
+    default:
+      return "· no prior window";
+  }
+}
+
 /**
- * `health` — brain-health / trust rollup (#109): a freshness/trust score plus counts of stale,
- * unverified, contradicted, and orphaned notes. Read-only; prints a human summary to stdout.
+ * Print the capture-coverage section (#235): what fraction of sessions actually land knowledge,
+ * over the trailing 7/30-day windows, with the trend arrow, failure-class breakdown, and last
+ * failure. An empty/absent log is informational, never an error. Measurement only.
  */
-async function cmdHealth(dir: string): Promise<void> {
+function printCoverage(cov: CaptureCoverage): void {
+  console.log("Capture coverage:");
+  if (!cov.hasData) {
+    console.log("  no capture activity logged yet (informational — nothing to measure).");
+    return;
+  }
+  console.log(
+    `  last 7d:   ${pct(cov.short.ratio)}  (${cov.short.productive}/${cov.short.seen} sessions landed a note)`,
+  );
+  console.log(
+    `  last 30d:  ${pct(cov.long.ratio)}  (${cov.long.productive}/${cov.long.seen} sessions landed a note)`,
+  );
+  console.log(`  trend:     ${trendArrow(cov.trend)}`);
+  if (cov.failures.length > 0) {
+    const summary = cov.failures.map((f) => `${f.class} ×${f.count}`).join(", ");
+    console.log(`  failures:  ${summary}`);
+  }
+  if (cov.lastFailure) {
+    const cls = cov.lastFailure.reason || cov.lastFailure.outcome;
+    console.log(`  last fail: ${cls}`);
+  }
+}
+
+/** Flags parsed from `health`'s argv (beyond the shared `--dir`, peeled off by `main`). */
+interface HealthFlags {
+  /** `--fail-under-capture <ratio>`: exit non-zero when the 7d coverage ratio is below this. */
+  failUnderCapture?: number;
+}
+
+/** Parse `health`'s own flags; a malformed `--fail-under-capture` value is a usage error. */
+function parseHealthFlags(rest: string[]): HealthFlags {
+  const { values } = parseArgs({
+    args: rest,
+    options: {
+      dir: { type: "string" },
+      "fail-under-capture": { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+  });
+  const flags: HealthFlags = {};
+  if (typeof values["fail-under-capture"] === "string") {
+    const n = Number(values["fail-under-capture"]);
+    if (!Number.isFinite(n) || n < 0 || n > 1) {
+      throw new Error(
+        `--fail-under-capture expects a ratio between 0 and 1, got "${values["fail-under-capture"]}"`,
+      );
+    }
+    flags.failUnderCapture = n;
+  }
+  return flags;
+}
+
+/**
+ * `health` — brain-health / trust rollup (#109) + capture-coverage telemetry (#235): a
+ * freshness/trust score plus counts of stale, unverified, contradicted, and orphaned notes, then a
+ * capture-coverage section computed from the persistent capture log (which fraction of sessions
+ * landed a note over 7/30 days, the trend, and failure classes). Read-only; prints a human summary
+ * to stdout. `--fail-under-capture <ratio>` makes it exit non-zero when the 7-day coverage ratio is
+ * below the threshold (CI/cron use) — but never when there is no data to measure. Returns a process
+ * exit code.
+ */
+async function cmdHealth(dir: string, rest: string[]): Promise<number> {
+  const flags = parseHealthFlags(rest);
+
   const h = await computeBrainHealth(dir);
   console.log(`Brain health: ${h.score}/100  (${h.total} note${h.total === 1 ? "" : "s"})`);
   console.log(`  stale:        ${h.stale.count}`);
@@ -664,6 +751,23 @@ async function cmdHealth(dir: string): Promise<void> {
       );
     }
   }
+
+  // Capture-coverage section (#235): read the per-user log, count only THIS brain's entries.
+  const cov = captureCoverage(await readCaptureLog(), { brainDir: dir });
+  printCoverage(cov);
+
+  // Threshold gate for CI/cron: fail only when there is data AND the 7d ratio is below threshold.
+  // No data → informational, never a failure (a fresh brain or a paused agent must not break CI).
+  if (flags.failUnderCapture !== undefined && cov.short.ratio !== null) {
+    if (cov.short.ratio < flags.failUnderCapture) {
+      console.error(
+        `[commonwealth-curate] capture coverage ${pct(cov.short.ratio)} is below the ` +
+          `--fail-under-capture threshold of ${pct(flags.failUnderCapture)} (last 7 days).`,
+      );
+      return 1;
+    }
+  }
+  return 0;
 }
 
 /** Longest per-kind bar, in `█` chars, at the highest-count kind. Shorter bars scale down. */
@@ -1019,7 +1123,7 @@ async function main(): Promise<void> {
       await cmdFeature(await requireBrain(), rest);
       break;
     case "health":
-      await cmdHealth(await requireBrain());
+      process.exitCode = await cmdHealth(await requireBrain(), rest);
       break;
     case "map":
       await cmdMap(await requireBrain());

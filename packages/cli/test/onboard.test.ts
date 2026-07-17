@@ -20,6 +20,7 @@ function makeDeps(over: Partial<OnboardDeps> = {}): OnboardDeps {
     ensureUserConfig: vi.fn(async () => ({ path: "/home/.commonwealth/config.json" })),
     setAutoAdr: vi.fn(async () => ({ set: true })),
     setRemote: vi.fn(async () => ({ set: true })),
+    writeCiWorkflow: vi.fn(async () => ({ written: true })),
     installPlugin: vi.fn(async () => ({ installed: true })),
     emitContext: vi.fn(async () => ({ written: ["AGENTS.md"] })),
     startDaemon: vi.fn(async () => ({ started: true })),
@@ -55,6 +56,7 @@ describe("runOnboard", () => {
       scope: "added 1",
       autoAdr: "skipped",
       remote: "skipped",
+      ci: "no remote",
       plugin: "installed",
       context: "skipped",
       daemon: "started",
@@ -269,6 +271,39 @@ describe("runOnboard", () => {
 
     expect(deps.setRemote).not.toHaveBeenCalled();
     expect(result.remote).toBe("skipped");
+  });
+
+  it("CI (#220): writes the disaster-recovery workflow when the brain has a remote", async () => {
+    const deps = makeDeps();
+    const result = await runOnboard("/repo", { yes: true, remote: "git@x:y.git" }, deps);
+
+    expect(deps.writeCiWorkflow).toHaveBeenCalledWith("/b");
+    expect(result.ci).toBe("written");
+  });
+
+  it("CI (#220): --no-ci (ci:false) skips the workflow even with a remote", async () => {
+    const deps = makeDeps();
+    const result = await runOnboard("/repo", { yes: true, remote: "git@x:y.git", ci: false }, deps);
+
+    expect(deps.writeCiWorkflow).not.toHaveBeenCalled();
+    expect(result.ci).toBe("skipped");
+  });
+
+  it("CI (#220): no remote means no workflow (nothing for CI to clone)", async () => {
+    const deps = makeDeps();
+    const result = await runOnboard("/repo", { yes: true }, deps);
+
+    expect(deps.writeCiWorkflow).not.toHaveBeenCalled();
+    expect(result.ci).toBe("no remote");
+  });
+
+  it("CI (#220): a pre-existing workflow is reported as 'exists', not overwritten", async () => {
+    const deps = makeDeps({
+      writeCiWorkflow: vi.fn(async () => ({ written: false, skipped: "exists" })),
+    });
+    const result = await runOnboard("/repo", { yes: true, remote: "git@x:y.git" }, deps);
+
+    expect(result.ci).toBe("exists");
   });
 
   it("scope idempotency: an already-allowed scope emits a WARNING and counts zero added", async () => {

@@ -469,6 +469,79 @@ describe("built binary", () => {
     await fs.rm(brain, { recursive: true, force: true });
   });
 
+  it("health surfaces capture coverage and --fail-under-capture gates on the 7-day ratio (#235)", async () => {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-coverage-")),
+    );
+    try {
+      const brain = path.join(root, "brain");
+      await initBrain(brain, { name: "coverage-brain" });
+      const logPath = path.join(root, "capture.log");
+      const now = Date.now();
+      const DAY = 86_400_000;
+      // Recent 7d for THIS brain: 1 productive of 4 → ratio 0.25.
+      const line = (over: Record<string, unknown>): string =>
+        JSON.stringify({ ts: now - DAY, brain, outcome: "ok", staged: 0, promoted: 0, ...over });
+      await fs.writeFile(
+        logPath,
+        [
+          line({ staged: 2 }), // productive
+          line({ outcome: "extraction-failed", reason: "extractor-unavailable" }),
+          line({ outcome: "extraction-failed", reason: "extractor-unavailable" }),
+          line({ outcome: "curate-failed", reason: "curate-runtime" }),
+          // A DIFFERENT brain's productive captures must NOT inflate this brain's ratio.
+          JSON.stringify({ ts: now, brain: "/brains/elsewhere", outcome: "ok", staged: 5 }),
+        ].join("\n") + "\n",
+      );
+      const env = { ...process.env, COMMONWEALTH_CAPTURE_LOG: logPath };
+      const run = (args: string[]) =>
+        spawnSync("node", [distEntry, "health", "--dir", brain, ...args], {
+          cwd: repoRoot,
+          env,
+          encoding: "utf8",
+        });
+
+      // No threshold: prints the coverage section (25%) + the dominant failure class; exit 0.
+      const plain = run([]);
+      expect(plain.status).toBe(0);
+      expect(plain.stdout).toContain("Capture coverage:");
+      expect(plain.stdout).toContain("25%");
+      expect(plain.stdout).toContain("extractor-unavailable");
+
+      // 0.25 < 0.5 → gate fails (exit 1) and says why on stderr.
+      const failed = run(["--fail-under-capture", "0.5"]);
+      expect(failed.status).toBe(1);
+      expect(failed.stderr).toContain("below the");
+
+      // 0.25 >= 0.2 → gate passes (exit 0).
+      const passed = run(["--fail-under-capture", "0.2"]);
+      expect(passed.status).toBe(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("health --fail-under-capture never fails on an empty/absent log (informational) (#235)", async () => {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-coverage-empty-")),
+    );
+    try {
+      const brain = path.join(root, "brain");
+      await initBrain(brain, { name: "empty-coverage-brain" });
+      // Point at a capture log that does not exist.
+      const env = { ...process.env, COMMONWEALTH_CAPTURE_LOG: path.join(root, "nope.log") };
+      const res = spawnSync(
+        "node",
+        [distEntry, "health", "--dir", brain, "--fail-under-capture", "0.9"],
+        { cwd: repoRoot, env, encoding: "utf8" },
+      );
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("no capture activity logged yet");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("errors clearly (exit 1) when no brain is configured for the cwd (#69)", async () => {
     const plain = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-nobrain-"));
     const env = { ...process.env, COMMONWEALTH_REGISTRY: path.join(plain, "registry.json") };

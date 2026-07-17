@@ -103,6 +103,11 @@ Prefer to run non-interactively (CI, scripting)? Pass `--yes` to use defaults + 
 commonwealth init --yes --agent both --sync ~/work/app --seed-repo ~/work/app --remote git@github.com:you/brain.git
 ```
 
+When you give the brain a `--remote`, `init` (and `add`) also drop a `.github/workflows/commonwealth-ci.yml`
+into it: on every push/PR the brain's own repo clones itself and runs `verify-restore --from-remote`, so a
+corrupted note or broken supersede chain is caught at push time, naming the offending file. Pass `--no-ci` to
+skip it; a re-run never overwrites a workflow you've edited.
+
 Then open a Claude Code session or Codex thread in the project and ask it something your team
 already knows. Both hosts inject relevant brain context and capture before compaction. Claude Code
 captures at `SessionEnd`; Codex has no session-end event, so it performs throttled capture when an
@@ -126,7 +131,8 @@ commonwealth reject <id...>               # discard staged notes
 commonwealth sync once                    # sync now (lifecycle hooks do this automatically)
 commonwealth sync start|stop              # opt into/out of the continuous daemon profile
 commonwealth service <install|uninstall|status|restart>  # run sync as an OS background service
-commonwealth health                       # freshness / trust score for the brain
+commonwealth health                       # freshness/trust score + capture coverage (what fraction of sessions land a note)
+commonwealth health --fail-under-capture 0.3  # exit non-zero when 7-day capture coverage is below 30% (CI/cron gate)
 commonwealth map                          # brain-at-a-glance: per-kind counts + top contributors
 commonwealth project list                 # engagement links: which sources are one project
 commonwealth project link <id> <src...>   # link a dev repo + business folder into one engagement

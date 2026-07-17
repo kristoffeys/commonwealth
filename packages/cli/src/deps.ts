@@ -415,6 +415,9 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
     return { set: true };
   };
 
+  const writeCiWorkflow = (brainDir: string): Promise<{ written: boolean; skipped?: string }> =>
+    core.scaffoldCiWorkflow(brainDir);
+
   /**
    * Install the Commonwealth plugin at USER scope via the repo marketplace (ADR-0012),
    * replacing the old raw local-scope `claude mcp add`. Steps, all best-effort and
@@ -648,6 +651,7 @@ export function defaultOnboardDeps(opts: DefaultOnboardDepsOptions = {}): Onboar
     ensureUserConfig,
     setAutoAdr,
     setRemote,
+    writeCiWorkflow,
     installPlugin,
     emitContext,
     startDaemon,
