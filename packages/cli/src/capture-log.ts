@@ -1,69 +1,19 @@
-import { promises as fs } from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { type CaptureLogEntry, isFailureOutcome } from "@cmnwlth/core";
 
 /**
- * Reader-side view of the persistent capture log (#211). The plugin worker writes JSONL entries via
- * `packages/plugin/hooks/capture-log.mjs`; `commonwealth doctor` and `commonwealth status` read the
- * tail here. The path resolution mirrors the writer exactly so both ends agree without importing
- * across the package boundary (the plugin hooks run as standalone .mjs).
+ * Reader-side helpers over the persistent capture log (#211). The shape (`CaptureLogEntry`), the
+ * path resolution (`captureLogPath`), and the JSONL reader (`readCaptureLog`) now live in
+ * `@cmnwlth/core` (alongside the #235 coverage rollup) so there is one TypeScript source of truth;
+ * they are re-exported here for the `commonwealth doctor` / `status` call sites that already import
+ * from `./capture-log.js`. The plugin worker writes the log
+ * (`packages/plugin/hooks/capture-log.mjs`); its path resolution mirrors this exactly.
  */
-
-/** One capture attempt, mirroring the writer's `deriveCaptureLogEntry` shape. */
-export interface CaptureLogEntry {
-  ts?: number;
-  cwd?: string | null;
-  brain?: string | null;
-  host?: string | null;
-  boundary?: string | null;
-  outcome: "ok" | "extraction-failed" | "curate-failed" | "skipped";
-  reason?: string;
-  extracted?: number;
-  captured?: number;
-  staged?: number;
-  promoted?: number;
-  rejected?: number;
-  code?: number | null;
-  timedOut?: boolean;
-  error?: string | null;
-  verdicts?: Record<string, number>;
-}
-
-/**
- * Resolve the capture-log path exactly as the plugin writer does: `$COMMONWEALTH_CAPTURE_LOG`, then
- * a `capture.log` sibling of `$COMMONWEALTH_CONFIG`, then `~/.commonwealth/capture.log`.
- */
-export function captureLogPath(): string {
-  if (process.env.COMMONWEALTH_CAPTURE_LOG) return process.env.COMMONWEALTH_CAPTURE_LOG;
-  if (process.env.COMMONWEALTH_CONFIG) {
-    return path.join(path.dirname(process.env.COMMONWEALTH_CONFIG), "capture.log");
-  }
-  return path.join(os.homedir(), ".commonwealth", "capture.log");
-}
-
-/** Read + parse the capture log, newest entry LAST. Never throws; skips corrupt lines. */
-export async function readCaptureLog(logPath = captureLogPath()): Promise<CaptureLogEntry[]> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(logPath, "utf8");
-  } catch {
-    return [];
-  }
-  const entries: CaptureLogEntry[] = [];
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const parsed = JSON.parse(trimmed) as CaptureLogEntry;
-      if (parsed && typeof parsed === "object" && typeof parsed.outcome === "string") {
-        entries.push(parsed);
-      }
-    } catch {
-      // Skip a corrupt line rather than losing the whole tail.
-    }
-  }
-  return entries;
-}
+export {
+  type CaptureLogEntry,
+  captureLogPath,
+  isFailureOutcome,
+  readCaptureLog,
+} from "@cmnwlth/core";
 
 /** A coarse human age ("3h", "2d", "45m", "just now") for a capture timestamp. */
 export function formatAge(ts: number | undefined, now = Date.now()): string {
@@ -75,11 +25,6 @@ export function formatAge(ts: number | undefined, now = Date.now()): string {
   const hours = Math.floor(mins / 60);
   if (hours < 48) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
-}
-
-/** True when an outcome represents an operational failure (as opposed to ok / a benign skip). */
-export function isFailureOutcome(outcome: string): boolean {
-  return outcome === "extraction-failed" || outcome === "curate-failed";
 }
 
 /**
