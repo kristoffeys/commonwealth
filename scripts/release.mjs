@@ -40,9 +40,12 @@ export const PLUGIN_RUNTIME_FILES = [
   "hooks/pre-compact.mjs",
   "hooks/codex-hook.mjs",
   "hooks/capture-worker.mjs",
+  "hooks/capture-log.mjs",
   "hooks/lib.mjs",
   "hooks/extraction.mjs",
   "hooks/extraction-schema.json",
+  "hooks/classify.mjs",
+  "hooks/classify-schema.json",
 ];
 
 /**

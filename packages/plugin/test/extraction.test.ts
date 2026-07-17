@@ -168,13 +168,19 @@ describe("host-neutral transcript extraction", () => {
     assertAllObjectPropertiesRequired(schema);
   });
 
-  it("invokes Claude with the preserved print-mode argv and compact transcript on stdin", async () => {
+  it("falls back to legacy print-mode argv when Claude lacks --json-schema (#196)", async () => {
     await fs.writeFile(
       transcriptPath,
       `${JSON.stringify({ type: "user", message: { role: "user", content: "hello" } })}\n`,
     );
     const run = vi.fn(async () => ({ code: 0, stdout: "[]", stderr: "" }));
-    const extractor = createExtractor({ host: "claude", run, claudeBin: "claude-test" });
+    // `claudeJsonSchema: false` forces the legacy path deterministically (no --help probe).
+    const extractor = createExtractor({
+      host: "claude",
+      run,
+      claudeBin: "claude-test",
+      claudeJsonSchema: false,
+    });
 
     await expect(extractor.extract({ transcriptPath, cwd: "/work/project" })).resolves.toEqual({
       ok: true,
@@ -194,6 +200,127 @@ describe("host-neutral transcript extraction", () => {
       timeoutMs: 120_000,
       env: { COMMONWEALTH_DISABLE_HOOKS: "1" },
     });
+  });
+
+  it("invokes Claude with --json-schema structured output and unwraps structured_output (#196)", async () => {
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({ type: "user", message: { role: "user", content: "hello" } })}\n`,
+    );
+    const candidate = {
+      kind: "memory",
+      title: "Postgres chosen",
+      body: "Team uses Postgres.",
+      tags: ["db"],
+    };
+    // Claude's `--output-format json` envelope carries the schema object in `structured_output`.
+    const envelope = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: JSON.stringify({ candidates: [candidate] }),
+      structured_output: { candidates: [candidate] },
+    });
+    const run = vi.fn(async () => ({ code: 0, stdout: envelope, stderr: "" }));
+    const extractor = createExtractor({
+      host: "claude",
+      run,
+      claudeBin: "claude-test",
+      claudeJsonSchema: true,
+    });
+
+    await expect(extractor.extract({ transcriptPath, cwd: "/work/project" })).resolves.toEqual({
+      ok: true,
+      candidates: [candidate],
+    });
+    expect(run).toHaveBeenCalledOnce();
+    const [command, args] = run.mock.calls[0];
+    expect(command).toBe("claude-test");
+    expect(args[0]).toBe("-p");
+    expect(args).toContain("--output-format");
+    expect(args).toContain("json");
+    expect(args).toContain("--json-schema");
+    // The inline schema string must be the candidate array contract.
+    const schemaArg = args[args.indexOf("--json-schema") + 1] as string;
+    expect(JSON.parse(schemaArg)).toMatchObject({ properties: { candidates: { type: "array" } } });
+  });
+
+  it("treats schema-invalid / garbage Claude structured output as a MALFORMED-OUTPUT failure (#196)", async () => {
+    await fs.writeFile(transcriptPath, "{}\n");
+    for (const stdout of [
+      "not json at all", // envelope itself unparseable
+      JSON.stringify({ subtype: "success", is_error: false }), // no structured_output
+      JSON.stringify({
+        subtype: "success",
+        is_error: false,
+        structured_output: {
+          candidates: [{ kind: "architecture", title: "bad", body: "x", tags: [] }],
+        },
+      }), // structured_output violates the kind enum
+    ]) {
+      const run = vi.fn(async () => ({ code: 0, stdout, stderr: "" }));
+      const extractor = createExtractor({
+        host: "claude",
+        run,
+        claudeBin: "claude-test",
+        claudeJsonSchema: true,
+      });
+      await expect(extractor.extract({ transcriptPath, cwd: tmp })).resolves.toMatchObject({
+        ok: false,
+        reason: "malformed-output",
+        host: "claude",
+      });
+    }
+  });
+
+  it("maps a Claude is_error envelope to an extractor-failed state, not empty (#196)", async () => {
+    await fs.writeFile(transcriptPath, "{}\n");
+    const run = vi.fn(async () => ({
+      code: 0,
+      stdout: JSON.stringify({ subtype: "error_during_execution", is_error: true, result: "boom" }),
+      stderr: "",
+    }));
+    const extractor = createExtractor({
+      host: "claude",
+      run,
+      claudeBin: "claude-test",
+      claudeJsonSchema: true,
+    });
+    await expect(extractor.extract({ transcriptPath, cwd: tmp })).resolves.toMatchObject({
+      ok: false,
+      reason: "extractor-failed",
+      host: "claude",
+    });
+  });
+
+  it("probes `claude --help` once and caches whether --json-schema is available (#196)", async () => {
+    await fs.writeFile(transcriptPath, "{}\n");
+    const candidate = { kind: "memory", title: "t", body: "b", tags: [] };
+    const run = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args[0] === "--help")
+        return { code: 0, stdout: "  --json-schema <schema>\n", stderr: "" };
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          subtype: "success",
+          structured_output: { candidates: [candidate] },
+        }),
+        stderr: "",
+      };
+    });
+    // Unique binary name so the module-level probe cache starts empty for this test.
+    const extractor = createExtractor({ host: "claude", run, claudeBin: "claude-probe-unique" });
+    await expect(extractor.extract({ transcriptPath, cwd: tmp })).resolves.toEqual({
+      ok: true,
+      candidates: [candidate],
+    });
+    // A second extract must NOT re-probe (cached) — exactly one --help call total.
+    await extractor.extract({ transcriptPath, cwd: tmp });
+    const helpCalls = run.mock.calls.filter((c) => (c[1] as string[])[0] === "--help");
+    expect(helpCalls).toHaveLength(1);
+    // And the extract calls used the schema path.
+    const extractCall = run.mock.calls.find((c) => (c[1] as string[])[0] === "-p");
+    expect(extractCall?.[1]).toContain("--json-schema");
   });
 
   it("invokes Codex only, with non-interactive read-only schema-backed argv", async () => {
@@ -335,7 +462,11 @@ describe("host-neutral transcript extraction", () => {
     ] as const;
 
     for (const expected of cases) {
-      const extractor = createExtractor({ host: "claude", run: async () => expected.result });
+      const extractor = createExtractor({
+        host: "claude",
+        run: async () => expected.result,
+        claudeJsonSchema: false,
+      });
       await expect(extractor.extract({ transcriptPath, cwd: tmp })).resolves.toMatchObject({
         ok: false,
         reason: expected.reason,
@@ -353,7 +484,7 @@ describe("host-neutral transcript extraction", () => {
       `${JSON.stringify({ role: "user", content: `old\n${"x".repeat(2_100_000)}\nrecent` })}\n`,
     );
     const run = vi.fn(async () => ({ code: 0, stdout: "[]", stderr: "" }));
-    const extractor = createExtractor({ host: "claude", run });
+    const extractor = createExtractor({ host: "claude", run, claudeJsonSchema: false });
     await extractor.extract({ transcriptPath, cwd: tmp });
     const input = run.mock.calls[0][2].input as string;
     expect(Buffer.byteLength(input)).toBeLessThanOrEqual(2_000_000);

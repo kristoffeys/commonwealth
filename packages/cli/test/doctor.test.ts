@@ -385,4 +385,67 @@ describe("commonwealth doctor — diagnose()", () => {
     expect(text).toContain("⚠ Sync debt");
     expect(text).toContain("commonwealth sync once");
   });
+
+  // Last-capture link from the persistent capture log (#211).
+  it("reports the last capture as ok when the newest log entry succeeded", async () => {
+    const report = await diagnose(
+      healthyEnv({
+        lastCaptures: () =>
+          Promise.resolve([{ ts: Date.now(), outcome: "ok", captured: 3, promoted: 2, staged: 1 }]),
+      }),
+    );
+    const c = check(report, "last-capture");
+    expect(c.status).toBe("ok");
+    expect(c.detail).toContain("3 note(s)");
+  });
+
+  it("warns on a single extraction failure and names the class + fix", async () => {
+    const report = await diagnose(
+      healthyEnv({
+        lastCaptures: () =>
+          Promise.resolve([
+            { ts: Date.now(), outcome: "extraction-failed", reason: "extractor-unavailable" },
+          ]),
+      }),
+    );
+    const c = check(report, "last-capture");
+    expect(c.status).toBe("warn");
+    expect(c.detail).toContain("extractor-unavailable");
+    expect(c.fix).toContain("claude /login");
+  });
+
+  it("fails and reports the streak when captures keep failing with the same class (#211)", async () => {
+    const now = Date.now();
+    const report = await diagnose(
+      healthyEnv({
+        lastCaptures: () =>
+          Promise.resolve([
+            { ts: now - 3000, outcome: "extraction-failed", reason: "extractor-timeout" },
+            { ts: now - 2000, outcome: "extraction-failed", reason: "extractor-timeout" },
+            { ts: now - 1000, outcome: "extraction-failed", reason: "extractor-timeout" },
+          ]),
+      }),
+    );
+    const c = check(report, "last-capture");
+    expect(c.status).toBe("fail");
+    expect(c.detail).toContain("last 3 captures all failed with extractor-timeout");
+    expect(report.ok).toBe(false);
+  });
+
+  it("treats a benign skip as informational, not a failure", async () => {
+    const report = await diagnose(
+      healthyEnv({
+        lastCaptures: () =>
+          Promise.resolve([{ ts: Date.now(), outcome: "skipped", reason: "out-of-scope" }]),
+      }),
+    );
+    const c = check(report, "last-capture");
+    expect(c.status).toBe("skip");
+    expect(c.detail).toContain("out-of-scope");
+  });
+
+  it("skips the link when no captures are recorded yet", async () => {
+    const report = await diagnose(healthyEnv({ lastCaptures: () => Promise.resolve([]) }));
+    expect(check(report, "last-capture").status).toBe("skip");
+  });
 });

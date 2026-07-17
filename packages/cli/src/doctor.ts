@@ -9,6 +9,13 @@ import {
   resolveBrainDir,
   resolveBrainMapping,
 } from "@cmnwlth/core";
+import {
+  type CaptureLogEntry,
+  captureFixHint,
+  failureStreak,
+  formatAge as formatCaptureAge,
+  readCaptureLog,
+} from "./capture-log.js";
 import { defaultHostIntegrationEnv, diagnoseHostIntegrations } from "./host-integration.js";
 
 /**
@@ -111,6 +118,12 @@ export interface DoctorEnv {
   pluginInstalled: () => boolean | null;
   /** Probe curate through the exact runtime resolution exported by the installed plugin (#222). */
   curateRuntime?: () => Promise<CurateRuntimeProbe | null>;
+  /**
+   * Recent capture attempts from the persistent capture log (#211), newest LAST. Optional — when
+   * absent (older API consumers), the capture-outcome link is simply not emitted. Surfaces the last
+   * capture outcome and any failure-class streak so "why is my brain not filling?" is answerable.
+   */
+  lastCaptures?: () => Promise<CaptureLogEntry[]>;
   /** Optional host-specific Claude/Codex diagnostics (#226); absent preserves the legacy report. */
   hostIntegrations?: () => Promise<DoctorCheck[]>;
   /** Whether `pid` is a live process (`kill -0`). */
@@ -337,6 +350,9 @@ export function defaultDoctorEnv(cwd: string): DoctorEnv {
       }
     },
     hostIntegrations: () => diagnoseHostIntegrations(defaultHostIntegrationEnv(cwd)),
+    // Read the last 20 capture attempts so the streak detector has room without scanning the whole
+    // rolling log.
+    lastCaptures: async () => (await readCaptureLog()).slice(-20),
     pidAlive: (pid) => {
       try {
         process.kill(pid, 0); // signal 0 = existence check
@@ -428,6 +444,62 @@ export function defaultDoctorEnv(cwd: string): DoctorEnv {
   };
 }
 
+/** Streak length at/above which a run of identical capture failures escalates from warn to fail. */
+const CAPTURE_FAIL_STREAK = 3;
+
+/**
+ * Build the "Last capture" diagnostic link (#211) from the capture-log tail. A healthy last capture
+ * is `ok`; a benign `skipped` (no-brain / out-of-scope) is informational; an extraction/curate
+ * failure warns (or fails when it has recurred {@link CAPTURE_FAIL_STREAK}+ times in a row), naming
+ * the class and the streak so a silent outage becomes a loud, actionable line.
+ */
+function captureOutcomeCheck(entries: CaptureLogEntry[]): DoctorCheck {
+  if (entries.length === 0) {
+    return {
+      id: "last-capture",
+      label: "Last capture",
+      status: "skip",
+      detail: "No capture attempts recorded yet.",
+    };
+  }
+  const last = entries[entries.length - 1]!;
+  const when = formatCaptureAge(last.ts);
+  if (last.outcome === "ok") {
+    const captured = last.captured ?? 0;
+    const detail =
+      captured === 0
+        ? `Last capture (${when}) reviewed the session and captured nothing durable.`
+        : `Last capture (${when}) saved ${captured} note(s) (${last.promoted ?? 0} promoted, ${last.staged ?? 0} staged).`;
+    return { id: "last-capture", label: "Last capture", status: "ok", detail };
+  }
+  if (last.outcome === "skipped") {
+    return {
+      id: "last-capture",
+      label: "Last capture",
+      status: "skip",
+      detail: `Last capture (${when}) was skipped (${last.reason ?? "unknown"}).`,
+    };
+  }
+  // An operational failure (extraction-failed / curate-failed).
+  const streak = failureStreak(entries);
+  const reason = last.reason ?? "unknown";
+  const kind = last.outcome === "curate-failed" ? "curate" : "extraction";
+  const streakNote =
+    streak && streak.count >= 2
+      ? ` The last ${streak.count} captures all failed with ${reason}.`
+      : "";
+  const detail = `Last capture (${when}) FAILED: ${kind} — ${reason}.${streakNote} Nothing was saved to the brain.`;
+  const fix =
+    captureFixHint(reason) ?? "run `commonwealth doctor` after re-checking the host runtime";
+  return {
+    id: "last-capture",
+    label: "Last capture",
+    status: streak && streak.count >= CAPTURE_FAIL_STREAK ? "fail" : "warn",
+    detail,
+    fix,
+  };
+}
+
 /**
  * Walk the full install/sync chain and return a structured {@link DoctorReport}. Pure w.r.t. its
  * {@link DoctorEnv} — the only side effect is the optional daemon restart when `opts.fix` is set
@@ -515,6 +587,13 @@ export async function diagnose(
         detail: `Live ${runtime.kind} path is healthy: ${runtime.command} (${safeRuntimeVersion(runtime.version)}).`,
       });
     }
+  }
+
+  // 2b) Last capture outcome (#211): read the persistent capture log so a run of invisible failures
+  //     (expired auth, timing out extractor, broken curate runtime) is a visible, named signal here —
+  //     the exact class of failure that produced an empty week with zero on-screen trace.
+  if (env.lastCaptures) {
+    checks.push(captureOutcomeCheck(await env.lastCaptures()));
   }
 
   // Host parity diagnostics (#226) are additive and optional. Existing API consumers that build
