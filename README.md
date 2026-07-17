@@ -118,7 +118,7 @@ commonwealth add <folder> [--brain <dir>] # wire another folder to the brain, in
 commonwealth registry <show|route|allow|deny|remove|default|pull>  # brain-resolution rules (see below)
 commonwealth status                       # last capture outcome + review queue + sync state
 commonwealth recall <query>               # search the brain
-commonwealth ask <question>               # a cited answer, synthesized from the brain
+commonwealth ask <question> [--answer]    # cited retrieval; --answer synthesizes a cited answer via a headless model
 commonwealth reseed [<repo>] [--all]      # mine repo(s) into the brain again
 commonwealth pending                      # notes awaiting review
 commonwealth promote <id...> | --all      # approve staged notes into canon
