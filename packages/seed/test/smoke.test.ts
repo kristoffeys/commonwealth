@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,21 @@ import { beforeAll, describe, expect, it } from "vitest";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..", "..");
 const distEntry = path.join(repoRoot, "packages", "seed", "dist", "index.js");
+
+/**
+ * The workspace is built ONCE in vitest globalSetup (#111); this suite must NOT run its own
+ * `pnpm -r build` — a build here races the concurrently-running sibling smoke suites, whose
+ * tsup `clean` wipes each `dist/` before rewriting it, so a sibling reading `dist/index.js`
+ * mid-clean fails with a raw ENOENT (#253). Instead just assert the artifact is present and
+ * fail loudly and actionably if it is not.
+ */
+function assertDistBuilt(entry: string): void {
+  if (!existsSync(entry)) {
+    throw new Error(
+      `Built binary missing: ${entry}\nRun \`pnpm build\` first (the workspace is normally built once in vitest globalSetup).`,
+    );
+  }
+}
 
 function git(cwd: string, args: string[]): void {
   execFileSync("git", args, {
@@ -27,7 +42,7 @@ describe("commonwealth-seed built CLI (smoke)", () => {
   let fixture: string;
 
   beforeAll(() => {
-    execFileSync("pnpm", ["-r", "build"], { cwd: repoRoot, stdio: "inherit" });
+    assertDistBuilt(distEntry);
 
     fixture = mkdtempSync(path.join(tmpdir(), "seed-smoke-"));
     git(fixture, ["init", "-q"]);

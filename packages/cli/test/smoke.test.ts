@@ -3,7 +3,7 @@ import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 /**
  * End-to-end guard for the BUILT binary (not source): a duplicate shebang (a stray source
@@ -14,8 +14,19 @@ import { describe, expect, it } from "vitest";
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const distEntry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 
-// The workspace is built once in vitest globalSetup (#111), so dist/ exists here.
+// The workspace is built ONCE in vitest globalSetup (#111), so dist/ exists here — this suite
+// must never trigger its own `pnpm -r build` (that would race sibling smoke suites and clobber
+// dist mid-run, #253). Guard the artifact up front so a genuinely absent dist fails loudly and
+// actionably instead of as a raw ENOENT deep inside an assertion.
 describe("built commonwealth binary", () => {
+  beforeAll(() => {
+    if (!existsSync(distEntry)) {
+      throw new Error(
+        `Built binary missing: ${distEntry}\nRun \`pnpm build\` first (the workspace is normally built once in vitest globalSetup).`,
+      );
+    }
+  });
+
   it("`init --help` exits 0", () => {
     expect(() =>
       execFileSync("node", [distEntry, "init", "--help"], { stdio: "pipe" }),

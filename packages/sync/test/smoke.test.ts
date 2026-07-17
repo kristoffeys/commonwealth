@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,13 +12,27 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * here but pass every source-imported unit test.
  */
 
-const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const distEntry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+
+/**
+ * The workspace is built ONCE in vitest globalSetup (#111); this suite must NOT run its own
+ * `pnpm -r build` — a build here races the concurrently-running sibling smoke suites, whose
+ * tsup `clean` wipes each `dist/` before rewriting it, so a sibling reading `dist/index.js`
+ * mid-clean fails with a raw ENOENT (#253). Instead just assert the artifact is present and
+ * fail loudly and actionably if it is not.
+ */
+function assertDistBuilt(entry: string): void {
+  if (!existsSync(entry)) {
+    throw new Error(
+      `Built binary missing: ${entry}\nRun \`pnpm build\` first (the workspace is normally built once in vitest globalSetup).`,
+    );
+  }
+}
 
 let brainDir: string;
 
 beforeAll(async () => {
-  execFileSync("pnpm", ["-r", "build"], { cwd: repoRoot, stdio: "pipe" });
+  assertDistBuilt(distEntry);
   brainDir = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-sync-smoke-")),
   );
