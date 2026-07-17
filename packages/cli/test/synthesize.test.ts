@@ -136,12 +136,26 @@ describe("synthesizeAnswer / formatAnswer", () => {
     expect(args).toEqual(["-p", "--append-system-prompt", "SYS", "PROMPT"]);
   });
 
-  it("builds the codex exec argv with developer instructions", () => {
+  it("builds the codex exec argv with developer instructions (exact — drift guard)", () => {
     const args = buildSynthesisArgs("codex", { system: "SYS", prompt: "PROMPT" });
-    expect(args).toContain("exec");
-    expect(args).toContain("--sandbox");
-    expect(args).toContain("read-only");
-    expect(args[args.length - 1]).toBe("PROMPT");
-    expect(args.some((a) => a.startsWith("developer_instructions="))).toBe(true);
+    // Exact match on the full argv: this is the lockstep drift guard for the ported
+    // invocation contract (extraction.mjs buildHostArgs) — ANY divergence, including a
+    // dropped isolation flag, must fail here rather than ship silently.
+    expect(args).toEqual([
+      "-a",
+      "never",
+      "exec",
+      "--ephemeral",
+      "--sandbox",
+      "read-only",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "--skip-git-repo-check",
+      "--color",
+      "never",
+      "-c",
+      'developer_instructions="SYS"',
+      "PROMPT",
+    ]);
   });
 });
