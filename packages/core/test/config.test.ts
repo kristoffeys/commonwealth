@@ -31,6 +31,14 @@ describe("defaultBrainConfig", () => {
   it("defaults llmCurator on (inert without a host runtime; ADR-0030)", () => {
     expect(defaultBrainConfig("x").features.llmCurator).toBe(true);
   });
+
+  it("defaults contradictionGuard OFF (opt-in; changes tool hot-path behavior; ADR-0033)", () => {
+    expect(defaultBrainConfig("x").features.contradictionGuard).toBe(false);
+  });
+
+  it("defaults the contradictionGuard block to non-blocking warn mode at a high threshold", () => {
+    expect(defaultBrainConfig("x").contradictionGuard).toEqual({ mode: "warn", threshold: 0.82 });
+  });
 });
 
 describe("brain config on a scaffolded brain", () => {

@@ -157,6 +157,26 @@ describe("hooks/hooks.json", () => {
     expect(prompt?.command).toContain("${CLAUDE_PLUGIN_ROOT}");
     expect(existsSync(path.join(pluginRoot, "hooks", "user-prompt-submit.mjs"))).toBe(true);
   });
+
+  it("wires the PreToolUse contradiction guard on Write/Edit/Bash (#199, ADR-0033)", () => {
+    const hooks = readJson("hooks/hooks.json") as {
+      hooks: Record<
+        string,
+        Array<{ matcher?: string; hooks: Array<{ type: string; command: string }> }>
+      >;
+    };
+    const group = hooks.hooks.PreToolUse?.[0];
+    const guard = group?.hooks?.[0];
+    // Matcher must cover the write/exec tools the guard inspects.
+    expect(group?.matcher).toBeDefined();
+    for (const tool of ["Write", "Edit", "Bash"]) {
+      expect(group?.matcher).toContain(tool);
+    }
+    expect(guard?.type).toBe("command");
+    expect(guard?.command).toContain("hooks/contradiction-guard.mjs");
+    expect(guard?.command).toContain("${CLAUDE_PLUGIN_ROOT}");
+    expect(existsSync(path.join(pluginRoot, "hooks", "contradiction-guard.mjs"))).toBe(true);
+  });
 });
 
 describe("hooks/codex-hooks.json", () => {

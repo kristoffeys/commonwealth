@@ -28,6 +28,11 @@ export {
   type GraduationCandidate,
   type GraduationResult,
 } from "./graduate.js";
+export {
+  checkContradiction,
+  type ContradictionMatch,
+  type ContradictionResult,
+} from "./contradiction.js";
 export { approve, approveAll, listPending, reject } from "./review.js";
 export {
   defaultPromotePrIo,
