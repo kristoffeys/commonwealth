@@ -175,7 +175,7 @@ function printUsage(): void {
       "  commonwealth registry  <show | route | allow | deny | remove | default>  brain-resolution rules",
       "  commonwealth service   <install | uninstall | status | restart>  run sync as a background service",
       "  commonwealth scope     <show | allow <p> | deny <p> | check>   per-user capture scope",
-      "  commonwealth recall    <query>                 search the brain",
+      "  commonwealth recall    <query> [--verbose]     search the brain (--verbose shows retrieval provenance)",
       "  commonwealth ask       <question> [--answer]   cited retrieval; --answer synthesizes a cited answer via a headless model",
       "  commonwealth update [--agent claude|codex|both] update the CLI + selected agent plugin(s)",
       "  commonwealth --version                         print the installed CLI version",
@@ -301,8 +301,15 @@ export async function run(argv: string[]): Promise<number> {
       return delegateCurate(["reject", ...rest]);
     case "scope":
       return delegateCurate(["scope", ...rest]);
-    case "recall":
-      return delegateCurate(["context", "--cwd", process.cwd(), "--query", rest.join(" ")]);
+    case "recall": {
+      // `--verbose` surfaces per-hit retrieval provenance (#236); strip it from the query text so
+      // it isn't matched as a search term, and forward it as a flag to the curate `context` command.
+      const verbose = rest.includes("--verbose") || rest.includes("-v");
+      const queryText = rest.filter((a) => a !== "--verbose" && a !== "-v").join(" ");
+      const args = ["context", "--cwd", process.cwd(), "--query", queryText];
+      if (verbose) args.push("--verbose");
+      return delegateCurate(args);
+    }
     case "ask":
       return cmdAsk(rest);
     default:

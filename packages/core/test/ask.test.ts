@@ -99,6 +99,18 @@ describe("askBrain", () => {
     }
   });
 
+  it("attaches per-hit retrieval diagnostics only when asked (#236)", async () => {
+    const plain = await askBrain(dir, "jwt sessions stateless");
+    expect(plain.hits[0]!.diagnostics).toBeUndefined();
+
+    const diag = await askBrain(dir, "jwt sessions stateless", { diagnostics: true });
+    const top = diag.hits[0]!;
+    expect(top.diagnostics).toBeDefined();
+    // Lexical FTS path (no embeddings configured here): a body match at lexical rank 1.
+    expect(top.diagnostics!.lexicalRank).toBe(1);
+    expect(top.diagnostics!.tier).toBe("lexical");
+  });
+
   it("honors the character budget, keeping the most relevant hits", async () => {
     for (let i = 0; i < 20; i++) {
       await writeNote(dir, {

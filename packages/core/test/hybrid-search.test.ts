@@ -220,6 +220,115 @@ describe("hybrid semantic retrieval (ADR-0025, #213)", () => {
     expect(titles[titles.length - 1]).toBe("Alpha stale");
   });
 
+  it("strict mode (#236) drops a semantic-near-but-wrong note that outranks the right lexical hit", async () => {
+    // "orchestration" and "scheduling" are SYNONYMS on the same axis — so a query about
+    // "orchestration" is semantically near a note that only ever says "scheduling", with zero
+    // literal token overlap (the classic vector-noise failure). The wrong note has NO query token
+    // in body OR title/tags → pure semantic arrival.
+    const wrong = await writeNote(dir, {
+      kind: "memory",
+      title: "Scheduler internals",
+      body: "pod scheduling internals for the cluster",
+    });
+    // The RIGHT note: matches "deploy" lexically. A shorter "filler" note also matches "deploy" and
+    // outranks it on bm25, pushing the right note to lexical rank 2 — so under RRF the semantic-only
+    // wrong note (semantic rank 1 = 1/61) edges past the right note (lexical rank 2 = 1/62).
+    const right = await writeNote(dir, {
+      kind: "memory",
+      title: "Deploy guide",
+      body: "deploy the application to the environment here",
+    });
+    await writeNote(dir, { kind: "memory", title: "Deploy", body: "deploy" });
+
+    const embedder = keywordEmbedder({ orchestration: 0, scheduling: 0 });
+    await buildIndex(dir, { embedder });
+
+    // Default (permissive): the wrong semantic note outranks the right lexical hit.
+    const permissive = await search(dir, "deploy orchestration", { embedder });
+    const pTitles = permissive.map((h) => h.title);
+    expect(pTitles).toContain("Scheduler internals");
+    expect(pTitles.indexOf("Scheduler internals")).toBeLessThan(pTitles.indexOf("Deploy guide"));
+
+    // Strict (minLexicalSupport 1): the vector-only note is rejected, so the right hit is no longer
+    // outranked by noise; the lexically-supported notes survive intact.
+    const strict = await search(dir, "deploy orchestration", { embedder, minLexicalSupport: 1 });
+    const sTitles = strict.map((h) => h.title);
+    expect(sTitles).not.toContain("Scheduler internals");
+    expect(sTitles).toContain("Deploy guide");
+    expect(sTitles).toContain("Deploy");
+
+    // Diagnostics explain BOTH: the wrong note is semantic-only, the right note lexical-only.
+    const diag = await search(dir, "deploy orchestration", { embedder, diagnostics: true });
+    const wrongHit = diag.find((h) => h.id === wrong.frontmatter.id)!;
+    const rightHit = diag.find((h) => h.id === right.frontmatter.id)!;
+    expect(wrongHit.diagnostics).toEqual({
+      lexicalRank: null,
+      semanticRank: 1,
+      rrfScore: wrongHit.score,
+      tier: "semantic",
+    });
+    expect(rightHit.diagnostics).toMatchObject({
+      lexicalRank: 2,
+      semanticRank: null,
+      tier: "lexical",
+    });
+  });
+
+  it("#213 stopword-paraphrase still retrieves under the strict injection default (minLexicalSupport 1)", async () => {
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Ecommerce platform",
+      body: "The storefront was built on Shopware for the migration project.",
+    });
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Unrelated",
+      body: "Notes about the payroll spreadsheet and quarterly taxes.",
+    });
+    const embedder = keywordEmbedder({ shopware: 0, payroll: 1 });
+    await buildIndex(dir, { embedder });
+
+    // The Shopware note has no query keyword in its TITLE, but arrives via the #209 OR-fallback
+    // lexical list (body contains "shopware") → support ≥ 1 → it survives the strict floor. This is
+    // exactly why the chosen injection default (1) keeps the #213 done-criterion green.
+    const strict = await search(dir, "did we use shopware before?", {
+      embedder,
+      minLexicalSupport: 1,
+    });
+    expect(strict.map((h) => h.title)).toContain("Ecommerce platform");
+    expect(strict.map((h) => h.title)).not.toContain("Unrelated");
+  });
+
+  it("diagnostics off = zero behavior change; minLexicalSupport never touches the lexical-only path", async () => {
+    await writeNote(dir, { kind: "memory", title: "Cache", body: "edge cache invalidation rules" });
+    await writeNote(dir, { kind: "memory", title: "Auth", body: "jwt refresh cache token" });
+    await buildIndex(dir, { embedder: keywordEmbedder({ cache: 0 }) });
+
+    // Lexical-only path (embedder null): a large minLexicalSupport must NOT prune or reorder — the
+    // guard only applies to semantic-only candidates, which this path has none of.
+    const base = await search(dir, "cache", { embedder: null });
+    const withFloor = await search(dir, "cache", { embedder: null, minLexicalSupport: 9 });
+    expect(withFloor).toEqual(base);
+    // No diagnostics field allocated when the flag is off.
+    for (const r of base) expect(r.diagnostics).toBeUndefined();
+
+    // Hybrid path, flag off: results carry no diagnostics either (purely additive when requested).
+    const hybrid = await search(dir, "cache", { embedder: keywordEmbedder({ cache: 0 }) });
+    for (const r of hybrid) expect(r.diagnostics).toBeUndefined();
+  });
+
+  it("lexical-only path emits diagnostics when asked (tier=lexical, no semantic rank)", async () => {
+    await writeNote(dir, { kind: "memory", title: "Cache", body: "edge cache rules" });
+    await buildIndex(dir, { embedder: null });
+    const hits = await search(dir, "cache", { embedder: null, diagnostics: true });
+    expect(hits[0]!.diagnostics).toEqual({
+      lexicalRank: 1,
+      semanticRank: null,
+      rrfScore: hits[0]!.score,
+      tier: "lexical",
+    });
+  });
+
   it("feeds lexical-OR hits into the fusion when the semantic side misses (AND→OR→RRF, #209)", async () => {
     await writeNote(dir, {
       kind: "memory",

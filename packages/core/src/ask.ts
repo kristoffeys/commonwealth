@@ -1,4 +1,4 @@
-import { search } from "./index-db.js";
+import { search, type ResultDiagnostics } from "./index-db.js";
 
 /**
  * "Ask the brain" retrieval (ADR-0020, #108). Commonwealth does NOT synthesize the answer — the
@@ -26,6 +26,12 @@ export interface AskHit {
   source: string;
   /** A short, match-highlighted excerpt of the note body. */
   excerpt: string;
+  /**
+   * Retrieval provenance (#236): why this hit ranked — lexical/semantic ranks, fused score, evidence
+   * tier. Present only when {@link AskOptions.diagnostics} is set; strengthens the faithful-citation
+   * story (ADR-0020) by letting the agent see the evidence class behind each cited note.
+   */
+  diagnostics?: ResultDiagnostics;
 }
 
 /** How well the brain covers the question — so the agent/CLI can decline instead of hallucinating. */
@@ -51,6 +57,10 @@ export interface AskOptions {
   limit?: number;
   /** Approximate character budget across all excerpts (~4 chars/token; default 4000). */
   maxChars?: number;
+  /** Strict retrieval (#236): require this much lexical support per hit. Default 0 (permissive). */
+  minLexicalSupport?: number;
+  /** Attach per-hit retrieval provenance to each {@link AskHit} (#236). Default off. */
+  diagnostics?: boolean;
 }
 
 /**
@@ -65,7 +75,11 @@ export async function askBrain(
 ): Promise<AskResult> {
   const limit = opts.limit ?? 8;
   const maxChars = opts.maxChars ?? 4000;
-  const results = await search(brainDir, question, { limit });
+  const results = await search(brainDir, question, {
+    limit,
+    ...(opts.minLexicalSupport !== undefined ? { minLexicalSupport: opts.minLexicalSupport } : {}),
+    ...(opts.diagnostics ? { diagnostics: true } : {}),
+  });
 
   const hits: AskHit[] = [];
   let used = 0;
@@ -80,6 +94,7 @@ export async function askBrain(
       path: r.path,
       source: r.source ?? "",
       excerpt,
+      ...(r.diagnostics ? { diagnostics: r.diagnostics } : {}),
     });
     used += size;
   }
