@@ -71,6 +71,16 @@ describe("initBrain", () => {
     await expect(fs.stat(path.join(dir, "COMMONWEALTH.md"))).resolves.toBeDefined();
   });
 
+  it("writes a commented-out CODEOWNERS sample for `promote --pr` (#215)", async () => {
+    await initBrain(dir);
+    const codeowners = await fs.readFile(path.join(dir, ".github", "CODEOWNERS"), "utf8");
+    // The sample is fully commented so an active-but-ownerless rule never blocks every PR.
+    for (const line of codeowners.split("\n")) {
+      expect(line === "" || line.startsWith("#")).toBe(true);
+    }
+    expect(codeowners).toContain("decisions/");
+  });
+
   it("is byte-idempotent: a second run produces identical files", async () => {
     await initBrain(dir, { name: "x" });
     const first = await snapshot(dir);

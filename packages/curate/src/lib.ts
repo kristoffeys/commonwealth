@@ -30,6 +30,15 @@ export {
 } from "./graduate.js";
 export { approve, approveAll, listPending, reject } from "./review.js";
 export {
+  defaultPromotePrIo,
+  promoteViaPr,
+  reconcilePromoted,
+  type PromotePrIo,
+  type PromotePrNote,
+  type PromotePrResult,
+  type PromoteSelection,
+} from "./promote-pr.js";
+export {
   addTombstone,
   graduationClusterKey,
   loadTombstonedKeys,

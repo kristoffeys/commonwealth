@@ -40,6 +40,7 @@ import { computeNeighbors } from "./neighbors.js";
 import { reassignStagedContributor } from "./staging.js";
 import { selectRelevant } from "./relevance.js";
 import { approve, approveAll, listPending, reject } from "./review.js";
+import { promoteViaPr, reconcilePromoted, type PromoteSelection } from "./promote-pr.js";
 import { addAllow, addDeny, loadUserConfig } from "./scope.js";
 import type { AnnotatedCandidate } from "./verdict.js";
 import packageJson from "../package.json";
@@ -132,6 +133,7 @@ function usage(): void {
       "  commonwealth-curate approve <id...> [--dir <brain>]",
       "  commonwealth-curate reject <id...> [--dir <brain>]",
       "  commonwealth-curate approve-all [--dir <brain>]",
+      "  commonwealth-curate promote-pr <id...> | --all [--dir <brain>]   open a promotion PR",
       "  commonwealth-curate stage --kind <kind> --title <t> --body <b> [--tags a,b]",
       "      [--deciders a,b] [--status <s>] [--dir <brain>]   (deciders/status: decisions)",
       "  commonwealth-curate context [--dir <brain>] [--cwd <dir>] [--query <q>] [--limit <n>]",
@@ -175,6 +177,10 @@ function pendingVerdictAnnotation(fm: Record<string, unknown>): string {
 }
 
 async function cmdList(dir: string): Promise<void> {
+  // Post-merge reconciliation (ADR-0008, #215): if a note was promoted via a PR that has since
+  // merged, it is now in canon but its local staged copy lingers (the branch carried adds only).
+  // Clear those before listing, so `status`/`pending` reflect the real, post-merge queue.
+  await reconcilePromoted(dir);
   const pending = await listPending(dir);
   for (const note of pending) {
     const fm = note.frontmatter as unknown as Record<string, unknown>;
@@ -205,6 +211,44 @@ async function cmdApproveAll(dir: string): Promise<void> {
   const paths = await approveAll(dir);
   for (const p of paths) console.log(p);
   console.error(`[commonwealth-curate] approved ${paths.length} note(s)`);
+}
+
+/**
+ * `promote-pr <id...> | --all` (ADR-0007, #215) — open a brain-repo PR that promotes the selected
+ * staged notes into canon, instead of moving them locally. First runs the reconciliation sweep (so a
+ * prior PR that already merged doesn't re-propose its notes), then branches/commits/pushes and files
+ * the PR via `gh`. A graceful refusal (no remote, no `gh`, empty selection) prints to stderr and
+ * exits non-zero; the PR URL goes to stdout so it composes with other tools.
+ */
+async function cmdPromotePr(dir: string, args: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    options: { dir: { type: "string" }, all: { type: "boolean" }, pr: { type: "boolean" } },
+    allowPositionals: true,
+    strict: false,
+  });
+
+  // Clear any staged copies whose notes already landed in canon via a merged PR, so we never
+  // re-propose an already-promoted note.
+  await reconcilePromoted(dir);
+
+  const selection: PromoteSelection = values.all === true ? { all: true } : { ids: positionals };
+  if (!("all" in selection) && selection.ids.length === 0) {
+    console.error("promote --pr requires at least one <id>, or --all");
+    return 2;
+  }
+
+  const result = await promoteViaPr(dir, selection);
+  if (result.skipped) {
+    console.error(`[commonwealth-curate] promote --pr skipped: ${result.skipped}`);
+    return 1;
+  }
+  console.error(
+    `[commonwealth-curate] opened promotion PR (${result.notes.length} note(s)) on branch ` +
+      `${result.branch} → base ${result.base} @ ${result.commit}`,
+  );
+  console.log(result.url);
+  return 0;
 }
 
 async function cmdStage(dir: string, args: string[]): Promise<void> {
@@ -959,6 +1003,9 @@ async function main(): Promise<void> {
       break;
     case "approve-all":
       await cmdApproveAll(await requireBrain());
+      break;
+    case "promote-pr":
+      process.exitCode = await cmdPromotePr(await requireBrain(), rest);
       break;
     case "stage":
       // stage owns its own flags; re-parse the original rest (minus --dir handled above).
