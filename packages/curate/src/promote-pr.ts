@@ -3,7 +3,14 @@ import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { listNotes, pathForNote, resolveWithinBrain, type Note } from "@cmnwlth/core";
+import {
+  findSecretsForBrain,
+  listNotes,
+  loadBrainConfig,
+  pathForNote,
+  resolveWithinBrain,
+  type Note,
+} from "@cmnwlth/core";
 import { listStaged, stagedAbsPath } from "./staging.js";
 
 const pexec = promisify(execFile);
@@ -41,6 +48,17 @@ export interface PromotePrNote {
   canonPath: string;
 }
 
+/**
+ * A staged note WITHHELD from a promotion PR because the secret scrub (#16/#98, at parity with the
+ * sync pre-commit scrub) detected a credential in its content. Withheld notes are never hashed into
+ * the promotion commit and never pushed; the local staged copy is left untouched so the user can fix
+ * and re-promote.
+ */
+export interface WithheldNote extends PromotePrNote {
+  /** Secret-pattern kinds that matched (deduped), e.g. "aws-access-key-id". Names the rule hit. */
+  rules: string[];
+}
+
 /** Outcome of a `promote --pr` run. */
 export interface PromotePrResult {
   /** The promotion branch created and pushed. */
@@ -55,9 +73,14 @@ export interface PromotePrResult {
   title: string;
   /** The PR body (markdown). */
   body: string;
-  /** Notes carried by the PR, in selection order. */
+  /** Notes carried by the PR, in selection order (clean notes only — see {@link withheld}). */
   notes: PromotePrNote[];
-  /** Set (with a reason) when nothing was done: no remote, no `gh`, or an empty selection. */
+  /** Staged notes withheld from the PR because the secret scrub found a credential (#16/#98). */
+  withheld: WithheldNote[];
+  /**
+   * Set (with a reason) when nothing was done: no remote, no `gh`, an empty selection, or EVERY
+   * selected note was withheld by the secret scan (no branch/PR is created in that case).
+   */
   skipped?: string;
 }
 
@@ -118,8 +141,12 @@ async function identityFlags(io: PromotePrIo): Promise<string[]> {
   }
 }
 
-/** Build the PR title + body listing each promoted note (kind, title, source). */
-function renderPr(notes: PromotePrNote[]): { title: string; body: string } {
+/**
+ * Build the PR title + body listing each promoted note (kind, title, source). When `withheldCount`
+ * is non-zero the batch was trimmed by the secret scrub, so the body says so loudly ("N withheld by
+ * secret scan") — the reviewer must know the promotion is incomplete.
+ */
+function renderPr(notes: PromotePrNote[], withheldCount = 0): { title: string; body: string } {
   const count = notes.length;
   const title =
     count === 1
@@ -131,9 +158,20 @@ function renderPr(notes: PromotePrNote[]): { title: string; body: string } {
     return `- **[${n.kind}]** ${n.title}${src}  (\`${n.id}\` → \`${n.canonPath}\`)`;
   });
 
+  const withheldBanner =
+    withheldCount > 0
+      ? [
+          `> ⚠️ **${withheldCount} withheld by secret scan.** This promotion batch is INCOMPLETE — ` +
+            `${withheldCount} selected note(s) contained a detected secret and were held back (left ` +
+            `staged locally, never pushed). Fix the secret(s) and re-run to promote them.`,
+          "",
+        ]
+      : [];
+
   const body = [
     `Promotes ${count} staged note${count === 1 ? "" : "s"} into the Commonwealth brain canon.`,
     "",
+    ...withheldBanner,
     "**Merge = promotion.** Adds are union-merge-safe (one fact per file, collision-proof ids — ADR-0003).",
     "**Close = reject.** Closing discards the branch; nothing enters canon and no teammate's queue is",
     "affected — the staging queue is per-user and gitignored (ADR-0008).",
@@ -157,7 +195,7 @@ export async function promoteViaPr(
   selection: PromoteSelection,
   io: PromotePrIo = defaultPromotePrIo(brainDir),
 ): Promise<PromotePrResult> {
-  const skip = (reason: string): PromotePrResult => ({
+  const skip = (reason: string, withheld: WithheldNote[] = []): PromotePrResult => ({
     branch: "",
     base: "",
     commit: "",
@@ -165,6 +203,7 @@ export async function promoteViaPr(
     title: "",
     body: "",
     notes: [],
+    withheld,
     skipped: reason,
   });
 
@@ -206,13 +245,20 @@ export async function promoteViaPr(
   const parent = await io.git(["rev-parse", "HEAD"]);
   const branch = `commonwealth/promote-${io.now()}`;
 
-  const notes: PromotePrNote[] = selected.map((n) => ({
+  const candidates: PromotePrNote[] = selected.map((n) => ({
     id: n.frontmatter.id,
     kind: n.frontmatter.kind,
     title: n.frontmatter.title,
     ...(n.frontmatter.source ? { source: n.frontmatter.source } : {}),
     canonPath: pathForNote(n.frontmatter.kind, n.frontmatter.id, n.frontmatter.source),
   }));
+
+  // Secret scrub at parity with sync (#16/#98): staged notes are plain, hand-editable markdown, so
+  // the capture-time gate is NOT sufficient — a secret appended to a staged file after capture would
+  // otherwise be hashed into the promotion commit and pushed. Scan each note with the SAME
+  // brain-configured detector the sync pre-commit scrub uses (findSecretsForBrain — one shared core
+  // composition, so the two write-gates cannot disagree, including config-driven entropy/allowlist).
+  const config = await loadBrainConfig(brainDir);
 
   // Build the promotion commit with git plumbing against a TEMP index, so the working tree and the
   // user's staging queue are never touched. hash-object writes each staged file's content as a blob
@@ -224,17 +270,52 @@ export async function promoteViaPr(
   const withIndex = { GIT_INDEX_FILE: tmpIndex };
   try {
     await io.git(["read-tree", parent], withIndex);
+    const notes: PromotePrNote[] = []; // clean notes actually carried by the PR
+    const withheld: WithheldNote[] = []; // secret-bearing notes held back, left staged locally
     for (let i = 0; i < selected.length; i += 1) {
       const stagedAbs = stagedAbsPath(brainDir, selected[i]!);
-      const canonRel = notes[i]!.canonPath;
+      const candidate = candidates[i]!;
+      const canonRel = candidate.canonPath;
+
+      // Scan the note's on-disk content BEFORE it is hashed into the tree. A hit withholds the note:
+      // it is neither hashed nor staged, so it can never reach the branch or the remote. The staged
+      // copy is left in place for the user to fix (mirrors the sync scrub's leave-in-working-tree).
+      let content: string;
+      try {
+        content = await fs.readFile(stagedAbs, "utf8");
+      } catch {
+        content = ""; // unreadable/removed — nothing to scan (and nothing to promote)
+      }
+      const matches = findSecretsForBrain(content, config);
+      if (matches.length > 0) {
+        withheld.push({ ...candidate, rules: [...new Set(matches.map((m) => m.kind))] });
+        continue;
+      }
+
       // Containment guard (#77): assert the canonical path stays inside the brain before we stage it.
       resolveWithinBrain(brainDir, canonRel);
       const blob = await io.git(["hash-object", "-w", stagedAbs]);
-      await io.git(["update-index", "--add", "--cacheinfo", `100644,${blob},${canonRel}`], withIndex);
+      await io.git(
+        ["update-index", "--add", "--cacheinfo", `100644,${blob},${canonRel}`],
+        withIndex,
+      );
+      notes.push(candidate);
     }
+
+    // Every selected note was withheld → there is nothing safe to promote. Create NO branch and NO
+    // PR; return a skip so the CLI reports loudly and exits non-zero. Staged copies stay put.
+    if (notes.length === 0) {
+      return skip(
+        `all ${withheld.length} selected note(s) withheld by the secret scan — remove the ` +
+          `secret(s) and re-run: ` +
+          withheld.map((w) => `${w.title} [${w.rules.join(", ")}]`).join("; "),
+        withheld,
+      );
+    }
+
     const tree = await io.git(["write-tree"], withIndex);
     const identity = await identityFlags(io);
-    const { title, body } = renderPr(notes);
+    const { title, body } = renderPr(notes, withheld.length);
     const commit = await io.git([
       ...identity,
       "commit-tree",
@@ -262,7 +343,7 @@ export async function promoteViaPr(
       body,
     ]);
 
-    return { branch, base, commit: shortSha, url, title, body, notes };
+    return { branch, base, commit: shortSha, url, title, body, notes, withheld };
   } finally {
     await fs.rm(path.dirname(tmpIndex), { recursive: true, force: true });
   }

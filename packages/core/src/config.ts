@@ -3,7 +3,7 @@ import path from "node:path";
 import type { EmbeddingsConfig } from "./embed.js";
 import type { Rule } from "./registry.js";
 import { SCHEMA_VERSION } from "./schema.js";
-import type { ScanOptions } from "./secrets.js";
+import { findSecrets, type ScanOptions, type SecretMatch } from "./secrets.js";
 
 /**
  * Brain-level (shared, synced) configuration, stored at `<brain>/.commonwealth/config.json`
@@ -71,6 +71,17 @@ export function parseSharedRule(raw: unknown): Rule | null {
 /** Build the {@link ScanOptions} for the secret scanner from a brain's config (#46). */
 export function scanOptions(config: BrainConfig): ScanOptions {
   return { detectEntropy: config.secretScan.entropy, allowlist: config.secretScan.allowlist };
+}
+
+/**
+ * Scan note content for secrets under a brain's configured scan tuning (#46). This is the SINGLE
+ * composition of {@link scanOptions} + {@link findSecrets} shared by BOTH secret write-gates — the
+ * sync pre-commit scrub (`scrubStagedSecrets`) and the `promote --pr` commit builder (`promoteViaPr`)
+ * — so the two paths can never disagree on what counts as a secret, including the config-driven
+ * entropy toggle and allowlist. Callers load the config once and reuse it across files.
+ */
+export function findSecretsForBrain(content: string, config: BrainConfig): SecretMatch[] {
+  return findSecrets(content, scanOptions(config));
 }
 
 /**

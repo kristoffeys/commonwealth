@@ -2,10 +2,16 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { initBrain, listNotes, type NewNoteInput } from "@cmnwlth/core";
+import {
+  initBrain,
+  listNotes,
+  loadBrainConfig,
+  saveBrainConfig,
+  type NewNoteInput,
+} from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { approve } from "../src/review.js";
-import { listStaged, stageNote } from "../src/staging.js";
+import { listStaged, stageNote, stagedAbsPath } from "../src/staging.js";
 import {
   defaultPromotePrIo,
   promoteViaPr,
@@ -42,7 +48,10 @@ const mem = (title: string, source?: string): NewNoteInput => ({
 });
 
 /** A stubbed-gh IO: real git in the brain, `gh` recorded and faked. */
-function stubbedIo(record: { calls: string[][] }, opts: { gh?: boolean; url?: string } = {}): PromotePrIo {
+function stubbedIo(
+  record: { calls: string[][] },
+  opts: { gh?: boolean; url?: string } = {},
+): PromotePrIo {
   const real = defaultPromotePrIo(brain);
   return {
     git: real.git,
@@ -135,9 +144,9 @@ describe("promote --pr", () => {
 
   it("throws on an id that is not in the staging queue", async () => {
     await stageNote(brain, mem("Present"));
-    await expect(promoteViaPr(brain, { ids: ["not-a-real-id"] }, stubbedIo({ calls: [] }))).rejects.toThrow(
-      /No staged note with id/,
-    );
+    await expect(
+      promoteViaPr(brain, { ids: ["not-a-real-id"] }, stubbedIo({ calls: [] })),
+    ).rejects.toThrow(/No staged note with id/);
   });
 
   describe("post-merge reconciliation (ADR-0008)", () => {
@@ -200,6 +209,90 @@ describe("promote --pr", () => {
       expect(second.skipped).toBeUndefined();
       expect(second.branch).toBe("commonwealth/promote-1999999999");
       expect(second.notes.map((n) => n.id)).toEqual([a.frontmatter.id]);
+    });
+  });
+
+  describe("secret scrub (parity with the sync pre-commit scrub, #98/#16)", () => {
+    // The AWS example key: matches `aws-access-key-id` on its own, and the assignment line matches
+    // `generic-secret-assignment` too. Appended AFTER capture, the way a hand edit slips one in.
+    const AWS_KEY = "AKIAIOSFODNN7EXAMPLE";
+
+    it("withholds a staged note that grew a secret; the clean sibling still promotes", async () => {
+      const dirty = await stageNote(brain, mem("Has a leaked key"));
+      const clean = await stageNote(brain, mem("Clean fact"));
+      // The verifier's exact repro: append a credential to the staged markdown after it was captured.
+      await fs.appendFile(stagedAbsPath(brain, dirty), `\naws_secret_access_key = ${AWS_KEY}\n`);
+      const record = { calls: [] as string[][] };
+
+      const result = await promoteViaPr(brain, { all: true }, stubbedIo(record));
+
+      // A PR is still opened for the clean note; the secret-bearing note is held back.
+      expect(result.skipped).toBeUndefined();
+      expect(result.notes.map((n) => n.id)).toEqual([clean.frontmatter.id]);
+      // The report names the withheld note AND the rule(s) it hit (loud, like the sync scrub).
+      expect(result.withheld.map((w) => w.id)).toEqual([dirty.frontmatter.id]);
+      expect(result.withheld[0]!.title).toBe("Has a leaked key");
+      expect(result.withheld[0]!.rules).toContain("aws-access-key-id");
+
+      // The pushed branch adds the clean note but NOT the withheld one...
+      const branchTree = git("ls-tree", "-r", "--name-only", result.branch);
+      expect(branchTree).toContain(`memory/${clean.frontmatter.id}.md`);
+      expect(branchTree).not.toContain(`memory/${dirty.frontmatter.id}.md`);
+      // ...and the credential appears in NO blob reachable from the branch (nothing rode along).
+      const files = branchTree.split("\n").filter((f) => f.length > 0);
+      const blobDump = files.map((f) => git("show", `${result.branch}:${f}`)).join("\n");
+      expect(blobDump).not.toContain(AWS_KEY);
+
+      // The PR body flags the incomplete batch so the reviewer knows a note was withheld.
+      const argv = record.calls[0]!;
+      const body = argv[argv.indexOf("--body") + 1]!;
+      expect(body).toContain("1 withheld by secret scan");
+
+      // The withheld note is left staged locally (fix-and-re-promote), never silently dropped.
+      expect((await listStaged(brain)).map((n) => n.frontmatter.id)).toContain(
+        dirty.frontmatter.id,
+      );
+    });
+
+    it("creates no branch and signals a skip when EVERY selected note is withheld", async () => {
+      const a = await stageNote(brain, mem("Only a secret here"));
+      await fs.appendFile(stagedAbsPath(brain, a), `\naws_secret_access_key = ${AWS_KEY}\n`);
+      const record = { calls: [] as string[][] };
+
+      const result = await promoteViaPr(brain, { all: true }, stubbedIo(record));
+
+      // Skip (→ the CLI exits non-zero); the withheld note is reported.
+      expect(result.skipped).toMatch(/withheld by the secret scan/i);
+      expect(result.branch).toBe("");
+      expect(result.withheld.map((w) => w.id)).toEqual([a.frontmatter.id]);
+      // gh was never invoked and NO promotion branch exists on the remote or locally.
+      expect(record.calls).toHaveLength(0);
+      expect(gitAt(remote, "branch", "--list", "commonwealth/*")).toBe("");
+      expect(git("branch", "--list", "commonwealth/*")).toBe("");
+      // The note is left staged so it can be fixed and re-promoted.
+      expect((await listStaged(brain)).map((n) => n.frontmatter.id)).toEqual([a.frontmatter.id]);
+    });
+
+    it("honors the brain's secretScan allowlist (config parity with sync's scanOptions)", async () => {
+      const a = await stageNote(brain, mem("Carries an allowlisted token"));
+      // A bare AWS key that the scanner flags by default...
+      await fs.appendFile(stagedAbsPath(brain, a), `\n${AWS_KEY}\n`);
+      // ...but the brain allowlists that exact value, so the scan must let it through — the SAME
+      // config-driven semantics the sync scrub gets via scanOptions(loadBrainConfig()).
+      const config = await loadBrainConfig(brain);
+      await saveBrainConfig(brain, {
+        ...config,
+        secretScan: { ...config.secretScan, allowlist: [AWS_KEY] },
+      });
+      const record = { calls: [] as string[][] };
+
+      const result = await promoteViaPr(brain, { all: true }, stubbedIo(record));
+
+      expect(result.skipped).toBeUndefined();
+      expect(result.withheld).toHaveLength(0);
+      expect(result.notes.map((n) => n.id)).toEqual([a.frontmatter.id]);
+      const branchTree = git("ls-tree", "-r", "--name-only", result.branch);
+      expect(branchTree).toContain(`memory/${a.frontmatter.id}.md`);
     });
   });
 

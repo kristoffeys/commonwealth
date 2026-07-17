@@ -243,9 +243,18 @@ async function cmdPromotePr(dir: string, args: string[]): Promise<number> {
     console.error(`[commonwealth-curate] promote --pr skipped: ${result.skipped}`);
     return 1;
   }
+  // A silently-withheld note is a trust problem: always name each held-back note and the rule it hit
+  // (parity with the sync scrub's loud reporting), so the user knows the batch is incomplete.
+  for (const w of result.withheld) {
+    console.error(
+      `[commonwealth-curate] withheld from promotion (secret detected — left staged): ` +
+        `${w.title} (${w.id}) [${w.rules.join(", ")}]`,
+    );
+  }
   console.error(
-    `[commonwealth-curate] opened promotion PR (${result.notes.length} note(s)) on branch ` +
-      `${result.branch} → base ${result.base} @ ${result.commit}`,
+    `[commonwealth-curate] opened promotion PR (${result.notes.length} note(s)` +
+      `${result.withheld.length > 0 ? `, ${result.withheld.length} withheld by secret scan` : ""}) ` +
+      `on branch ${result.branch} → base ${result.base} @ ${result.commit}`,
   );
   console.log(result.url);
   return 0;

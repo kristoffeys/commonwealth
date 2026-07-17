@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { findSecrets, loadBrainConfig, scanOptions } from "@cmnwlth/core";
+import { findSecretsForBrain, loadBrainConfig } from "@cmnwlth/core";
 import { simpleGit, type SimpleGit } from "simple-git";
 
 /** Note-kind folders whose markdown is scanned for secrets before commit. */
@@ -105,7 +105,9 @@ export async function commitAllExceptSecrets(dir: string, message: string): Prom
  */
 export async function scrubStagedSecrets(dir: string): Promise<string[]> {
   // Honor the brain's secret-scanner tuning (#46): entropy detection + allowlist, off by default.
-  const opts = scanOptions(await loadBrainConfig(dir));
+  // findSecretsForBrain is the shared core composition also used by `promote --pr` — one detector,
+  // so the sync and promotion write-gates can never disagree on what counts as a secret.
+  const config = await loadBrainConfig(dir);
   const secretsBlocked: string[] = [];
   for (const rel of await stagedFiles(dir)) {
     if (!isScannableForSecrets(rel)) continue;
@@ -115,7 +117,7 @@ export async function scrubStagedSecrets(dir: string): Promise<string[]> {
     } catch {
       continue; // deletion or unreadable — nothing to scan
     }
-    if (findSecrets(content, opts).length > 0) secretsBlocked.push(rel);
+    if (findSecretsForBrain(content, config).length > 0) secretsBlocked.push(rel);
   }
   await unstage(dir, secretsBlocked);
   return secretsBlocked;

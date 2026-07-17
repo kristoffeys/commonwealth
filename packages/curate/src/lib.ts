@@ -37,6 +37,7 @@ export {
   type PromotePrNote,
   type PromotePrResult,
   type PromoteSelection,
+  type WithheldNote,
 } from "./promote-pr.js";
 export {
   addTombstone,
