@@ -18,6 +18,7 @@ import {
 import { cmdConfig, cmdReseed, delegateCurate, delegateSync } from "./commands.js";
 import { defaultOnboardDeps } from "./deps.js";
 import { defaultAskEnv, formatAsk, runAsk } from "./ask.js";
+import { defaultSynthesisEnv, formatAnswer, synthesizeAnswer } from "./synthesize.js";
 import { defaultDemoEnv, runDemo } from "./demo.js";
 import { defaultDoctorEnv, diagnose, formatDoctorText } from "./doctor.js";
 import { defaultEmitEnv, formatEmitResult, runEmit } from "./emit.js";
@@ -73,6 +74,24 @@ export { runDemo, defaultDemoEnv } from "./demo.js";
 export type { DemoResult, DemoEnv } from "./demo.js";
 export { runAsk, defaultAskEnv, formatAsk } from "./ask.js";
 export type { AskEnv } from "./ask.js";
+export {
+  synthesizeAnswer,
+  defaultSynthesisEnv,
+  formatAnswer,
+  buildSynthesisArgs,
+  buildNotesPayload,
+  detectSynthesisHost,
+  defaultRun,
+  DISABLE_HOOKS_ENV,
+  NOT_ENOUGH,
+} from "./synthesize.js";
+export type {
+  SynthesisEnv,
+  SynthesisHost,
+  SynthesisResult,
+  RunResult,
+  RunOptions,
+} from "./synthesize.js";
 export { runAdd, defaultAddDeps } from "./add.js";
 export type { AddOptions, AddDeps } from "./add.js";
 export { runOrgBrain, defaultOrgBrainDeps, parseOrgBrainArgs, cmdOrgBrain } from "./org-brain.js";
@@ -157,7 +176,7 @@ function printUsage(): void {
       "  commonwealth service   <install | uninstall | status | restart>  run sync as a background service",
       "  commonwealth scope     <show | allow <p> | deny <p> | check>   per-user capture scope",
       "  commonwealth recall    <query>                 search the brain",
-      "  commonwealth ask       <question>              cited retrieval for a question (agent synthesizes)",
+      "  commonwealth ask       <question> [--answer]   cited retrieval; --answer synthesizes a cited answer via a headless model",
       "  commonwealth update [--agent claude|codex|both] update the CLI + selected agent plugin(s)",
       "  commonwealth --version                         print the installed CLI version",
       "",
@@ -358,19 +377,31 @@ async function cmdVerifyRestore(rest: string[]): Promise<number> {
 }
 
 /**
- * `commonwealth ask "<question>"` — cited retrieval for a question (ADR-0020). Outside an agent
- * there's no synthesizer, so the CLI prints the notes that answer it (each with id/path) and says
- * synthesis happens in an agent; it never fabricates prose. Exit 1 when no brain resolves.
+ * `commonwealth ask "<question>" [--answer]` — cited retrieval for a question (ADR-0020). By
+ * default, outside an agent there's no synthesizer, so the CLI prints the notes that answer it
+ * (each with id/path) and says synthesis happens in an agent; it never fabricates prose. With the
+ * opt-in `--answer` flag (#200) it additionally invokes a headless model (`claude`, else `codex`)
+ * to synthesize a faithful, cited answer strictly from the retrieved notes — CLI-only, so ADR-0020's
+ * "the in-session agent writes the answer" rule for the MCP tool still holds. Exit 1 on error.
  */
 async function cmdAsk(rest: string[]): Promise<number> {
-  const question = rest.join(" ").trim();
+  const answer = rest.includes("--answer");
+  const question = rest
+    .filter((arg) => arg !== "--answer")
+    .join(" ")
+    .trim();
   if (question.length === 0) {
-    process.stderr.write('usage: commonwealth ask "<question>"\n');
+    process.stderr.write('usage: commonwealth ask "<question>" [--answer]\n');
     return 2;
   }
   try {
     const result = await runAsk(question, defaultAskEnv(process.cwd()));
-    process.stderr.write(formatAsk(result));
+    if (answer) {
+      const synth = await synthesizeAnswer(result, defaultSynthesisEnv(process.cwd()));
+      process.stderr.write(formatAnswer(result, synth));
+    } else {
+      process.stderr.write(formatAsk(result));
+    }
     return 0;
   } catch (err) {
     process.stderr.write(`${(err as Error).message}\n`);

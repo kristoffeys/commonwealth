@@ -65,4 +65,32 @@ describe("runAsk / formatAsk", () => {
     expect(text).toContain("No notes in the brain matched");
     expect(text).not.toContain("decisions/"); // no citations invented
   });
+
+  // #200: `commonwealth ask` WITHOUT --answer must stay byte-identical to today's retrieval output
+  // — synthesis is strictly opt-in. These goldens fail loudly if the default path ever drifts.
+  it("default (no --answer) matched output is byte-identical to the retrieval format", () => {
+    expect(formatAsk(matched)).toBe(
+      "commonwealth ask — why jwt?\n" +
+        "\n" +
+        "  1 relevant note(s) — cite these when you answer:\n" +
+        "\n" +
+        "  • Chose JWT over sessions  [decision]\n" +
+        "    decisions/d1.md\n" +
+        "    stateless API behind the balancer\n" +
+        "\n" +
+        "Synthesis happens in an agent: run /commonwealth:ask inside Claude Code for a written,\n" +
+        "cited answer. Here the CLI shows you the sources to read.\n" +
+        "\n",
+    );
+  });
+
+  it("default (no --answer) thin output is byte-identical to the retrieval format", () => {
+    expect(formatAsk(thin)).toBe(
+      "commonwealth ask — why kafka?\n" +
+        "\n" +
+        "  No notes in the brain matched this question.\n" +
+        "  There isn't enough captured knowledge to answer it yet.\n" +
+        "\n",
+    );
+  });
 });
