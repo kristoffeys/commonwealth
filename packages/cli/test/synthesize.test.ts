@@ -45,11 +45,7 @@ describe("synthesizeAnswer / formatAnswer", () => {
     opts: RunOptions;
   }
 
-  function env(
-    host: SynthesisHost | null,
-    result: RunResult,
-    calls: Call[],
-  ): SynthesisEnv {
+  function env(host: SynthesisHost | null, result: RunResult, calls: Call[]): SynthesisEnv {
     return {
       detectHost: () => host,
       run: (runtime, args, opts) => {
@@ -120,9 +116,9 @@ describe("synthesizeAnswer / formatAnswer", () => {
   });
 
   it("errors clearly, naming the flag's requirement, when no host binary is installed", async () => {
-    await expect(
-      synthesizeAnswer(matched, env(null, ok(""), [])),
-    ).rejects.toThrow(/--answer needs a headless model CLI/);
+    await expect(synthesizeAnswer(matched, env(null, ok(""), []))).rejects.toThrow(
+      /--answer needs a headless model CLI/,
+    );
   });
 
   it("errors when the host exits non-zero", async () => {
