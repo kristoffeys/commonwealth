@@ -1,7 +1,7 @@
 {
   "name": "@cmnwlth/plugin",
   "private": true,
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "The Commonwealth agent plugin: MCP server registration, lifecycle hooks, brain registry, and commands",
   "license": "Apache-2.0",
   "type": "module",
