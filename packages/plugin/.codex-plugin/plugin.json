@@ -1,6 +1,6 @@
 {
   "name": "commonwealth",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "A multiplayer, git-backed, agent-readable second brain for teams.",
   "author": {
     "name": "Commonwealth",
