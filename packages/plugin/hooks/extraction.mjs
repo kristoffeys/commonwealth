@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
@@ -303,13 +303,28 @@ function isTimeout(result) {
   );
 }
 
+/**
+ * The cwd to hand a child `spawn`, guarding against a directory that vanished mid-session: Orca
+ * deletes a task's git worktree on teardown (#259), and forcing a child into a deleted cwd makes
+ * `spawn` throw ENOENT — which the pipeline swallows into a silent "no durable knowledge" capture
+ * loss. Returns the requested cwd when it still exists, else `undefined` so the child inherits the
+ * caller's (the detached capture worker pins a stable one). Safe because extractor/curate children
+ * receive the real project path as data (`--cwd <cwd>` / the transcript), not via process.cwd().
+ *
+ * @param {string|undefined} cwd
+ * @returns {string|undefined}
+ */
+export function spawnCwd(cwd) {
+  return typeof cwd === "string" && cwd.length > 0 && existsSync(cwd) ? cwd : undefined;
+}
+
 async function defaultRun(command, args, { input, cwd, env, timeoutMs } = {}) {
   const { spawn } = await import("node:child_process");
   return await new Promise((resolve) => {
     let child;
     try {
       child = spawn(command, args, {
-        cwd,
+        cwd: spawnCwd(cwd),
         env: { ...process.env, ...env },
         stdio: ["pipe", "pipe", "pipe"],
       });

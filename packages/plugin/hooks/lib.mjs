@@ -33,7 +33,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendCaptureLog, captureLogPath, deriveCaptureLogEntry } from "./capture-log.mjs";
 import { createClassifier } from "./classify.mjs";
-import { compactClaudeTranscript, createExtractor, parseExtractionOutput } from "./extraction.mjs";
+import {
+  compactClaudeTranscript,
+  createExtractor,
+  parseExtractionOutput,
+  spawnCwd,
+} from "./extraction.mjs";
 
 /**
  * Hard cap on the extraction `claude -p` child (#104). Extraction is an LLM call, so allow real
@@ -512,8 +517,30 @@ export function captureWorkerHost(input) {
  * The hook JSON is passed as a single argv element (it is tiny — cwd/transcript_path/reason, never
  * the transcript itself), because a detached child with `stdio: "ignore"` has no stdin to read.
  *
+/**
+ * A working directory guaranteed to outlive the session, for DETACHED children (the capture worker
+ * and the background debt-flush sync). Never inherit the session's cwd for these: Orca runs each
+ * task in a transient git worktree it deletes on teardown, so a detached child whose cwd was that
+ * worktree fails every subsequent `spawn` with ENOENT — silently losing capture (#259). Prefers the
+ * home dir, falls back to tmp; returns undefined only if neither exists (then spawn inherits, no
+ * worse than before). Purely about process stability — it never affects which brain resolves.
+ *
+ * @returns {string|undefined}
+ */
+function detachedWorkerCwd() {
+  for (const dir of [os.homedir(), os.tmpdir()]) {
+    try {
+      if (typeof dir === "string" && dir.length > 0 && existsSync(dir)) return dir;
+    } catch {
+      // Try the next candidate; a broken homedir must not throw out of a fire-and-forget launcher.
+    }
+  }
+  return undefined;
+}
+
+/**
  * @param {string|object} rawInput  The hook stdin (raw string or parsed object) to hand the worker.
- * @param {{ workerPath: string, nodeBin?: string, spawnFn?: Function }} opts
+ * @param {{ workerPath: string, nodeBin?: string, spawnFn?: Function, cwd?: string }} opts
  * @returns {Promise<object|null>}  The spawned child (unref'd), or null if it could not launch.
  */
 export async function launchCaptureWorker(rawInput, opts = {}) {
@@ -524,7 +551,17 @@ export async function launchCaptureWorker(rawInput, opts = {}) {
   const payload = typeof rawInput === "string" ? rawInput : JSON.stringify(rawInput ?? {});
   let child;
   try {
-    child = spawnFn(nodeBin, [workerPath, payload], { detached: true, stdio: "ignore" });
+    child = spawnFn(nodeBin, [workerPath, payload], {
+      // A DETACHED worker must not inherit the session's cwd (#259): Orca runs each task in a
+      // transient git worktree it DELETES on teardown, and a worker whose cwd was that worktree
+      // fails every downstream `spawn` (extractor, curate) with ENOENT — swallowed into a silent
+      // "no durable knowledge" receipt while the brain quietly stops filling. Pin a dir that
+      // outlives the session. Safe: the real project path travels as the `--cwd <payload>` arg, so
+      // brain resolution is unaffected by process.cwd().
+      cwd: opts.cwd ?? detachedWorkerCwd(),
+      detached: true,
+      stdio: "ignore",
+    });
   } catch {
     // A hook must never break the session: if the worker can't be spawned, capture is skipped
     // (this session's knowledge is lost) but the session start/end proceeds unharmed.
@@ -1078,7 +1115,10 @@ async function run(cmd, args, { input, cwd, env, timeoutMs } = {}) {
     };
     try {
       child = spawn(cmd, args, {
-        cwd,
+        // Guard against a session cwd Orca deleted mid-run (#259): a dead cwd ENOENTs the curate
+        // child and silently loses capture. curate gets the real path as `--cwd <cwd>`, so dropping
+        // the dead process cwd never changes which brain resolves. See {@link spawnCwd}.
+        cwd: spawnCwd(cwd),
         env: { ...process.env, ...env },
         stdio: ["pipe", "pipe", "pipe"],
       });
@@ -1577,6 +1617,10 @@ export function realDeps(overrides = {}) {
       .then(({ spawn }) => {
         try {
           const child = spawn(syncRuntime.command, [...syncRuntime.args, "sync", "--dir", brain], {
+            // Stable cwd for the same reason as the capture worker (#259): a detached sync must not
+            // inherit a session cwd that Orca may delete out from under it. `--dir <brain>` already
+            // pins the target, so process.cwd() is irrelevant to correctness here.
+            cwd: detachedWorkerCwd(),
             detached: true,
             stdio: "ignore",
           });
