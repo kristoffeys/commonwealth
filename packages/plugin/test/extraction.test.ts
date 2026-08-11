@@ -8,7 +8,27 @@ import {
   compactCodexTranscript,
   createExtractor,
   parseExtractionOutput,
+  spawnCwd,
 } from "../hooks/extraction.mjs";
+
+describe("spawnCwd — never force a child into a deleted worktree (#259)", () => {
+  it("returns the cwd unchanged when it still exists", () => {
+    expect(spawnCwd(os.tmpdir())).toBe(os.tmpdir());
+  });
+
+  it("returns undefined for a cwd that has been removed (Orca worktree teardown)", async () => {
+    const gone = await fs.mkdtemp(path.join(os.tmpdir(), "cmnwlth-gone-"));
+    await fs.rm(gone, { recursive: true, force: true });
+    // The session's worktree vanished mid-capture; forcing spawn into it would ENOENT and silently
+    // lose the note. Falling back to `undefined` lets the child inherit the worker's stable cwd.
+    expect(spawnCwd(gone)).toBeUndefined();
+  });
+
+  it("returns undefined for empty / non-string input", () => {
+    expect(spawnCwd("")).toBeUndefined();
+    expect(spawnCwd(undefined)).toBeUndefined();
+  });
+});
 
 describe("host-neutral transcript extraction", () => {
   let tmp: string;

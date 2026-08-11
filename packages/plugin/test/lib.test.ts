@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
 // Import the plain-ESM hook lib directly (no build step; hooks run it via `node`).
 import {
@@ -851,6 +853,30 @@ describe("launchCaptureWorker (#190 — detached so `/clear` teardown can't kill
     // detached: true → own process group (setsid), immune to the old session's teardown signals.
     expect(opts.detached).toBe(true);
     expect(opts.stdio).toBe("ignore");
+  });
+
+  it("pins a stable, existing cwd so it never inherits a doomed worktree (#259)", async () => {
+    const spawnFn = vi.fn(() => ({ unref: vi.fn() }));
+
+    await launchCaptureWorker('{"cwd":"/orca/worktrees/task-123/app"}', {
+      workerPath: "/plugin/hooks/capture-worker.mjs",
+      nodeBin: "/usr/bin/node",
+      spawnFn,
+    });
+
+    const opts = spawnFn.mock.calls[0][2] as Record<string, unknown>;
+    // Orca deletes the session's worktree on teardown; a detached worker that inherited it would
+    // ENOENT on every downstream spawn and silently lose capture. The pinned cwd must be a real,
+    // stable directory — NOT the (payload) session cwd.
+    expect(typeof opts.cwd).toBe("string");
+    expect(opts.cwd).not.toBe("/orca/worktrees/task-123/app");
+    expect(existsSync(opts.cwd as string)).toBe(true);
+  });
+
+  it("honors an explicit cwd override", async () => {
+    const spawnFn = vi.fn(() => ({ unref: vi.fn() }));
+    await launchCaptureWorker("{}", { workerPath: "/w.mjs", spawnFn, cwd: os.tmpdir() });
+    expect((spawnFn.mock.calls[0][2] as Record<string, unknown>).cwd).toBe(os.tmpdir());
   });
 
   it("returns null and never spawns when no workerPath is given", async () => {
