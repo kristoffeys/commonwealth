@@ -188,6 +188,20 @@ describe("host-neutral transcript extraction", () => {
     assertAllObjectPropertiesRequired(schema);
   });
 
+  it("host schemas declare no $schema meta-ref — Claude's --json-schema rejects it (#263)", async () => {
+    // Claude Code >= 2.1.x fails `--json-schema` with "no schema with key or ref
+    // 'https://json-schema.org/draft/2020-12/schema'" when the payload carries a $schema
+    // meta-reference it can't resolve, so EVERY extraction/classification fails to compile the
+    // schema and captures nothing. The meta-declaration is optional for structured output; keep it
+    // out of both host schemas.
+    for (const name of ["extraction-schema.json", "classify-schema.json"]) {
+      const schema = JSON.parse(
+        await fs.readFile(new URL(`../hooks/${name}`, import.meta.url), "utf8"),
+      );
+      expect(schema.$schema, `${name} must not declare $schema`).toBeUndefined();
+    }
+  });
+
   it("falls back to legacy print-mode argv when Claude lacks --json-schema (#196)", async () => {
     await fs.writeFile(
       transcriptPath,
