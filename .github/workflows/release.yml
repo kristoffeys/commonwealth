@@ -7,12 +7,16 @@ name: Release
 # changeset version` to bump, commit, then tag. `changeset publish` only publishes packages
 # whose version isn't already on the registry, so re-runs are safe.
 #
+# Publishing uses npm TRUSTED PUBLISHING (OIDC) — no NPM_TOKEN (#261). The `id-token: write`
+# permission below lets npm mint a short-lived, workflow-scoped credential from GitHub's OIDC
+# provider, so there is no long-lived token to expire, leak, or trip npm's 2FA restrictions.
+#
 # Prerequisites (one-time, owner):
-#  - Own the `@cmnwlth` npm scope (public org — free) and add an `NPM_TOKEN` repo secret
-#    with publish rights (an automation/granular token).
-#  - Provenance (`publishConfig.provenance`) requires a PUBLIC repo + the `id-token: write`
-#    permission below; it activates once the repo is public (#18). On a private repo, publish
-#    still works — npm just skips the attestation.
+#  - On npmjs.com, for EACH `@cmnwlth/*` package: Settings → Trusted Publisher → GitHub Actions,
+#    repo `kristoffeys/commonwealth`, workflow `release.yml`. A package missing its trusted
+#    publisher 404s on publish (npm masks the permission error as 404 for scoped packages).
+#  - The repo must be PUBLIC and npm on the runner must be >= 11.5.1 (the `npm i -g npm@latest`
+#    step below guarantees it). Trusted publishing turns on provenance automatically.
 
 on:
   push:
@@ -33,6 +37,9 @@ jobs:
           node-version: 24
           cache: pnpm
           registry-url: "https://registry.npmjs.org"
+      # Trusted publishing (OIDC) needs npm >= 11.5.1; Node 24's bundled npm can lag that.
+      # `changeset publish` shells out to this global npm, so upgrade it before publishing.
+      - run: npm install -g npm@latest
       - run: pnpm install --frozen-lockfile
       # Gate the release on a green build + tests before anything reaches the registry.
       - run: pnpm typecheck
@@ -40,11 +47,12 @@ jobs:
       - run: pnpm build
       # Both agent manifests, hook assets, and published runtime pins must move together.
       - run: node scripts/release.mjs verify
-      # `changeset publish` builds are done above; it publishes each @cmnwlth/* package
-      # (workspace:* deps are rewritten to real versions) and skips already-published versions.
+      # `changeset publish` publishes each @cmnwlth/* package (workspace:* deps rewritten to real
+      # versions) and skips already-published versions. Auth is OIDC trusted publishing — no
+      # NODE_AUTH_TOKEN; npm exchanges the id-token for a short-lived publish credential and
+      # attaches provenance automatically.
       - run: pnpm changeset publish
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
 
       # The everyday release path is a locally pushed tag (scripts/release.mjs --commit +
