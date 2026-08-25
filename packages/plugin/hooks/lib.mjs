@@ -1230,7 +1230,7 @@ export function resolveCurateRuntime(overrides = {}) {
     };
   }
 
-  const curatePackage = overrides.curatePackage ?? "@cmnwlth/curate@0.1.13";
+  const curatePackage = overrides.curatePackage ?? "@cmnwlth/curate@0.2.0";
   const npxBin = overrides.npxBin ?? "npx";
   return {
     kind: "npx",
