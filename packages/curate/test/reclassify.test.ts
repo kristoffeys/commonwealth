@@ -69,7 +69,10 @@ describe("planReclassify", () => {
     await supersedeNote(brainDir, stale.path, "some-survivor-id");
 
     const judge = judgeFlagging({
-      [decision.frontmatter.id]: { title: "Standardize on Pinia Colada", body: "…because caching." },
+      [decision.frontmatter.id]: {
+        title: "Standardize on Pinia Colada",
+        body: "…because caching.",
+      },
       [stale.frontmatter.id]: true,
     });
     const plan = await planReclassify(brainDir, judge);
@@ -139,9 +142,7 @@ describe("applyReclassify", () => {
     const result = await applyReclassify(brainDir, plan);
 
     expect(result.promoted).toHaveLength(1);
-    expect(result.superseded).toEqual([
-      { id: expect.any(String), targetId: src.frontmatter.id },
-    ]);
+    expect(result.superseded).toEqual([{ id: expect.any(String), targetId: src.frontmatter.id }]);
 
     const decisions = await listNotes(brainDir, "decision");
     expect(decisions).toHaveLength(1);

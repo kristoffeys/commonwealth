@@ -87,10 +87,16 @@ describe("createReclassifier.judge", () => {
   });
 
   it("fails CLOSED (empty map) on a non-zero exit and on malformed output", async () => {
-    const fail = createReclassifier({ host: "codex", run: async () => ({ code: 1, stdout: "", stderr: "boom" }) });
+    const fail = createReclassifier({
+      host: "codex",
+      run: async () => ({ code: 1, stdout: "", stderr: "boom" }),
+    });
     expect((await fail.judge([{ id: "a", title: "t", body: "b" }])).size).toBe(0);
 
-    const garbage = createReclassifier({ host: "codex", run: async () => ({ code: 0, stdout: "not json", stderr: "" }) });
+    const garbage = createReclassifier({
+      host: "codex",
+      run: async () => ({ code: 0, stdout: "not json", stderr: "" }),
+    });
     expect((await garbage.judge([{ id: "a", title: "t", body: "b" }])).size).toBe(0);
   });
 
