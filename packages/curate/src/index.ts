@@ -162,6 +162,7 @@ function usage(): void {
       "      | adopt <id> [--dry-run]> [--dir <brain>]",
       "  commonwealth-curate status-cache [--dir <brain>]",
       "  commonwealth-curate consolidate [--dry-run] [--dir <brain>]",
+      "  commonwealth-curate reclassify [--project <src>] [--limit <n>] (--emit | [--apply] [--from <file>]) [--dir <brain>]",
       "  commonwealth-curate graduate [--suggest] [--dry-run] [--threshold <n>] [--org-dir <brain>] [--include-rejected]",
       "  commonwealth-curate feature list [--dir <brain>]",
       "  commonwealth-curate feature enable <name> [--dir <brain>]",
@@ -1159,7 +1160,8 @@ async function cmdReclassify(dir: string, args: string[]): Promise<void> {
   let verdicts: Record<string, ReclassifyJudgment>;
   try {
     const parsed: unknown = JSON.parse(raw);
-    verdicts = parsed && typeof parsed === "object" ? (parsed as Record<string, ReclassifyJudgment>) : {};
+    verdicts =
+      parsed && typeof parsed === "object" ? (parsed as Record<string, ReclassifyJudgment>) : {};
   } catch {
     throw new Error("reclassify expects a JSON judgments object ({ id: verdict }) on stdin");
   }

@@ -42,7 +42,9 @@ export interface ReclassifyJudgment {
  * Judge a batch of memory notes. Returns a map keyed by note `id` (a missing entry ⇒ keep as
  * memory). Injected so `@cmnwlth/curate` never imports a host model; the caller owns fail-open.
  */
-export type ReclassifyJudge = (notes: ReclassifyInput[]) => Promise<Map<string, ReclassifyJudgment>>;
+export type ReclassifyJudge = (
+  notes: ReclassifyInput[],
+) => Promise<Map<string, ReclassifyJudgment>>;
 
 /** One planned reclassification: the source memory note and the decision it would become. */
 export interface ReclassifyEntry {
@@ -125,8 +127,8 @@ export async function planReclassify(
  * Apply a plan: for each entry, propose a `decision` note that SUPERSEDES its source memory note,
  * then run the batch through {@link captureCandidates}. This reuses the whole capture machinery —
  * secret gate, the `autoAdr` gate (decisions only land when the brain opted in), lexical/semantic
- * dedup (which collapses N near-identical "adopt X" memories into ONE decision), auto-promotion, and
- * the supersede write (`status` + `superseded_by`) on the source.
+ * dedup (against existing canon), auto-promotion, and the supersede write (`status` +
+ * `superseded_by`) on the source.
  *
  * The supersede target is the source note's own id, injected as the candidate's sole `neighborId` so
  * it clears the ADR-0030 target clamp. Never destructive — nothing is deleted.

@@ -36,12 +36,12 @@ const RECLASSIFY_SYSTEM = [
   "decision unless it states the choice and its rationale.",
   "",
   "For EACH note return exactly one verdict object with these fields:",
-  '- index: the note\'s index, echoed back.',
-  '- isDecision: true only for a confident decision; false otherwise.',
+  "- index: the note's index, echoed back.",
+  "- isDecision: true only for a confident decision; false otherwise.",
   '- title: when isDecision, a concise decision-framed title (what was decided). Else "".',
-  '- body: when isDecision, 1-3 sentences stating the decision and its rationale, drawn ONLY from the',
+  "- body: when isDecision, 1-3 sentences stating the decision and its rationale, drawn ONLY from the",
   '  note (invent nothing). Else "".',
-  '- reason: one short clause justifying the verdict.',
+  "- reason: one short clause justifying the verdict.",
 ].join("\n");
 
 const FEW_SHOTS = [
