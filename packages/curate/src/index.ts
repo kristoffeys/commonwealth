@@ -40,6 +40,14 @@ import { graduateToOrgBrain } from "./graduate.js";
 import { formatContext } from "./context.js";
 import { curate } from "./curate.js";
 import { computeNeighbors } from "./neighbors.js";
+import {
+  planReclassify,
+  reclassify,
+  type ReclassifyInput,
+  type ReclassifyJudge,
+  type ReclassifyJudgment,
+  type ReclassifyOptions,
+} from "./reclassify.js";
 import { checkContradiction } from "./contradiction.js";
 import { reassignStagedContributor } from "./staging.js";
 import { selectRelevant, selectRelevantDiagnostics, type RelevantHit } from "./relevance.js";
@@ -1101,6 +1109,84 @@ async function cmdConsolidate(dir: string, args: string[]): Promise<void> {
 }
 
 /**
+ * `reclassify [--project <src>] [--limit <n>] (--emit | [--apply] [--from <file>])` — the
+ * deterministic half of the #265 reclassification pass (the LLM judge is external, run by the plugin
+ * hook layer, per ADR-0030). Two modes bridge that boundary:
+ *
+ * - `--emit` prints the active memory notes to judge as JSON `[{id,title,body}]` (DATA only). The
+ *   caller feeds these to the host-model judge.
+ * - default / `--apply` reads the judge's verdicts `{ [id]: {isDecision,title,body,reason} }` from
+ *   `--from`/stdin and runs the engine — dry-run (report only) unless `--apply` is set, which stages
+ *   each decision, promotes it (autoPromote), and supersedes its source memory note.
+ *
+ * Emitting the exact note set the engine would score (via a no-op judge) keeps the two calls aligned
+ * on the same `--project`/`--limit` scope.
+ */
+async function cmdReclassify(dir: string, args: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      dir: { type: "string" },
+      project: { type: "string" },
+      limit: { type: "string" },
+      emit: { type: "boolean" },
+      apply: { type: "boolean" },
+      from: { type: "string" },
+    },
+    allowPositionals: false,
+  });
+  const opts: ReclassifyOptions = {
+    ...(typeof values.project === "string" ? { project: values.project } : {}),
+    ...(typeof values.limit === "string" ? { limit: Number(values.limit) } : {}),
+  };
+
+  if (values.emit) {
+    let notes: ReclassifyInput[] = [];
+    await planReclassify(
+      dir,
+      async (n) => {
+        notes = n;
+        return new Map();
+      },
+      opts,
+    );
+    process.stdout.write(JSON.stringify(notes));
+    return;
+  }
+
+  const raw =
+    typeof values.from === "string" ? await fs.readFile(values.from, "utf8") : await readStdin();
+  let verdicts: Record<string, ReclassifyJudgment>;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    verdicts = parsed && typeof parsed === "object" ? (parsed as Record<string, ReclassifyJudgment>) : {};
+  } catch {
+    throw new Error("reclassify expects a JSON judgments object ({ id: verdict }) on stdin");
+  }
+  // Replay the external judge's verdicts; the engine re-scans active memory and matches by id.
+  const judge: ReclassifyJudge = async (notes) =>
+    new Map(
+      notes
+        .filter((n) => verdicts[n.id]?.isDecision === true)
+        .map((n) => [n.id, verdicts[n.id] as ReclassifyJudgment]),
+    );
+  const { plan, result } = await reclassify(dir, judge, { ...opts, apply: values.apply === true });
+  process.stdout.write(
+    JSON.stringify({
+      scanned: plan.scanned,
+      candidates: plan.candidates.map((c) => ({ sourceId: c.sourceId, title: c.decisionTitle })),
+      ...(result
+        ? {
+            promoted: result.promoted.length,
+            superseded: result.superseded.length,
+            rejected: result.rejected.length,
+          }
+        : {}),
+    }) + "\n",
+  );
+}
+
+/**
  * `graduate [--suggest] [--dry-run] [--threshold <n>] [--org-dir <brain>]` — org-brain graduation
  * (#110): scan every wired project brain for opted-in notes that recur across ≥2 brains and stage
  * a candidate into the org-brain for manual review. Unlike other subcommands it resolves NO single
@@ -1234,6 +1320,9 @@ async function main(): Promise<void> {
       break;
     case "consolidate":
       await cmdConsolidate(await requireBrain(), rest);
+      break;
+    case "reclassify":
+      await cmdReclassify(await requireBrain(), rest);
       break;
     case "graduate":
       // No requireBrain(): graduate locates the org-brain + wired brains itself.
