@@ -60,3 +60,14 @@ export {
 } from "./relevance.js";
 export { formatContext } from "./context.js";
 export { addAllow, addDeny, loadUserConfig } from "./scope.js";
+export {
+  applyReclassify,
+  planReclassify,
+  reclassify,
+  type ReclassifyEntry,
+  type ReclassifyInput,
+  type ReclassifyJudge,
+  type ReclassifyJudgment,
+  type ReclassifyOptions,
+  type ReclassifyPlan,
+} from "./reclassify.js";

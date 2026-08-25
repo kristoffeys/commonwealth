@@ -22,7 +22,8 @@ registry, sync daemon, and MCP server:
   turns without describing that event as a session end (ADR-0028).
 - **Brain registry** — resolves the current project directory → its brain repo
   (`@cmnwlth/core`'s `resolveBrainDir`, issue #14).
-- **`/commonwealth` commands** — manual `remember`, `decide`, `recall`, `ask`, `promote`, `status`.
+- **`/commonwealth` commands** — manual `remember`, `decide`, `recall`, `ask`, `promote`, `status`,
+  `reclassify` (promote decision-shaped memory notes into decisions; create/supersede, dry-run first).
 - **`@commonwealth:curator` subagent** — an in-session, advisory brain-tender: reviews the staging
   queue, recommends promotions/rejections, proposes consolidations, and flags contradictions with
   canon. Runs on the session model (no extra key), read-only by default, never auto-promotes (#198).
@@ -43,7 +44,7 @@ hooks/user-prompt-submit.mjs thin entry: per-turn prompt-scoped context + thrott
 hooks/session-end.mjs        thin stdin→lib entry (stages candidates)
 hooks/pre-compact.mjs        thin stdin→worker entry (captures before compaction, #195)
 hooks/codex-hook.mjs         Codex dispatcher for context + throttled capture events
-commands/*.md                /commonwealth remember|decide|recall|promote|status
+commands/*.md                /commonwealth remember|decide|recall|promote|status|reclassify
 agents/curator.md            @commonwealth:curator advisory review/consolidation subagent
 ```
 

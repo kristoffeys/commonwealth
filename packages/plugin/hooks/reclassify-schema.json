@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdicts"],
+  "properties": {
+    "verdicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["index", "isDecision", "title", "body", "reason"],
+        "properties": {
+          "index": { "type": "integer" },
+          "isDecision": { "type": "boolean" },
+          "title": { "type": "string" },
+          "body": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  }
+}
