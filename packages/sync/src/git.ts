@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { findSecretsForBrain, loadBrainConfig } from "@cmnwlth/core";
+import { findSecretsForBrain, isDerivedMarkdownFile, loadBrainConfig } from "@cmnwlth/core";
 import { simpleGit, type SimpleGit } from "simple-git";
 
 /** Note-kind folders whose markdown is scanned for secrets before commit. */
@@ -22,17 +22,16 @@ function isNoteFile(rel: string): boolean {
 }
 
 /**
- * Files the pre-commit scrub must scan for secrets: note files PLUS the generated router/index
- * (COMMONWEALTH.md, every INDEX.md). Those derived files embed note TITLES, so a secret in a
- * title would ride into them and get pushed even though the note file itself is blocked — the
- * derived files aren't note-files and so escaped the scrub entirely (#79). Scanning them closes
- * the leak; they're regenerated each sync, so a blocked derived file self-heals once the secret
- * is removed from the source note.
+ * Files the pre-commit scrub must scan for secrets: note files PLUS every derived artifact —
+ * the `COMMONWEALTH.md` root hub and every per-project MOC (`isDerivedMarkdownFile`, the shared
+ * core source-of-truth predicate). MOCs replaced the old per-kind `INDEX.md` files. Those derived
+ * files embed note TITLES, so a secret in a title would ride into them and get pushed even though
+ * the note file itself is blocked — the derived files aren't note-files and so escaped the scrub
+ * entirely (#79). Scanning them closes the leak; they're regenerated each sync, so a blocked
+ * derived file self-heals once the secret is removed from the source note.
  */
 function isScannableForSecrets(rel: string): boolean {
-  if (isNoteFile(rel)) return true;
-  const name = rel.split("/").pop();
-  return name === "COMMONWEALTH.md" || name === "INDEX.md";
+  return isNoteFile(rel) || isDerivedMarkdownFile(rel);
 }
 
 /**

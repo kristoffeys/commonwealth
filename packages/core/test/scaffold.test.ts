@@ -44,13 +44,22 @@ async function snapshot(root: string): Promise<Map<string, string>> {
 }
 
 describe("initBrain", () => {
-  it("creates the four kind folders, each with .gitkeep and INDEX.md", async () => {
+  it("creates the four kind folders, each tracked-empty via .gitkeep (no per-kind INDEX.md)", async () => {
     await initBrain(dir);
     for (const kindDir of ["memory", "decisions", "work-state", "people"]) {
       expect((await fs.stat(path.join(dir, kindDir))).isDirectory()).toBe(true);
       await expect(fs.stat(path.join(dir, kindDir, ".gitkeep"))).resolves.toBeDefined();
-      await expect(fs.stat(path.join(dir, kindDir, "INDEX.md"))).resolves.toBeDefined();
+      // Per-project MOCs (P1) replaced per-kind INDEX.md; none is scaffolded into a kind folder.
+      await expect(fs.access(path.join(dir, kindDir, "INDEX.md"))).rejects.toThrow();
     }
+  });
+
+  it("scaffolds a shared .obsidian vault config (kind-colored graph, derived dirs filtered)", async () => {
+    await initBrain(dir);
+    const graph = JSON.parse(await fs.readFile(path.join(dir, ".obsidian", "graph.json"), "utf8"));
+    expect(graph.search).toContain("-path:staging");
+    expect(graph.colorGroups.map((g: { query: string }) => g.query)).toContain("path:memory/");
+    await expect(fs.access(path.join(dir, ".obsidian", "app.json"))).resolves.toBeUndefined();
   });
 
   it("writes .commonwealth metadata pinned to SCHEMA_VERSION", async () => {
@@ -69,11 +78,11 @@ describe("initBrain", () => {
     await initBrain(dir);
     const attrs = await fs.readFile(path.join(dir, ".gitattributes"), "utf8");
     expect(attrs).toContain("COMMONWEALTH.md merge=union");
-    expect(attrs).toContain("INDEX.md merge=union");
     const ignore = await fs.readFile(path.join(dir, ".gitignore"), "utf8");
     expect(ignore).toContain("index/");
     expect(ignore).toContain("staging/"); // per-user review queue, never synced (ADR-0008)
     expect(ignore).toContain("*.db");
+    expect(ignore).toContain(".obsidian/workspace.json"); // per-user Obsidian state stays local (P4)
     await expect(fs.stat(path.join(dir, "COMMONWEALTH.md"))).resolves.toBeDefined();
   });
 

@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { loadBrainConfig, scanOptions } from "./config.js";
 import { regenerateDerived } from "./index-db.js";
-import { parseNote } from "./notes.js";
+import { isDerivedMarkdownFile, parseNote } from "./notes.js";
 import { KIND_DIR, type Note } from "./schema.js";
 import { findSecrets } from "./secrets.js";
 
@@ -83,15 +83,9 @@ async function collectNoteFiles(brainDir: string): Promise<RawNote[]> {
   return out;
 }
 
-/** Read the root `COMMONWEALTH.md` and every `INDEX.md` into a rel-path → content map. */
+/** Read every derived artifact (the `COMMONWEALTH.md` hub + per-project MOCs) into a rel→content map. */
 async function collectDerived(brainDir: string): Promise<Map<string, string>> {
   const map = new Map<string, string>();
-  const root = path.join(brainDir, "COMMONWEALTH.md");
-  try {
-    map.set("COMMONWEALTH.md", await fs.readFile(root, "utf8"));
-  } catch {
-    map.set("COMMONWEALTH.md", "");
-  }
   async function walk(absDir: string): Promise<void> {
     let entries: import("node:fs").Dirent[];
     try {
@@ -103,13 +97,16 @@ async function collectDerived(brainDir: string): Promise<Map<string, string>> {
       if (entry.isDirectory()) {
         if (NON_NOTE_DIRS.has(entry.name)) continue;
         await walk(path.join(absDir, entry.name));
-      } else if (entry.isFile() && entry.name === "INDEX.md") {
-        const abs = path.join(absDir, entry.name);
-        map.set(path.relative(brainDir, abs), await fs.readFile(abs, "utf8"));
+        continue;
       }
+      if (!entry.isFile()) continue;
+      const abs = path.join(absDir, entry.name);
+      const rel = path.relative(brainDir, abs).split(path.sep).join("/");
+      if (isDerivedMarkdownFile(rel)) map.set(rel, await fs.readFile(abs, "utf8"));
     }
   }
   await walk(brainDir);
+  if (!map.has("COMMONWEALTH.md")) map.set("COMMONWEALTH.md", "");
   return map;
 }
 

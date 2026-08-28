@@ -33,6 +33,8 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 | [0030](0030-llm-curation-pass.md)             | LLM curation pass: durability judge + consolidation completes ADR-0007's curator | Accepted |
 | [0031](0031-project-identity-resolved-at-read-time.md) | Project identity is resolved at read time; provenance is immutable | Accepted |
 | [0032](0032-daemonless-lifecycle-sync.md)     | Sync moves from resident daemon to session lifecycle; daemon becomes an opt-in profile | Accepted |
+| [0033](0033-action-time-contradiction-guard.md) | Action-time contradiction guard (PreToolUse, opt-in, non-blocking default) | Accepted |
+| [0034](0034-obsidian-friendly-derived-layout.md) | Obsidian-friendly derived layout: per-project MOCs, wikilinks, shipped vault config | Accepted |
 
 ## Process
 
