@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   defaultRegistryPath,
+  isDerivedMarkdownFile,
   resolveBrain,
   resolveBrainDir,
   resolveBrainMapping,
@@ -163,15 +164,13 @@ function formatAge(ms: number): string {
 /**
  * True when a repo-relative path is a markdown NOTE file (not a derived/local-only artifact) — the
  * files whose uncommitted presence counts as sync debt. Mirrors the note-vs-derived split used
- * elsewhere: any `.md` outside the derived/vcs/local dirs, excluding the generated INDEX.md /
- * COMMONWEALTH.md.
+ * elsewhere: any `.md` outside the derived/vcs/local dirs, excluding the generated derived artifacts
+ * (the `COMMONWEALTH.md` hub and every per-project MOC) via {@link isDerivedMarkdownFile}.
  */
 function isNoteRel(rel: string): boolean {
   if (!rel.endsWith(".md")) return false;
-  const base = rel.split("/").pop() ?? "";
-  if (base === "INDEX.md" || base === "COMMONWEALTH.md") return false;
   const top = rel.split("/")[0] ?? "";
-  return !NON_NOTE_DIRS.has(top);
+  return !NON_NOTE_DIRS.has(top) && !isDerivedMarkdownFile(rel);
 }
 
 /** Read the daemon PID recorded for a brain, or null when there is no PID file. */

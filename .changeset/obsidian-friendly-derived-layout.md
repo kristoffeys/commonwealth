@@ -1,0 +1,5 @@
+---
+"@cmnwlth/core": minor
+---
+
+Obsidian-friendly derived layout (ADR-0034): a brain opened directly in Obsidian now reads as a knowledge graph instead of dozens of identical "INDEX" nodes. `regenerateDerived` writes one per-project **MOC** named after the project (`<segment>/<Name>.md`, e.g. `weareantenna-spardex/Spardex.md`) with kind sections, `[[id|title]]` wikilinks, and a Relations section (supersedes/relates as graph edges), replacing the per-kind `INDEX.md` files; the `COMMONWEALTH.md` hub links each MOC. A single structural predicate `isDerivedMarkdownFile` becomes the source of truth for the note-vs-derived split (used by verify, the sync secret-scrub, the daemon watch-ignore, and doctor), and `regenerateDerived` prunes stale derived files + legacy `INDEX.md` so older brains auto-migrate on regenerate. `initBrain` ships a starter `.obsidian/` vault config (graph filtered to hide derived/local dirs, nodes colored by kind; per-user workspace state gitignored). Canon is unchanged — note frontmatter/bodies are untouched, so non-Obsidian consumers are unaffected.

@@ -219,7 +219,28 @@ export async function readNote(brainDir: string, relPath: string): Promise<Note>
 const KIND_FOLDERS = new Set<string>(Object.values(KIND_DIR));
 
 /** Top-level dirs that never contain notes and must not be walked (derived/local/vcs). */
-const NON_NOTE_DIRS = new Set([".git", ".commonwealth", "index", "staging", "node_modules"]);
+export const NON_NOTE_DIRS = new Set([".git", ".commonwealth", "index", "staging", "node_modules"]);
+
+/**
+ * True when a repo-relative path is a GENERATED, hand-mergeless derived artifact rather than a note
+ * (the `COMMONWEALTH.md` hub or a per-project MOC). This is the single source of truth for the
+ * "note vs derived" split (ADR-0003) that verify (byte-identical check), the sync secret-scrub, the
+ * daemon watch-ignore, and doctor's sync-debt accounting all key off — replacing the old hardcoded
+ * `"INDEX.md"` name matching from before per-project MOCs (P1).
+ *
+ * Structural, not name-based: a NOTE is always a `.md` whose parent folder is a kind folder
+ * (`<kind>/` or `<project>/<kind>/`). So any other tracked `.md` — the root hub, or a MOC sitting at a
+ * project-folder root — is derived. Files under the derived/local/vcs dirs are neither (returns false;
+ * `index/` is gitignored, `staging/` is per-user). Directory separators are normalized so it works on
+ * both `/` and `\` inputs.
+ */
+export function isDerivedMarkdownFile(relPath: string): boolean {
+  if (!relPath.endsWith(".md")) return false;
+  const parts = relPath.split(/[\\/]/).filter((p) => p.length > 0);
+  if (parts.some((p) => NON_NOTE_DIRS.has(p))) return false;
+  const parent = parts.length >= 2 ? parts[parts.length - 2]! : "";
+  return !KIND_FOLDERS.has(parent);
+}
 
 /**
  * List the repo-relative paths of every note file under `brainDir`, WITHOUT reading or parsing

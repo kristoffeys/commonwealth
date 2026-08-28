@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
+import { isDerivedMarkdownFile } from "@cmnwlth/core";
 import { SyncEngine, type SyncSummary } from "./engine.js";
 import { SerialQueue } from "./queue.js";
 
@@ -30,7 +31,6 @@ function makeIgnored(brainDir: string): (p: string) => boolean {
   const indexDir = path.join(brainDir, "index");
   const commonwealthDir = path.join(brainDir, COMMONWEALTH_DIR);
   const stagingDir = path.join(brainDir, "staging");
-  const commonwealthMd = path.join(brainDir, "COMMONWEALTH.md");
   return (p: string): boolean => {
     if (p === gitDir || p.startsWith(gitDir + path.sep)) return true;
     if (p === indexDir || p.startsWith(indexDir + path.sep)) return true;
@@ -39,11 +39,10 @@ function makeIgnored(brainDir: string): (p: string) => boolean {
     if (p === stagingDir || p.startsWith(stagingDir + path.sep)) return true;
     if (/\.db(-shm|-wal)?$/.test(p)) return true;
     if (p.endsWith(".tmp")) return true;
-    // Derived artifacts are rewritten by every sync (regenerateDerived); watching them
-    // would make each sync retrigger the next — an unbounded loop. They are never a
-    // legitimate sync trigger, so ignore them.
-    if (p === commonwealthMd) return true;
-    if (path.basename(p) === "INDEX.md") return true;
+    // Derived artifacts (the COMMONWEALTH.md hub + per-project MOCs) are rewritten by every sync
+    // (regenerateDerived); watching them would make each sync retrigger the next — an unbounded
+    // loop. They are never a legitimate sync trigger, so ignore them.
+    if (isDerivedMarkdownFile(path.relative(brainDir, p).split(path.sep).join("/"))) return true;
     return false;
   };
 }

@@ -3,8 +3,9 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { loadBrainConfig } from "./config.js";
 import { cosineSimilarity, embedProvider, type Embedder } from "./embed.js";
-import { listNoteFiles, listNotes } from "./notes.js";
+import { isDerivedMarkdownFile, listNoteFiles, listNotes, NON_NOTE_DIRS } from "./notes.js";
 import { loadProjectAliasMap, resolveNoteProject, type ProjectAliasMap } from "./projects.js";
+import { sourceSegment } from "./ids.js";
 import { type Note, type NoteKind } from "./schema.js";
 
 export interface SearchOptions {
@@ -1031,7 +1032,7 @@ function renderProjectBody(lines: string[], group: Note[]): void {
   } else {
     for (const n of active) {
       const status = n.frontmatter.kind === "work-state" ? n.frontmatter.status : "";
-      lines.push(`- [${inlineText(n.frontmatter.title)}](${n.path}) — ${status}`);
+      lines.push(`- ${noteLink(n)} — ${status}`);
     }
   }
   lines.push("");
@@ -1040,7 +1041,7 @@ function renderProjectBody(lines: string[], group: Note[]): void {
     lines.push("- _None._");
   } else {
     for (const n of decisions) {
-      lines.push(`- [${inlineText(n.frontmatter.title)}](${n.path}) — ${n.frontmatter.created}`);
+      lines.push(`- ${noteLink(n)} — ${n.frontmatter.created}`);
     }
   }
   lines.push("");
@@ -1081,6 +1082,20 @@ function commonwealthMarkdown(notes: Note[], aliasMap: ProjectAliasMap): string 
     // Distinct provenance sources within this project. >1 means sources were linked into one
     // engagement — surface each as a provenance subhead; otherwise render flat (unchanged default).
     const sources = [...new Set(group.map(sourceOf))].sort(bySourceLabel);
+
+    // Link to each source's MOC (P3): the hub → per-project `Spardex`-style node → notes. Skip the
+    // unattributed bucket, which carries no MOC.
+    const mocLinks = sources
+      .filter((s) => s !== UNATTRIBUTED)
+      .map((s) => {
+        const name = projectDisplayName(project === UNATTRIBUTED ? s : project, aliasMap);
+        return `[[${sourceSegment(s)}/${name}|${name}]]`;
+      });
+    if (mocLinks.length > 0) {
+      lines.push(`🗂 ${mocLinks.join(" · ")}`);
+      lines.push("");
+    }
+
     if (sources.length > 1) {
       for (const source of sources) {
         lines.push(`### ${inlineText(source)}`);
@@ -1098,54 +1113,174 @@ function commonwealthMarkdown(notes: Note[], aliasMap: ProjectAliasMap): string 
   return lines.join("\n");
 }
 
-/** Generated INDEX.md for one note-containing directory: its notes, linked by filename. */
-function indexMarkdown(dirRel: string, notes: Note[]): string {
-  const sorted = [...notes].sort(byId);
+/**
+ * Wikilink-safe display text: like {@link inlineText} but STRIPS (not escapes) `[` `]` `|` so it can
+ * sit inside an Obsidian `[[target|display]]` alias without breaking the link. Line breaks and
+ * runs collapse; length is capped. The stored note is untouched — only the derived rendering.
+ */
+function wikiText(value: string): string {
+  return value
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[[\]|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200);
+}
+
+/** An Obsidian wikilink to a note by its (globally-unique) id, displaying its title. */
+function noteLink(n: Note): string {
+  return `[[${n.frontmatter.id}|${wikiText(n.frontmatter.title)}]]`;
+}
+
+/** A wikilink to a note id that may or may not be in the local group; falls back to a bare id link. */
+function idLink(id: string, known: Map<string, Note>): string {
+  const n = known.get(id);
+  return n ? noteLink(n) : `[[${id}]]`;
+}
+
+/**
+ * Filesystem- and wikilink-safe display name for a project — the MOC's filename stem, and the label
+ * shown for its node in Obsidian's graph (P1). Prefers the alias map's human `customer` name (ADR-0031)
+ * so a linked engagement reads as its business name; else the last path segment of the project id
+ * (`weareantenna/spardex` → `spardex`), with a leading capital for a tidy graph label (`Spardex`).
+ */
+function projectDisplayName(projectId: string, aliasMap: ProjectAliasMap): string {
+  const custom = aliasMap[projectId]?.customer;
+  const raw =
+    custom && custom.trim().length > 0 ? custom.trim() : (projectId.split("/").pop() ?? projectId);
+  const titled = raw.length > 0 ? raw.charAt(0).toUpperCase() + raw.slice(1) : raw;
+  const safe = titled
+    .replace(/[\\/:*?"<>|#^[\]]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  return safe.length > 0 ? safe : "Project";
+}
+
+/** Kind sections in the per-project MOC, in a stable reading order (decisions first). */
+const MOC_SECTIONS: ReadonlyArray<{ kind: NoteKind; label: string }> = [
+  { kind: "decision", label: "Decisions" },
+  { kind: "memory", label: "Memory" },
+  { kind: "work-state", label: "Work-state" },
+  { kind: "person", label: "People" },
+];
+
+/**
+ * A per-project **Map of Content** (P1/P2): one derived note, named after the project, that links
+ * every note in that project's folder as an Obsidian wikilink — so the graph shows a single readable
+ * `Spardex`-style hub wired to its notes, instead of dozens of identical `INDEX` nodes. A trailing
+ * **Relations** section renders `supersedes`/`relates` as wikilink edges, surfacing the knowledge
+ * structure (e.g. a decision → the memory it replaced) in the graph. Pure/deterministic (ADR-0003).
+ */
+function mocMarkdown(displayName: string, source: string, notes: Note[]): string {
   const lines: string[] = [];
-  lines.push(`# ${dirRel}`);
+  lines.push(`# ${displayName}`);
   lines.push("");
-  lines.push("> Generated index. Do not edit by hand — regenerated from the note set.");
+  lines.push(
+    `> Generated index for \`${inlineText(source)}\`. Regenerated from the note set (ADR-0003) — do not edit.`,
+  );
   lines.push("");
-  if (sorted.length === 0) {
-    lines.push("_None._");
-  } else {
-    for (const n of sorted) {
-      // INDEX.md lives in the same folder as the notes, so link by filename only.
-      lines.push(`- [${inlineText(n.frontmatter.title)}](${path.posix.basename(n.path)})`);
+
+  for (const { kind, label } of MOC_SECTIONS) {
+    const group = notes.filter((n) => n.frontmatter.kind === kind).sort(byId);
+    if (group.length === 0) continue;
+    lines.push(`## ${label}`);
+    for (const n of group) {
+      const suffix = n.frontmatter.kind === "work-state" ? ` — ${n.frontmatter.status}` : "";
+      lines.push(`- ${noteLink(n)}${suffix}`);
     }
+    lines.push("");
   }
-  lines.push("");
+
+  const known = new Map(notes.map((n) => [n.frontmatter.id, n]));
+  const relations: string[] = [];
+  for (const n of [...notes].sort(byId)) {
+    const fm = n.frontmatter;
+    const supersedes = fm.kind === "decision" ? fm.supersedes : [];
+    for (const target of supersedes)
+      relations.push(`- ${noteLink(n)} supersedes ${idLink(target, known)}`);
+    for (const target of fm.relates ?? [])
+      relations.push(`- ${noteLink(n)} relates to ${idLink(target, known)}`);
+  }
+  if (relations.length > 0) {
+    lines.push("## Relations");
+    lines.push(...relations);
+    lines.push("");
+  }
+
   return lines.join("\n");
 }
 
 /**
- * Regenerate derived, never-hand-merged artifacts from the note set: the `COMMONWEALTH.md`
- * router (grouped by project, ADR-0015) and an `INDEX.md` in every directory that holds notes
- * (`<kind>/` and `<project>/<kind>/`). Idempotent — output is a pure function of the files
- * (ADR-0003), so running twice yields byte-identical files.
+ * Regenerate derived, never-hand-merged artifacts from the note set: the `COMMONWEALTH.md` hub
+ * (grouped by project, ADR-0015) and one per-project **MOC** named after the project at its folder
+ * root (`<source-segment>/<Name>.md`, P1) — replacing the old per-kind `INDEX.md` files. Idempotent —
+ * output is a pure function of the files (ADR-0003), so running twice yields byte-identical files.
+ *
+ * The MOC lives at the project-folder ROOT (parent is not a kind folder), so {@link listNotes} never
+ * mistakes it for a note — no skip rule needed. Unattributed notes (no `source`) carry no MOC; they
+ * are surfaced in `COMMONWEALTH.md` only.
  */
 export async function regenerateDerived(brainDir: string): Promise<void> {
   const notes = await listNotes(brainDir);
   // The alias map is a derivation INPUT (ADR-0031), loaded like brain config — linking sources
-  // reorganizes the router with zero note edits, and the output stays a pure function of the inputs.
+  // reorganizes the hub/MOCs with zero note edits, and the output stays a pure function of the inputs.
   const aliasMap = await loadProjectAliasMap(brainDir);
 
+  const written = new Set<string>();
   await fs.writeFile(
     path.join(brainDir, "COMMONWEALTH.md"),
     commonwealthMarkdown(notes, aliasMap),
     "utf8",
   );
+  written.add("COMMONWEALTH.md");
 
-  // One INDEX.md per directory that actually contains notes — works for both the flat kind
-  // root and per-project subtrees without assuming a fixed set of folders.
-  const byDir = new Map<string, Note[]>();
+  // One MOC per project-source FOLDER — the physical `<segment>/` a source's notes live under.
+  const byFolder = new Map<string, { source: string; notes: Note[] }>();
   for (const n of notes) {
-    const dir = path.posix.dirname(n.path.split(path.sep).join("/"));
-    (byDir.get(dir) ?? byDir.set(dir, []).get(dir)!).push(n);
+    const source = n.frontmatter.source;
+    if (!source || source.length === 0) continue; // unattributed → COMMONWEALTH only
+    const folder = sourceSegment(source);
+    const bucket = byFolder.get(folder) ?? byFolder.set(folder, { source, notes: [] }).get(folder)!;
+    bucket.notes.push(n);
   }
-  for (const [dir, group] of byDir) {
-    const abs = path.join(brainDir, dir);
+  for (const [folder, { source, notes: group }] of byFolder) {
+    const abs = path.join(brainDir, folder);
     await fs.mkdir(abs, { recursive: true });
-    await fs.writeFile(path.join(abs, "INDEX.md"), indexMarkdown(dir, group), "utf8");
+    const projectId = resolveNoteProject(group[0]!, aliasMap) ?? source;
+    const name = projectDisplayName(projectId, aliasMap);
+    await fs.writeFile(path.join(abs, `${name}.md`), mocMarkdown(name, source, group), "utf8");
+    written.add(`${folder}/${name}.md`);
   }
+
+  // Prune orphans so the derived set is EXACTLY `written`: a MOC left behind by a removed/renamed
+  // project, and legacy per-kind `INDEX.md` files from before per-project MOCs (P1) — deleting the
+  // latter auto-migrates any older brain on its next regenerate. Idempotent (ADR-0003).
+  await pruneStaleDerived(brainDir, written);
+}
+
+/** Delete tracked derived artifacts NOT in `keep`, plus any legacy `INDEX.md`; leaves notes alone. */
+async function pruneStaleDerived(brainDir: string, keep: Set<string>): Promise<void> {
+  async function walk(absDir: string): Promise<void> {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (NON_NOTE_DIRS.has(entry.name)) continue;
+        await walk(path.join(absDir, entry.name));
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      const abs = path.join(absDir, entry.name);
+      const rel = path.relative(brainDir, abs).split(path.sep).join("/");
+      const legacyIndex = entry.name === "INDEX.md";
+      if ((isDerivedMarkdownFile(rel) && !keep.has(rel)) || legacyIndex) {
+        await fs.rm(abs, { force: true });
+      }
+    }
+  }
+  await walk(brainDir);
 }
