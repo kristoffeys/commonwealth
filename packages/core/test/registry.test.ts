@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   addRule,
+  isCwdInsideBrain,
   linkBrain,
   resolveBrain,
   resolveBrainDir,
@@ -439,5 +440,62 @@ describe("linkBrain", () => {
     const res = await linkBrain("guard", brain, brainsDir);
     expect(res.linked).toBe(false);
     expect(res.skipped).toBeTruthy();
+  });
+});
+
+/**
+ * The self-capture gate (#268): a session run FROM INSIDE a brain would have the brain take notes
+ * about administering itself. `isCwdInsideBrain` is the predicate the capture path keys off.
+ */
+describe("isCwdInsideBrain", () => {
+  it("is true for the brain root itself", async () => {
+    const brain = await mkdir("brain");
+    expect(await isCwdInsideBrain(brain, brain)).toBe(true);
+  });
+
+  it("is true for a nested subdirectory of the brain", async () => {
+    const brain = await mkdir("brain");
+    const nested = await mkdir("brain", "acme-api", "memory");
+    expect(await isCwdInsideBrain(nested, brain)).toBe(true);
+  });
+
+  it("is true through a ~/.commonwealth/brains/<name> style symlink (realpath compare)", async () => {
+    const brain = await mkdir("real-brain");
+    const brainsDir = await mkdir("home", ".commonwealth", "brains");
+    const link = path.join(brainsDir, "acme");
+    await fs.symlink(brain, link, "dir");
+    // The symlinked path shares no prefix with the real dir — only a realpath compare catches it.
+    expect(link.startsWith(brain)).toBe(false);
+    expect(await isCwdInsideBrain(link, brain)).toBe(true);
+    expect(await isCwdInsideBrain(path.join(link, "memory"), brain)).toBe(true);
+    // Symmetric: the brain may itself have been resolved via the symlink.
+    expect(await isCwdInsideBrain(brain, link)).toBe(true);
+  });
+
+  it("is false for a normal project directory outside the brain", async () => {
+    const brain = await mkdir("brain");
+    const project = await mkdir("work", "acme-api");
+    expect(await isCwdInsideBrain(project, brain)).toBe(false);
+  });
+
+  it("is boundary-safe: a sibling with the brain's name as a prefix is not inside it", async () => {
+    const brain = await mkdir("brain");
+    const sibling = await mkdir("brain-notes");
+    expect(await isCwdInsideBrain(sibling, brain)).toBe(false);
+  });
+
+  it("does not treat a brain that resolved to the filesystem root as containing everything", async () => {
+    // A `/` brain is a broken config; answering "every session is inside it" would disable capture
+    // machine-wide. Kept identical to the hooks' .mjs mirror so the two never disagree.
+    const project = await mkdir("work", "acme-api");
+    expect(await isCwdInsideBrain(project, path.sep)).toBe(false);
+    expect(await isCwdInsideBrain(path.sep, path.sep)).toBe(true);
+  });
+
+  it("handles paths that are not on disk, and empty input, without throwing", async () => {
+    expect(await isCwdInsideBrain("/nope/brain/sub", "/nope/brain")).toBe(true);
+    expect(await isCwdInsideBrain("/nope/other", "/nope/brain")).toBe(false);
+    expect(await isCwdInsideBrain("", "/nope/brain")).toBe(false);
+    expect(await isCwdInsideBrain("/nope/brain", "")).toBe(false);
   });
 });

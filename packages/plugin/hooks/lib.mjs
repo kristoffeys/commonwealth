@@ -199,6 +199,57 @@ function isSyntheticLauncherCwd(cwd) {
 }
 
 /**
+ * True when the session's working directory is AT or INSIDE the brain it resolved to — a session
+ * spent administering the brain itself (publishing the vault, fixing the registry, tidying notes).
+ * Automatic capture there writes notes ABOUT the brain INTO that same brain: self-referential noise
+ * that pollutes canon and skews `map` / `health` (#268). A brain resolves to itself by design
+ * (resolution step 2, plus the self-pointing rules users add), so this is a capture-only gate
+ * applied AFTER routing — context injection and every EXPLICIT act (`/commonwealth:remember`,
+ * `/commonwealth:decide`, `commonwealth reseed`) are untouched, since deliberately recording
+ * something while sitting in the brain is legitimate.
+ *
+ * Compares REALPATHS, which is load-bearing: `~/.commonwealth/brains/<name>` is a symlink into the
+ * real brain dir, so a session started via the symlink string-compares as unrelated while being the
+ * same directory. Unresolvable paths fall back to their resolved form; case-folded on
+ * case-insensitive filesystems (macOS/Windows), where differently-cased paths are ONE directory.
+ * Mirror of core's `isCwdInsideBrain` — this file is standalone ESM and cannot import core (see
+ * {@link realResolveBrain}, which mirrors core's resolver for the same reason). Never throws.
+ *
+ * @param {string} cwd
+ * @param {string} brain
+ * @returns {Promise<boolean>}
+ */
+async function isSelfCaptureCwd(cwd, brain) {
+  if (typeof cwd !== "string" || cwd.length === 0) return false;
+  if (typeof brain !== "string" || brain.length === 0) return false;
+  // Realpath as far as the path exists: we resolve the deepest EXISTING ancestor and re-append the
+  // missing tail, so `~/.commonwealth/brains/acme/memory` still resolves through the `acme` symlink
+  // even when that subdir is gone. Mirrors core's `realpathOrResolve`.
+  const real = async (p) => {
+    const resolved = path.resolve(expandPath(p));
+    const tail = [];
+    let current = resolved;
+    for (;;) {
+      try {
+        const r = await fs.realpath(current);
+        return tail.length > 0 ? path.join(r, ...tail.reverse()) : r;
+      } catch {
+        const parent = path.dirname(current);
+        if (parent === current) return resolved;
+        tail.push(path.basename(current));
+        current = parent;
+      }
+    }
+  };
+  const fold = (p) =>
+    process.platform === "darwin" || process.platform === "win32" ? p.toLowerCase() : p;
+  const [c, b] = await Promise.all([real(cwd), real(brain)]);
+  const child = fold(c);
+  const parent = fold(b);
+  return child === parent || child.startsWith(parent + path.sep);
+}
+
+/**
  * SessionStart: resolve the brain for the session's cwd, honor the per-user scope gate,
  * and return the markdown context string to inject. Returns "" (inject nothing) when there
  * is no brain for this cwd or the cwd is out of scope — the two gates that make an
@@ -391,6 +442,14 @@ export async function sessionEnd(input, deps) {
     return await finishEnd(deps, inputCwd, { skipped: true, reason: "no-brain" }, boundary);
   }
   const { cwd, brain } = resolved;
+
+  // Self-capture gate (#268): this session is being run FROM INSIDE the brain, so it is about
+  // administering the brain, not about a project. Capturing here makes the brain take notes about
+  // itself. Skip BEFORE extraction (no LLM call for a session we will not capture) and leave a
+  // receipt, so the silence is explained rather than mysterious.
+  if (await isSelfCaptureCwd(cwd, brain)) {
+    return await finishEnd(deps, cwd, { skipped: true, reason: "self-capture" }, boundary, brain);
+  }
 
   const extracted = await deps.extractCandidates({
     transcriptPath: input.transcript_path,
@@ -752,6 +811,11 @@ export function endReceiptMessage(result, boundary) {
     }
     if (result.reason === "out-of-scope") {
       return `🧠 Commonwealth: ${source}'s directory is outside your Commonwealth capture scope, so nothing was captured.`;
+    }
+    if (result.reason === "self-capture") {
+      // Deliberate, not a fault: a brain must never take notes about itself (#268). Say so plainly
+      // and point at the escape hatch, so "why did nothing get captured?" has an answer in-place.
+      return `🧠 Commonwealth: ${source} ran from inside the brain itself, so nothing was captured automatically — a brain does not take notes about administering itself. Use \`/commonwealth:remember\` or \`/commonwealth:decide\` to record something here deliberately.`;
     }
     return null; // no-cwd / unknown — nothing useful to surface
   }

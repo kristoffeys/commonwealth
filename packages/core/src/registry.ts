@@ -605,6 +605,67 @@ export async function resolveBrain(
 }
 
 /**
+ * True when `cwd` sits AT or INSIDE `brainDir` — i.e. the session is being run from within the
+ * brain itself. This is the self-capture signal (#268): a session whose working directory is the
+ * brain is a session ABOUT administering the brain (publishing the vault, fixing the registry,
+ * tidying notes), and automatic capture there writes notes about the brain INTO the brain. That
+ * self-referential noise pollutes canon and skews `map` / `health`. A brain resolves to itself by
+ * design (resolution step 2, and users often add a self-pointing rule too), so the resolver can't
+ * express this — it is a separate, capture-only gate the hooks apply after routing.
+ *
+ * Compares REALPATHS, which is load-bearing: `~/.commonwealth/brains/<name>` is a symlink into the
+ * real brain directory, so a session started through the symlinked path string-compares as
+ * unrelated while being the very same directory. A path that cannot be realpath'd (not on disk
+ * yet) falls back to its resolved form, so the check still works for hypothetical dirs.
+ *
+ * On case-insensitive filesystems (macOS, Windows) the comparison is case-folded, since
+ * `/Users/x/Brain` and `/Users/x/brain` are ONE directory there — being strict would let a
+ * differently-cased cwd slip past the gate. Elsewhere the comparison stays exact.
+ *
+ * Boundary-safe (`/work` does not contain `/workshop`) and never throws. Deliberately does NOT use
+ * {@link isUnder}: that helper treats the filesystem ROOT as containing everything, which is right
+ * for rule prefixes but wrong here — a brain that resolved to `/` is a broken configuration, and
+ * answering "yes, every session is inside it" would silently disable capture machine-wide. Matching
+ * the hooks' `.mjs` mirror, a `/` brain simply contains nothing but itself.
+ */
+export async function isCwdInsideBrain(cwd: string, brainDir: string): Promise<boolean> {
+  if (typeof cwd !== "string" || cwd.length === 0) return false;
+  if (typeof brainDir !== "string" || brainDir.length === 0) return false;
+  const [a, b] = await Promise.all([realpathOrResolve(cwd), realpathOrResolve(brainDir)]);
+  const child = foldCase(a);
+  const parent = foldCase(b);
+  return child === parent || child.startsWith(parent + path.sep);
+}
+
+/**
+ * Resolve a path to its realpath. A path that is not (yet) on disk still resolves as far as it
+ * can: we realpath the deepest EXISTING ancestor and re-append the missing tail, so
+ * `~/.commonwealth/brains/acme/memory` still resolves through the `acme` symlink even when the
+ * `memory/` subdir doesn't exist. Falls back to a plain `path.resolve` when nothing resolves.
+ */
+async function realpathOrResolve(p: string): Promise<string> {
+  const resolved = path.resolve(expand(p));
+  const tail: string[] = [];
+  let current = resolved;
+  for (;;) {
+    try {
+      const real = await fs.realpath(current);
+      return tail.length > 0 ? path.join(real, ...tail.reverse()) : real;
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return resolved; // hit the root without finding anything real
+      tail.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/** Case-fold a path on case-insensitive filesystems (darwin/win32); identity elsewhere. */
+function foldCase(p: string): string {
+  return process.platform === "darwin" || process.platform === "win32" ? p.toLowerCase() : p;
+}
+
+/**
  * Like {@link resolveBrainDir}, but returns the full {@link ResolvedBrain} — the brain path AND
  * the git `remote` to clone from when it came from a registry mapping (ADR-0019). A thin wrapper
  * over {@link resolveBrain}: `denied`, `none`, and `corrupt-config` all collapse to `null` (no

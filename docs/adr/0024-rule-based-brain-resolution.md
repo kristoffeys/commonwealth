@@ -92,6 +92,12 @@ scope gate:
 The standalone `allow` list dissolves: "matches a routing rule" already carries the allow
 semantic. `config.json`'s `{ allow, deny }` is migrated into rules and then retired.
 
+One gate sits OUTSIDE this pass: a session whose cwd is at/inside the brain it resolved to (a brain
+resolves to itself, §2) is suppressed for **automatic** capture only (#268) — otherwise the brain
+takes notes about administering itself. It is applied by the capture path after routing, not by
+resolution, so context injection and explicit acts (`/commonwealth:remember`, `/commonwealth:decide`)
+are unaffected.
+
 ### 4. Default brain = the brain a *matched* rule uses when it names none
 
 `defaultBrain` is **not** a catch-all for unmatched directories — it is the destination for a rule

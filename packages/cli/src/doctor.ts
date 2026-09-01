@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   defaultRegistryPath,
+  isCwdInsideBrain,
   isDerivedMarkdownFile,
   resolveBrain,
   resolveBrainDir,
@@ -818,6 +819,21 @@ export async function diagnose(
             fix: `commonwealth add ${cwd}`,
           },
   );
+
+  // 9) Self-capture (#268) — is the session's cwd inside the brain itself? A brain resolves to
+  //    itself, so working IN it would have the brain take notes about administering itself. Automatic
+  //    capture is suppressed there, which otherwise looks like a silent failure ("nothing gets
+  //    captured and doctor says everything is fine"). Warn, never fail: the suppression is correct,
+  //    and explicit `/commonwealth:remember` / `/commonwealth:decide` still work here.
+  if (await isCwdInsideBrain(cwd, brain)) {
+    checks.push({
+      id: "self-capture",
+      label: "Self-capture",
+      status: "warn",
+      detail: `cwd is inside the brain (${brain}), so AUTOMATIC capture is suppressed here — a brain does not take notes about administering itself. Explicit /commonwealth:remember and /commonwealth:decide still work.`,
+      fix: "run project sessions from the project directory; nothing to fix if you are administering the brain",
+    });
+  }
 
   const report = finalize(cwd, brain, checks, false);
   report.healed = healed || undefined;

@@ -449,3 +449,73 @@ describe("commonwealth doctor — diagnose()", () => {
     expect(check(report, "last-capture").status).toBe("skip");
   });
 });
+
+/**
+ * Self-capture (#268): a session run from inside the brain has automatic capture suppressed. That
+ * is deliberate, but invisible — so `doctor` must say it, or "nothing gets captured and doctor says
+ * everything is fine" becomes a support ticket.
+ */
+describe("commonwealth doctor — self-capture check (#268)", () => {
+  let tmp: string;
+  let brain: string;
+
+  beforeEach(async () => {
+    tmp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "cw-doctor-self-")));
+    brain = path.join(tmp, "brain");
+    await fs.mkdir(path.join(brain, "acme", "memory"), { recursive: true });
+    await fs.writeFile(path.join(brain, "acme", "memory", "n1.md"), "---\nid: x\n---\nbody\n");
+    await fs.mkdir(path.join(brain, "index"), { recursive: true });
+    await fs.writeFile(path.join(brain, "index", "commonwealth.db"), "db");
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  function envAt(cwd: string): DoctorEnv {
+    return {
+      cwd,
+      resolveBrain: () => Promise.resolve(brain),
+      resolveScope: () => Promise.resolve("brain"),
+      configParse: () => Promise.resolve(null),
+      pluginInstalled: () => true,
+      curateRuntime: () =>
+        Promise.resolve({
+          kind: "vendored",
+          command: "/usr/bin/node /plugin/vendor/curate/index.js",
+          ok: true,
+          code: 0,
+          version: "0.1.12",
+        }),
+      pidAlive: () => true,
+      gitState: () => ({ kind: "tracked", behind: 0 }),
+      startDaemon: () => Promise.resolve(true),
+      syncDebt: () => Promise.resolve({ uncommittedNotes: 0, unpushed: 0, oldestMs: null }),
+    };
+  }
+
+  const find = (r: Awaited<ReturnType<typeof diagnose>>, id: string) =>
+    r.checks.find((c) => c.id === id);
+
+  it("warns (never fails) when cwd is the brain itself, explaining the suppression", async () => {
+    const report = await diagnose(envAt(brain));
+    const c = find(report, "self-capture")!;
+    expect(c.status).toBe("warn");
+    expect(c.detail).toContain("AUTOMATIC capture is suppressed");
+    expect(c.detail).toContain("/commonwealth:remember");
+    // A warn must not turn the whole diagnosis red — this state is correct, not broken.
+    expect(report.ok).toBe(true);
+  });
+
+  it("warns when cwd is nested inside the brain", async () => {
+    const report = await diagnose(envAt(path.join(brain, "acme", "memory")));
+    expect(find(report, "self-capture")?.status).toBe("warn");
+  });
+
+  it("emits no self-capture check from a normal project directory", async () => {
+    const project = path.join(tmp, "project");
+    await fs.mkdir(project, { recursive: true });
+    const report = await diagnose(envAt(project));
+    expect(find(report, "self-capture")).toBeUndefined();
+  });
+});

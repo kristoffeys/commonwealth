@@ -612,7 +612,11 @@ describe("realDeps().capture (real curate binary over stdin)", () => {
       refreshStatus: async () => {},
       saveReceipt: async (receipt: { message: string }) => saved.push(receipt),
     };
-    const end = await sessionEnd({ cwd: brain, transcript_path: "/unused" }, endDeps);
+    // Drive it from a project dir, not the brain: a session run INSIDE the brain is suppressed by
+    // the self-capture gate (#268), which would short-circuit before this failure path.
+    const project = path.join(tmp, "broken-runtime-project");
+    await fs.mkdir(project, { recursive: true });
+    const end = await sessionEnd({ cwd: project, transcript_path: "/unused" }, endDeps);
     expect(end).toMatchObject({ failed: true, reason: "curate-runtime", code: 254 });
     expect(saved[0]?.message).toContain("capture FAILED");
     expect(saved[0]?.message).not.toContain("no durable knowledge");

@@ -18,6 +18,17 @@ const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const curateEntry = path.join(repoRoot, "packages", "curate", "dist", "index.js");
 const syncEntry = path.join(repoRoot, "packages", "sync", "dist", "index.js");
 
+/**
+ * A throwaway project directory to run a session from. Sessions must not capture from inside the
+ * brain (the self-capture gate, #268); `$COMMONWEALTH_BRAIN_DIR` routes any cwd to the test brain,
+ * so an ordinary sibling directory is the realistic stand-in for a real project.
+ */
+async function sessionProject(root: string, name: string): Promise<string> {
+  const dir = path.join(root, `project-${name}`);
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
+
 /** Run git in `cwd`, returning trimmed stdout. */
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: "pipe" }).toString().trim();
@@ -77,8 +88,11 @@ describe("daemonless lifecycle sync — end to end (ADR-0032)", () => {
     });
     delete (deps as { classifyCandidates?: unknown }).classifyCandidates;
 
+    // Capture from a PROJECT dir (env-pinned to this brain), never from inside the brain itself —
+    // a session run in the brain is suppressed by the self-capture gate (#268).
+    const project = await sessionProject(tmp, "push");
     const result = (await sessionEnd(
-      { cwd: brain, transcript_path: path.join(tmp, "none.jsonl") },
+      { cwd: project, transcript_path: path.join(tmp, "none.jsonl") },
       deps,
     )) as { captured?: number; syncDeferred?: boolean };
 
@@ -99,8 +113,9 @@ describe("daemonless lifecycle sync — end to end (ADR-0032)", () => {
     const deps = realDeps({ curateEntry, syncEntry });
     deps.extractCandidates = async () => ({ ok: true, candidates: [] });
 
+    const project = await sessionProject(tmp, "zero");
     const result = (await sessionEnd(
-      { cwd: brain, transcript_path: path.join(tmp, "none.jsonl") },
+      { cwd: project, transcript_path: path.join(tmp, "none.jsonl") },
       deps,
     )) as { captured?: number };
 

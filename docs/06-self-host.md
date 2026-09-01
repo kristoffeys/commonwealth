@@ -138,6 +138,12 @@ commonwealth scope show
 
 Rule: in scope if `(allow is empty OR under an allow entry) AND under no deny entry`.
 
+One directory is always excluded from **automatic** capture: the brain itself. A session run from
+inside the brain (or any subfolder of it) is a session about administering the brain, so capturing
+there would fill canon with notes about the brain — `commonwealth doctor` says so when your cwd is
+inside a brain, and the session receipt explains the silence. Recording something deliberately still
+works: `/commonwealth:remember` and `/commonwealth:decide` are never suppressed.
+
 Scope only gates *whether* capture may happen — *which brain* a folder writes to comes from the
 registry mapping. To wire a new folder to your brain (allowlist + mapping + symlink in one go):
 

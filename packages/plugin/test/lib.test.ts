@@ -1,6 +1,7 @@
-import { existsSync } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Import the plain-ESM hook lib directly (no build step; hooks run it via `node`).
 import {
   attachReceipt,
@@ -480,6 +481,12 @@ describe("endReceiptMessage (#96)", () => {
   });
   it("explains an out-of-scope skip", () => {
     expect(endReceiptMessage({ skipped: true, reason: "out-of-scope" })).toContain("capture scope");
+  });
+
+  it("explains a self-capture skip and names the deliberate escape hatch (#268)", () => {
+    const msg = endReceiptMessage({ skipped: true, reason: "self-capture" });
+    expect(msg).toContain("from inside the brain itself");
+    expect(msg).toContain("/commonwealth:remember");
   });
   it("explains a corrupt-config skip, naming the file and the parse error (#210)", () => {
     const msg = endReceiptMessage({
@@ -1037,5 +1044,102 @@ describe("resolveSyncRuntime (ADR-0032, mirrors resolveCurateRuntime)", () => {
     expect(rt.kind).toBe("npx");
     expect(rt.command).toBe("npx");
     expect(rt.args).toEqual(["-y", "@cmnwlth/sync@9.9.9"]);
+  });
+});
+
+/**
+ * The self-capture gate (#268): a session run from INSIDE the brain is about administering the
+ * brain, so automatic capture must not fire — otherwise the brain takes notes about itself
+ * ("Publishing the vault to GitHub", "Team brain lives in the org as a private repo"), polluting
+ * canon and skewing map/health. Uses REAL directories because the gate compares realpaths.
+ */
+describe("sessionEnd — self-capture suppression (#268)", () => {
+  let root: string;
+  let brain: string;
+
+  beforeEach(async () => {
+    root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "cw-selfcapture-")));
+    brain = path.join(root, "antenna-brain");
+    await fs.mkdir(path.join(brain, "memory"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  /** Deps whose resolution routes every cwd to the temp brain (as a self-pointing rule would). */
+  const brainDeps = (extra: Record<string, unknown> = {}) =>
+    makeDeps({ resolveBrain: vi.fn(async () => ({ kind: "brain", brain })), ...extra });
+
+  it("skips, and NEVER extracts or captures, when cwd IS the brain root", async () => {
+    const deps = brainDeps();
+    const result = await sessionEnd({ cwd: brain, transcript_path: "/tmp/t.jsonl" }, deps);
+    expect(result).toEqual({ skipped: true, reason: "self-capture" });
+    // The whole point: no LLM extraction and no capture for a session about the brain itself.
+    expect(deps.extractCandidates).not.toHaveBeenCalled();
+    expect(deps.capture).not.toHaveBeenCalled();
+  });
+
+  it("skips when cwd is nested INSIDE the brain", async () => {
+    const deps = brainDeps();
+    const nested = path.join(brain, "memory");
+    const result = await sessionEnd({ cwd: nested, transcript_path: "/tmp/t.jsonl" }, deps);
+    expect(result).toEqual({ skipped: true, reason: "self-capture" });
+    expect(deps.capture).not.toHaveBeenCalled();
+  });
+
+  it("skips when the brain is reached through a ~/.commonwealth/brains/<name> symlink", async () => {
+    const brainsDir = path.join(root, "home", ".commonwealth", "brains");
+    await fs.mkdir(brainsDir, { recursive: true });
+    const link = path.join(brainsDir, "antenna");
+    await fs.symlink(brain, link, "dir");
+    // A string compare would miss this: the symlink path shares no prefix with the real dir.
+    expect(link.startsWith(brain)).toBe(false);
+
+    const deps = brainDeps();
+    const result = await sessionEnd(
+      { cwd: path.join(link, "memory"), transcript_path: "/tmp/t.jsonl" },
+      deps,
+    );
+    expect(result).toEqual({ skipped: true, reason: "self-capture" });
+    expect(deps.capture).not.toHaveBeenCalled();
+  });
+
+  it("leaves a receipt explaining the silence and pointing at the explicit commands", async () => {
+    const deps = brainDeps();
+    await sessionEnd({ cwd: brain, transcript_path: "/tmp/t.jsonl" }, deps);
+    expect(deps.saveReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: brain,
+        message: expect.stringContaining("from inside the brain itself"),
+      }),
+    );
+  });
+
+  it("records the skip in the capture log with reason 'self-capture'", async () => {
+    const deps = brainDeps();
+    const recordCapture = vi.fn(async () => {});
+    await sessionEnd({ cwd: brain, transcript_path: "/tmp/t.jsonl" }, { ...deps, recordCapture });
+    expect(recordCapture).toHaveBeenCalledOnce();
+    const { result } = recordCapture.mock.calls[0][0] as { result: Record<string, unknown> };
+    expect(result).toMatchObject({ skipped: true, reason: "self-capture" });
+  });
+
+  it("still captures normally from a project directory OUTSIDE the brain (the negative case)", async () => {
+    const project = path.join(root, "work", "acme-api");
+    await fs.mkdir(project, { recursive: true });
+    const deps = brainDeps();
+    const result = await sessionEnd({ cwd: project, transcript_path: "/tmp/t.jsonl" }, deps);
+    expect(result).toMatchObject({ captured: 1 });
+    expect(deps.extractCandidates).toHaveBeenCalledOnce();
+    expect(deps.capture).toHaveBeenCalledOnce();
+  });
+
+  it("does not suppress a sibling directory whose name merely prefixes the brain's", async () => {
+    const sibling = `${brain}-notes`;
+    await fs.mkdir(sibling, { recursive: true });
+    const deps = brainDeps();
+    const result = await sessionEnd({ cwd: sibling, transcript_path: "/tmp/t.jsonl" }, deps);
+    expect(result).toMatchObject({ captured: 1 });
   });
 });
