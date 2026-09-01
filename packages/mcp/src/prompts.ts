@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /**
  * MCP prompt definitions — the Commonwealth command set (`ask`, `recall`, `remember`, `decide`,
- * `status`, `promote`) exposed to every MCP client (Cursor, Windsurf, Claude Desktop, Zed, and
+ * `meeting`, `status`, `promote`) exposed to every MCP client (Cursor, Windsurf, Claude Desktop, Zed, and
  * Claude Code, which renders them as `/mcp__commonwealth__<name>`). This closes the multiplayer
  * gap: non-Claude-Code editors previously got read-only `emit` context but no verbs, so a
  * mixed-editor team could read the brain but not feed it (#216).
@@ -60,7 +60,7 @@ export function promptArgsSchema(def: PromptDef): Record<string, z.ZodTypeAny> {
   return shape;
 }
 
-/** The six ported prompts. Bodies are faithful ports of `packages/plugin/commands/*.md`. */
+/** The ported prompts. Bodies are faithful ports of `packages/plugin/commands/*.md`. */
 export const PROMPTS: PromptDef[] = [
   {
     name: "ask",
@@ -213,6 +213,50 @@ export const PROMPTS: PromptDef[] = [
       ]
         .filter((line) => line !== "")
         .join("\n"),
+  },
+  {
+    name: "meeting",
+    title: "Summarize a meeting into the team brain",
+    description:
+      "Summarize a meeting into the brain and extract its decisions, action items, and facts",
+    commandFile: "meeting.md",
+    args: [
+      {
+        name: "text",
+        description: "The raw meeting material (a transcript / export / pasted notes) to summarize",
+        required: false,
+      },
+    ],
+    driftAnchors: [
+      "Summarize a meeting into the team brain and extract its decisions, action items, and durable facts.",
+      "one immutable `meeting` record note holds a clean structured",
+    ],
+    render: ({ text }) => {
+      const raw = text?.trim();
+      return [
+        "# Summarize a meeting into the team brain",
+        "",
+        "Summarize a meeting into the team brain and extract its decisions, action items, and durable " +
+          "facts. You paste raw meeting material — a Plaud export, a recording transcript, or hand-typed " +
+          "notes — and it is stored **hybrid** (ADR-0036): one immutable `meeting` record note holds a " +
+          "clean structured summary with the raw transcript folded in at the bottom, and each extracted " +
+          "decision / action item / durable fact becomes its own atomic note cross-linked back to that " +
+          "record.",
+        "",
+        raw ? `**Raw meeting material:** ${raw}` : "No meeting text was given — ask the user to paste the transcript (and, if handy, the title, attendees, and date).",
+        "",
+        "You (the host) do the summarizing and extracting — Commonwealth only stores. Produce a concise " +
+          "structured summary (purpose, attendees, date, key points), then extract the decisions " +
+          "(→ `decision`), action items with an owner each (→ `work-state`), and durable facts " +
+          "(→ `memory`).",
+        "",
+        "Stage the `meeting` record FIRST, capturing its id, then stage each extracted note with " +
+          "`relates` pointing back at that meeting id. In Claude Code this runs via the vendored curate " +
+          "CLI (`stage --kind meeting … --body -`, piping the transcript over STDIN); a pure-MCP client " +
+          "should relay the summary + extraction to the user, since the MCP tool surface cannot stage a " +
+          "meeting record with its date/attendees. Report the meeting id and what was extracted.",
+      ].join("\n");
+    },
   },
   {
     name: "status",

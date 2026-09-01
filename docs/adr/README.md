@@ -36,6 +36,7 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 | [0033](0033-action-time-contradiction-guard.md) | Action-time contradiction guard (PreToolUse, opt-in, non-blocking default) | Accepted |
 | [0034](0034-obsidian-friendly-derived-layout.md) | Obsidian-friendly derived layout: per-project MOCs, wikilinks, shipped vault config | Accepted |
 | [0035](0035-physical-layout-keys-off-resolved-project.md) | Physical layout keys off the resolved project (supersedes ADR-0031 §1's "no file moves") | Accepted |
+| [0036](0036-meeting-note-kind.md) | A fifth note kind: `meeting` (paste-and-summarize, hybrid extraction) | Accepted |
 
 ## Process
 

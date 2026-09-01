@@ -1161,6 +1161,7 @@ const MOC_SECTIONS: ReadonlyArray<{ kind: NoteKind; label: string }> = [
   { kind: "decision", label: "Decisions" },
   { kind: "memory", label: "Memory" },
   { kind: "work-state", label: "Work-state" },
+  { kind: "meeting", label: "Meetings" },
   { kind: "person", label: "People" },
 ];
 

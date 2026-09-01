@@ -73,7 +73,7 @@ commonwealth init
 > After install, restart the selected agent and open a new session/thread so it loads the plugin.
 > In Claude Code, `/mcp` should list the `commonwealth` server. Beyond its tools (`search`,
 > `ask`, `read`, `remember`, …), the MCP server exposes the command set as **prompts**
-> (`/mcp__commonwealth__ask`, `remember`, `decide`, `recall`, `status`, `promote`) and the brain
+> (`/mcp__commonwealth__ask`, `remember`, `decide`, `meeting`, `recall`, `status`, `promote`) and the brain
 > as read-only **resources** (`commonwealth://<brain>/…` — the map, per-kind indexes, and
 > individual notes you can @-mention to pin into context), so Cursor/Windsurf/Zed/Claude Desktop
 > users get Commonwealth's verbs and browsing natively, not just Claude Code.
@@ -161,6 +161,24 @@ coding session — use the deliberate path inside Claude Code:
 
 It writes a `decision` note capturing **what** was decided, **when**, **who** decided it, and
 **why** — so a later reversal *supersedes* it rather than erasing the reasoning.
+
+### Summarizing meetings
+
+Paste a meeting into the brain and it is summarized and filed for you. Give
+`/commonwealth:meeting` the raw material — a Plaud export, a recording transcript, or pasted
+notes — inside Claude Code:
+
+```
+/commonwealth:meeting  <paste the transcript / notes here>
+```
+
+It stores the meeting **hybrid** (ADR-0036): one immutable `meeting` note keeps a clean structured
+summary with the raw transcript folded in at the bottom, and every decision, action item (with an
+owner), and durable fact inside it is **extracted as its own atomic note**, cross-linked back to the
+meeting. So the meeting shows up as a record you can re-mine *and* its decisions/actions land in the
+decision log and the work-state list like any other note. The host agent does the summarizing;
+Commonwealth stores. Large transcripts are piped in, so length is not a problem, and the transcript
+passes the same secret + dedup gates as every write.
 
 ### Review vs. auto-promote
 
@@ -409,7 +427,7 @@ commonwealth config set semanticDedup true   # smarter dedup (see below)
 | [`docs/06-self-host.md`](docs/06-self-host.md)       | Share a brain across a team over your own git remote    |
 | [`docs/07-agent-parity.md`](docs/07-agent-parity.md) | Claude Code/Codex parity, lifecycle mapping, and health |
 | [`docs/01-architecture.md`](docs/01-architecture.md) | How it works: git substrate, concurrency, the auto-bridge |
-| [`docs/02-data-model.md`](docs/02-data-model.md)     | The markdown schema: memory / decisions / work-state / people |
+| [`docs/02-data-model.md`](docs/02-data-model.md)     | The markdown schema: memory / decisions / work-state / people / meetings |
 | [`docs/03-distribution.md`](docs/03-distribution.md) | Distribution into Claude Code and Codex                 |
 | [`docs/04-roadmap.md`](docs/04-roadmap.md)           | What's shipped and what's next                          |
 | [`docs/release-checklist.md`](docs/release-checklist.md) | Fresh-marketplace release proof for both hosts       |
