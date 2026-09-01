@@ -21,6 +21,7 @@ import {
   NOTE_KINDS,
   type NoteKind,
   persistProjectAliasMap,
+  projectForSource,
   projectIdError,
   refreshBrainStatus,
   regenerateDerived,
@@ -34,6 +35,7 @@ import {
   buildIndex,
 } from "@cmnwlth/core";
 import { adoptProject, type AdoptResult } from "./adopt.js";
+import { relayoutBrain, type RelayoutResult } from "./relayout.js";
 import { captureCandidates } from "./capture.js";
 import { consolidateCanon } from "./consolidate.js";
 import { graduateToOrgBrain } from "./graduate.js";
@@ -159,7 +161,7 @@ function usage(): void {
       "  commonwealth-curate health [--dir <brain>] [--fail-under-capture <ratio>]",
       "  commonwealth-curate map [--dir <brain>]",
       "  commonwealth-curate project <list | link <id> <src...> | unlink <id> [<src...>]",
-      "      | adopt <id> [--dry-run]> [--dir <brain>]",
+      "      | adopt <id> [--dry-run] | relayout [<id>] [--dry-run]> [--dir <brain>]",
       "  commonwealth-curate status-cache [--dir <brain>]",
       "  commonwealth-curate consolidate [--dry-run] [--dir <brain>]",
       "  commonwealth-curate reclassify [--project <src>] [--limit <n>] (--emit | [--apply] [--from <file>]) [--dir <brain>]",
@@ -318,6 +320,24 @@ async function cmdStage(dir: string, args: string[]): Promise<void> {
     ...(tags ? { tags: csv(tags) } : {}),
     ...(Object.keys(fields).length > 0 ? { fields } : {}),
   };
+
+  // Stamp provenance + project identity the SAME way `capture` does (the meeting feature and
+  // `/commonwealth:remember` reach the brain through `stage`), so a staged note from a linked repo
+  // carries its `project` and — once promoted — lands under `<project>/<kind>/` (ADR-0015/0031/0035).
+  // Precedence for the stamped project: manifest `project` → alias-map link → undefined.
+  const cwd = process.cwd();
+  const source = (await resolveProjectSource(cwd)) ?? undefined;
+  const manifest = await resolveProjectManifest(cwd);
+  const stamp = manifest ? manifestStamp(manifest) : null;
+  const aliasMap = await loadProjectAliasMap(dir);
+  const linkedProject = source ? (projectForSource(source, aliasMap) ?? undefined) : undefined;
+  const project = stamp?.project ?? linkedProject;
+  if (source) candidate.source = source;
+  if (project) candidate.project = project;
+  if (stamp?.tag) {
+    const existing = candidate.tags ?? [];
+    if (!existing.includes(stamp.tag)) candidate.tags = [...existing, stamp.tag];
+  }
 
   const contributor = await resolveContributorIdentity(process.cwd());
   if (!contributor) {
@@ -510,15 +530,22 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
   // fallback resolves identity at read time). An explicit per-candidate `project` is preserved.
   const manifest = await resolveProjectManifest(cwd);
   const stamp = manifest ? manifestStamp(manifest) : null;
+  // The alias map (ADR-0031) is the retroactive identity tier: a source LINKED into a project resolves
+  // to that project even without a manifest, so the captured note gets `project` stamped and — under the
+  // consolidated layout (ADR-0035) — lands under `<project>/<kind>/`. Precedence for the stamped
+  // project: explicit per-candidate `project` → manifest `project` → alias-map link → undefined.
+  const aliasMap = await loadProjectAliasMap(dir);
   const stamped = candidates.map((c) => {
     const withSource = c.source ? c : { ...c, source };
-    if (!stamp) return withSource;
-    const project = withSource.project ?? stamp.project;
+    const src = withSource.source;
+    const linkedProject =
+      typeof src === "string" && src.length > 0 ? (projectForSource(src, aliasMap) ?? undefined) : undefined;
+    const project = withSource.project ?? stamp?.project ?? linkedProject;
     const tags =
-      stamp.tag && !(withSource.tags ?? []).includes(stamp.tag)
+      stamp?.tag && !(withSource.tags ?? []).includes(stamp.tag)
         ? [...(withSource.tags ?? []), stamp.tag]
         : withSource.tags;
-    return { ...withSource, project, ...(tags ? { tags } : {}) };
+    return { ...withSource, ...(project ? { project } : {}), ...(tags ? { tags } : {}) };
   });
 
   const contributor = values.force === true ? null : await resolveContributorIdentity(cwd);
@@ -921,6 +948,8 @@ async function cmdMap(dir: string): Promise<void> {
  *   - `unlink <projectId> [<source...>]` — remove sources (all if none given), then regenerate.
  *   - `adopt  <projectId> [--dry-run]`   — stamp the resolved identity onto the linked historical
  *     notes' frontmatter in one commit, then retire the redundant alias entry (ADR-0031, #241).
+ *   - `relayout [projectId] [--dry-run]` — MOVE canon note files so the physical tree keys off the
+ *     resolved project (`<project>/<kind>/`), stamping `project` onto each moved note (ADR-0035).
  *
  * Writes go through the guarded {@link persistProjectAliasMap} (refuses to clobber a corrupt map),
  * and every mutation regenerates the derived router + index so the grouping updates atomically with
@@ -1018,9 +1047,65 @@ async function cmdProject(dir: string, args: string[]): Promise<number> {
     return renderAdopt(result);
   }
 
+  if (sub === "relayout") {
+    // `[projectId]` is optional; `--dry-run` is a flag. Re-parse to read the flag cleanly.
+    const { values } = parseArgs({
+      args,
+      options: { dir: { type: "string" }, "dry-run": { type: "boolean" } },
+      allowPositionals: true,
+      strict: false,
+    });
+    const projectId = rest[0];
+    if (projectId !== undefined) {
+      const idErr = projectIdError(projectId);
+      if (idErr) {
+        console.error(`Invalid project id: ${idErr}`);
+        return 2;
+      }
+    }
+    try {
+      const result = await relayoutBrain(dir, {
+        dryRun: values["dry-run"] === true,
+        ...(projectId !== undefined ? { projectId } : {}),
+      });
+      return renderRelayout(result);
+    } catch (err) {
+      // A destination collision fails the whole pass closed (nothing was moved) — surface it clearly.
+      console.error(`[commonwealth-curate] relayout aborted: ${err instanceof Error ? err.message : err}`);
+      return 1;
+    }
+  }
+
   console.error(`Unknown project subcommand: ${sub}`);
-  console.error("usage: commonwealth project <list | link | unlink | adopt>");
+  console.error("usage: commonwealth project <list | link | unlink | adopt | relayout>");
   return 2;
+}
+
+/** Render a {@link RelayoutResult} to stdout; returns the exit code. */
+function renderRelayout(result: RelayoutResult): number {
+  if (result.skipped) {
+    console.error(`[commonwealth-curate] relayout skipped: ${result.skipped}`);
+    return 1;
+  }
+  const scope = result.projectId ? ` for "${result.projectId}"` : "";
+  const n = result.moves.length;
+  if (result.dryRun) {
+    console.log(
+      n === 0
+        ? `Dry run — nothing to relayout${scope}; every note is already under its project folder.`
+        : `Dry run — ${n} note(s) would move${scope} (no changes written):`,
+    );
+  } else {
+    console.log(
+      n === 0
+        ? `Nothing to relayout${scope}; every note is already under its project folder.`
+        : `Relaid out ${n} note(s)${scope} under their resolved project folder.`,
+    );
+  }
+  for (const m of result.moves) {
+    console.log(`  ${m.from}  ->  ${m.to}`);
+  }
+  return 0;
 }
 
 /** Render an {@link AdoptResult} to stdout (summary) / stderr (refusals); returns the exit code. */

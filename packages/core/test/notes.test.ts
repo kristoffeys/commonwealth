@@ -211,6 +211,34 @@ describe("project provenance (ADR-0015)", () => {
     expect(note.frontmatter.source).toBeUndefined();
   });
 
+  it("writeNote files under the resolved PROJECT when both project and source are set (ADR-0035)", async () => {
+    const note = await writeNote(dir, {
+      kind: "memory",
+      title: "Consolidated fact",
+      body: "one engagement, one folder",
+      source: "acme/widgets",
+      project: "acme-engagement",
+    });
+    // The folder keys off the project, not the source; provenance stays in frontmatter.
+    expect(note.path).toBe(`acme-engagement/memory/${note.frontmatter.id}.md`);
+    expect(note.frontmatter.project).toBe("acme-engagement");
+    expect(note.frontmatter.source).toBe("acme/widgets");
+    const back = await readNote(dir, note.path);
+    expect(back.frontmatter.source).toBe("acme/widgets");
+    expect(back.frontmatter.project).toBe("acme-engagement");
+  });
+
+  it("writeNote files under source when only source is set (no project) (ADR-0035)", async () => {
+    const note = await writeNote(dir, {
+      kind: "memory",
+      title: "Source-only fact",
+      body: "no declared project",
+      source: "acme/widgets",
+    });
+    expect(note.path).toBe(`acme-widgets/memory/${note.frontmatter.id}.md`);
+    expect(note.frontmatter).not.toHaveProperty("project");
+  });
+
   it("listNotes finds notes across project subtrees and the flat root, filtered by kind", async () => {
     await writeNote(dir, { kind: "memory", title: "A", body: "from project one", source: "one" });
     await writeNote(dir, { kind: "memory", title: "B", body: "from project two", source: "two" });
