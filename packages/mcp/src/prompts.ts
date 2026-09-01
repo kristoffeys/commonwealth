@@ -131,7 +131,7 @@ export const PROMPTS: PromptDef[] = [
       { name: "text", description: "What to remember (the fact / knowledge)", required: true },
       {
         name: "kind",
-        description: "Note kind: memory (default), decision, work-state, or person",
+        description: "Note kind: memory (default), decision, or work-state",
         required: false,
       },
     ],
