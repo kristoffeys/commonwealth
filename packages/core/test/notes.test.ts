@@ -4,7 +4,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ids from "../src/ids";
 import { makeNoteId, slugify } from "../src/ids";
-import { listNotes, parseNote, readNote, serializeNote, writeNote } from "../src/notes";
+import {
+  isDerivedMarkdownFile,
+  listNotes,
+  parseNote,
+  readNote,
+  serializeNote,
+  writeNote,
+} from "../src/notes";
 import type { Note } from "../src/schema";
 
 let dir: string;
@@ -296,5 +303,33 @@ describe("contradicts frontmatter (ADR-0030 / #214)", () => {
         "memory/x.md",
       ),
     ).toThrow();
+  });
+});
+
+describe("isDerivedMarkdownFile (ADR-0034)", () => {
+  it("treats the generated hub and per-project MOCs as derived", () => {
+    expect(isDerivedMarkdownFile("COMMONWEALTH.md")).toBe(true);
+    expect(isDerivedMarkdownFile("acme-api/acme-api.md")).toBe(true);
+  });
+
+  it("never treats a README.md as derived, at any depth (user-owned)", () => {
+    // A hand-written README used to classify as derived, so verify reported it as permanent drift
+    // and the generated CI gate failed on every push.
+    expect(isDerivedMarkdownFile("README.md")).toBe(false);
+    expect(isDerivedMarkdownFile("docs/README.md")).toBe(false);
+    expect(isDerivedMarkdownFile("acme-api/README.md")).toBe(false);
+    expect(isDerivedMarkdownFile(".github/README.md")).toBe(false);
+    // Windows-style separators normalize the same way.
+    expect(isDerivedMarkdownFile("docs\\README.md")).toBe(false);
+  });
+
+  it("still treats other root-level markdown as derived", () => {
+    expect(isDerivedMarkdownFile("ABOUT.md")).toBe(true);
+  });
+
+  it("does not treat notes or non-note dirs as derived", () => {
+    expect(isDerivedMarkdownFile("memory/2026-07-01-x-a1.md")).toBe(false);
+    expect(isDerivedMarkdownFile("acme-api/decisions/2026-07-01-x-a1.md")).toBe(false);
+    expect(isDerivedMarkdownFile("staging/anything.md")).toBe(false);
   });
 });

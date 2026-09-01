@@ -147,7 +147,9 @@ describe("initBrain", () => {
   });
 
   it("refuses a directory with stray non-brain files unless forced", async () => {
-    await fs.writeFile(path.join(dir, "README.md"), "hi");
+    // Not a README: a brain now OWNS its README (it scaffolds one, absent-only), so a lone README
+    // no longer means "this is someone else's folder" — a stray source file still does.
+    await fs.writeFile(path.join(dir, "package.json"), "{}");
     await expect(initBrain(dir)).rejects.toThrow();
     await expect(initBrain(dir, { force: true })).resolves.toBeUndefined();
     await expect(fs.stat(path.join(dir, "memory"))).resolves.toBeDefined();
@@ -241,5 +243,39 @@ describe("scaffoldCiWorkflow (#220)", () => {
   it("initBrain does NOT write the workflow — CI scaffolding is remote-gated by the caller", async () => {
     await initBrain(dir, { name: "no-ci-by-default" });
     await expect(fs.stat(workflowAt(dir))).rejects.toThrow();
+  });
+});
+
+/**
+ * The starter README is USER-OWNED: written once so a new brain explains itself, then never
+ * touched again. Both halves matter — brains created before it existed already carry a
+ * hand-written README, and every team edits theirs.
+ */
+describe("initBrain README.md (user-owned)", () => {
+  const readmeAt = (root: string) => path.join(root, "README.md");
+
+  it("writes a starter README templated with the brain name", async () => {
+    await initBrain(dir, { name: "acme-brain" });
+    const body = await fs.readFile(readmeAt(dir), "utf8");
+    expect(body).toContain("# acme-brain");
+    // The three things a newcomer needs: what this is, what is generated, how to query it.
+    expect(body).toContain("Obsidian");
+    expect(body).toContain("COMMONWEALTH.md");
+    expect(body).toContain("commonwealth recall");
+    // States its own ownership so nobody hesitates to edit it.
+    expect(body).toContain("never regenerate");
+  });
+
+  it("leaves a pre-existing README byte-identical (never overwrites)", async () => {
+    const handWritten = "# Our brain\n\nHand-written by the team. Do not clobber.\n";
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(readmeAt(dir), handWritten, "utf8");
+
+    await initBrain(dir, { name: "acme-brain" });
+    expect(await fs.readFile(readmeAt(dir), "utf8")).toBe(handWritten);
+
+    // And a re-init (e.g. `--reseed`) still leaves it alone.
+    await initBrain(dir, { name: "acme-brain" });
+    expect(await fs.readFile(readmeAt(dir), "utf8")).toBe(handWritten);
   });
 });

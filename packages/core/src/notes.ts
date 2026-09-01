@@ -233,11 +233,19 @@ export const NON_NOTE_DIRS = new Set([".git", ".commonwealth", "index", "staging
  * project-folder root — is derived. Files under the derived/local/vcs dirs are neither (returns false;
  * `index/` is gitignored, `staging/` is per-user). Directory separators are normalized so it works on
  * both `/` and `\` inputs.
+ *
+ * ONE name-based exception: a `README.md`, at ANY depth, is never derived. README is universally
+ * human-authored — the file a person opens first — so it is USER-OWNED: `initBrain` writes a starter
+ * one absent-only and Commonwealth never regenerates, prunes, or diffs it again. Before this, the
+ * structural rule classified a hand-written root/`docs/`/`.github/` README as derived, so verify's
+ * byte-identical check reported it as permanent drift ("1 derived file(s) drifted") on every run and
+ * failed the generated CI gate on every push, and `regenerateDerived`'s prune deleted it outright.
  */
 export function isDerivedMarkdownFile(relPath: string): boolean {
   if (!relPath.endsWith(".md")) return false;
   const parts = relPath.split(/[\\/]/).filter((p) => p.length > 0);
   if (parts.some((p) => NON_NOTE_DIRS.has(p))) return false;
+  if (parts[parts.length - 1] === "README.md") return false;
   const parent = parts.length >= 2 ? parts[parts.length - 2]! : "";
   return !KIND_FOLDERS.has(parent);
 }

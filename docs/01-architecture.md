@@ -43,7 +43,8 @@ acme-brain/                      # a git repo = one project's brain
 ├── people/                      # people-threads: one file per person/relationship
 ├── index/                       # DERIVED, gitignored (SQLite + vectors)
 ├── .commonwealth/                    # config: schema version, curation rules, remotes
-└── COMMONWEALTH.md                   # human+agent entry point (the router / TOC)
+├── COMMONWEALTH.md                   # human+agent entry point (the router / TOC)
+└── README.md                         # USER-OWNED: scaffolded once, never regenerated
 ```
 
 ## 2. Concurrency: design it out

@@ -29,6 +29,9 @@ const BRAIN_ENTRIES = new Set<string>([
   ".obsidian",
   ".github",
   "COMMONWEALTH.md",
+  // A hand-written README is normal in a git repo, and `initBrain` scaffolds a starter one — so a
+  // directory holding only a README is still safe to initialize rather than "someone else's folder".
+  "README.md",
   "index",
   ...KIND_DIRS,
 ]);
@@ -66,6 +69,81 @@ const GITIGNORE = [
   ".obsidian/workspace-mobile.json",
   "",
 ].join("\n");
+
+/**
+ * The starter `README.md` written into a new brain — the file a person lands on when they open the
+ * repo on GitHub or the vault in Obsidian, explaining what this folder is before they know the tool.
+ * USER-OWNED, unlike `COMMONWEALTH.md`: written absent-only and excluded from the derived-file
+ * predicate (`isDerivedMarkdownFile`), so verify never diffs it and `regenerateDerived` never prunes
+ * it. Previously a hand-written README classified as derived and reported permanent drift, failing
+ * the generated CI gate on every push.
+ */
+function readmeContent(name: string): string {
+  return [
+    `# ${name}`,
+    "",
+    "> **This README is yours.** Commonwealth wrote it once at `init` and will never regenerate,",
+    "> overwrite, or diff it again — edit it freely, or replace it entirely.",
+    "",
+    `**${name}** is a Commonwealth brain: a git-backed markdown second brain for the team. Every fact,`,
+    "decision, and piece of in-flight context lives here as a small plain-markdown file that agents",
+    "read *before* acting and write back to afterwards — so what one person (or one session) learns is",
+    "available to everyone next time. There is no database to lose: the markdown IS the source of",
+    "truth, and everything else is derived and rebuildable. This folder is also an Obsidian vault —",
+    "open it in Obsidian and the graph, wikilinks, and kind colors work out of the box.",
+    "",
+    "## What's in here",
+    "",
+    "Four kinds of note:",
+    "",
+    "| Kind | Holds |",
+    "| --- | --- |",
+    "| `memory` | Durable facts and learnings — how something works, why it broke, what was tried |",
+    "| `decisions` | Team and business decisions: what was decided, when, by whom, and why |",
+    "| `work-state` | In-flight context — what is underway right now, and where it stands |",
+    "| `people` | Who is who: roles, responsibilities, and areas of ownership |",
+    "",
+    "Notes are grouped per project, with a shared bucket for anything unattributed:",
+    "",
+    "```",
+    "<project>/memory|decisions|work-state/   notes for one project",
+    "memory|decisions|work-state/             unattributed notes",
+    "people/                                  people notes",
+    "COMMONWEALTH.md                          generated hub — start reading here",
+    "<project>/<project>.md                   generated map-of-content per project",
+    "```",
+    "",
+    "## Generated vs. yours",
+    "",
+    "`COMMONWEALTH.md` and the per-project map-of-content files are **generated from the notes** and",
+    "regenerated on every sync — never hand-edit them; edit the underlying note instead. `index/` and",
+    "`staging/` are local-only and gitignored: a disposable search index and your personal review",
+    "queue. Everything else — the notes, and this README — is hand-owned and safe to edit.",
+    "",
+    "## Working with the brain",
+    "",
+    "| Command | Does |",
+    "| --- | --- |",
+    "| `commonwealth recall <topic>` | Pull the knowledge relevant to what you're about to do |",
+    "| `commonwealth ask <question>` | Get a cited answer synthesized from the notes |",
+    "| `commonwealth map` | See the shape of the brain: projects, kinds, coverage |",
+    "| `commonwealth status` | Pending review queue and sync state |",
+    "| `commonwealth doctor` | Diagnose a brain that isn't behaving |",
+    "| `commonwealth verify-restore` | Prove the brain restores cleanly from git (the CI gate) |",
+    "",
+    "Inside Claude Code, the same surface is available as slash commands: `/commonwealth:recall`,",
+    "`/commonwealth:ask`, `/commonwealth:remember`, `/commonwealth:decide`, `/commonwealth:status`,",
+    "and `/commonwealth:promote` to approve staged notes into canon.",
+    "",
+    "## A note on sensitive material",
+    "",
+    "This brain may describe production systems, customers, and commercial terms. **Describe secrets,",
+    'never quote them** — write "the API key lives in 1Password under X", not the key itself.',
+    "Commonwealth scans for credentials before every commit, but the scanner is a safety net, not a",
+    "license to paste.",
+    "",
+  ].join("\n");
+}
 
 // Starter Obsidian vault config committed with a brain (P4/P5) so opening the folder in Obsidian
 // "just works": the graph hides derived/local dirs and colors nodes by kind, and long derived files
@@ -143,7 +221,7 @@ async function initGitRepo(dir: string): Promise<void> {
 
 /**
  * True if `dir` is empty or contains only entries a Commonwealth brain owns (or `.git`).
- * Anything else (a stray README, source tree, etc.) means initializing here would be a
+ * Anything else (a source tree, someone's documents, etc.) means initializing here would be a
  * surprise, so `initBrain` refuses unless `force` is set.
  */
 async function isSafeToInit(dir: string): Promise<boolean> {
@@ -198,6 +276,7 @@ async function writeFileIfAbsent(file: string, contents: string): Promise<void> 
  *   - `.gitattributes` with `merge=union` for derived/append-only files (ADR-0003)
  *   - `.gitignore` ignoring the derived `index/` and `*.db`
  *   - a generated `COMMONWEALTH.md` router (per-project MOCs are generated by regenerateDerived)
+ *   - a starter, USER-OWNED `README.md` (absent-only; never regenerated, pruned, or diffed after)
  *   - a starter `.obsidian/` vault config (shared graph view: kind colors, derived dirs filtered)
  *   - a git repository with an initial commit (a brain *is* a git repo; ADR-0003, ADR-0013)
  *
@@ -268,6 +347,11 @@ export async function initBrain(dir: string, opts: InitBrainOptions = {}): Promi
     "",
   ].join("\n");
   await writeFile(path.join(dir, "COMMONWEALTH.md"), commonwealth);
+
+  // Starter README — the human entry point, in contrast to the generated COMMONWEALTH.md router.
+  // Absent-only, and never regenerated afterwards: brains predating this scaffold already carry a
+  // hand-written README, and every team edits theirs. Overwriting one would destroy real work.
+  await writeFileIfAbsent(path.join(dir, "README.md"), readmeContent(name));
 
   // A brain is a git repo: init + initial commit so the sync engine has one to operate on
   // (issue #66). No-op if `.git` already exists; best-effort if git is unavailable.

@@ -29,9 +29,14 @@ function isNoteFile(rel: string): boolean {
  * the note file itself is blocked — the derived files aren't note-files and so escaped the scrub
  * entirely (#79). Scanning them closes the leak; they're regenerated each sync, so a blocked
  * derived file self-heals once the secret is removed from the source note.
+ *
+ * `README.md` is listed explicitly: it is user-owned, not derived (see `isDerivedMarkdownFile`), so
+ * relying on the derived predicate alone would have silently dropped it out of the scrub. A README
+ * is hand-written prose in a brain that may describe sensitive systems — exactly where a pasted
+ * token lands — so it keeps its pre-commit coverage.
  */
 function isScannableForSecrets(rel: string): boolean {
-  return isNoteFile(rel) || isDerivedMarkdownFile(rel);
+  return isNoteFile(rel) || isDerivedMarkdownFile(rel) || rel.split("/").pop() === "README.md";
 }
 
 /**

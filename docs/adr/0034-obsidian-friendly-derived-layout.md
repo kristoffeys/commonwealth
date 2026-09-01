@@ -52,7 +52,9 @@ in the regenerated derived layer.
 
 3. **One structural "derived file" predicate.** `isDerivedMarkdownFile(relPath)` in core is the single
    source of truth: a note is any `.md` whose parent folder is a kind folder, so *any other* tracked
-   `.md` (the root hub, or a MOC at a project-folder root) is derived. verify, the sync secret-scrub,
+   `.md` (the root hub, or a MOC at a project-folder root) is derived — except `README.md` at any
+   depth, which is user-owned (scaffolded absent-only, then never regenerated, pruned, or diffed).
+   verify, the sync secret-scrub,
    the daemon watch-ignore, and doctor all key off it, replacing the hardcoded `"INDEX.md"` matching.
    `regenerateDerived` **prunes** stale derived files and legacy `INDEX.md`, so an older brain
    auto-migrates on its next regenerate and a removed/renamed project leaves no orphan node.

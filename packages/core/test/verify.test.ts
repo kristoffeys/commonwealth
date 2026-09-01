@@ -90,3 +90,45 @@ describe("verifyBrain", () => {
     expect(check(r, "derived").offenders).toContain("COMMONWEALTH.md");
   });
 });
+
+/**
+ * Regression: a brain must be able to hold a hand-written README. READMEs used to satisfy the
+ * structural derived-file predicate, so `verifyBrain` regenerated the derived layer, failed to
+ * reproduce the README, and reported it as drift forever — failing the generated CI gate on every
+ * push (and `regenerateDerived`'s prune deleted it).
+ */
+describe("verifyBrain with hand-written READMEs", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "cw-verify-readme-"));
+    await initBrain(dir, { name: "readme-brain" });
+    await writeNote(dir, { kind: "memory", title: "Alpha", body: "the alpha fact" });
+    await regenerateDerived(dir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("passes the derived check with edited READMEs at the root and nested", async () => {
+    await fs.writeFile(path.join(dir, "README.md"), "# Our brain\n\nHand-edited.\n", "utf8");
+    await fs.mkdir(path.join(dir, "docs"), { recursive: true });
+    await fs.writeFile(path.join(dir, "docs", "README.md"), "# Docs\n\nBy hand.\n", "utf8");
+    await fs.mkdir(path.join(dir, ".github"), { recursive: true });
+    await fs.writeFile(path.join(dir, ".github", "README.md"), "# CI notes\n", "utf8");
+
+    const r = await verifyBrain(dir);
+    const derived = r.checks.find((c) => c.id === "derived")!;
+    expect(derived.offenders ?? []).toEqual([]);
+    expect(derived.ok).toBe(true);
+    expect(r.ok).toBe(true);
+  });
+
+  it("regenerateDerived does not prune or rewrite a hand-written README", async () => {
+    const body = "# Our brain\n\nStill here after a regenerate.\n";
+    await fs.writeFile(path.join(dir, "README.md"), body, "utf8");
+    await regenerateDerived(dir);
+    expect(await fs.readFile(path.join(dir, "README.md"), "utf8")).toBe(body);
+  });
+});
