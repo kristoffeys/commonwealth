@@ -169,6 +169,8 @@ function printUsage(): void {
       "  commonwealth consolidate  [--dry-run]          supersede near-duplicate canon notes",
       "  commonwealth graduate  [--suggest] [--dry-run]  promote knowledge recurring across ≥2 brains to the org-brain",
       "  commonwealth sync      <start | stop | once>   control/run the sync daemon",
+      "  commonwealth redact    [--dry-run] [--yes] [--engine filter-repo|filter-branch]   PURGE leaked",
+      "                                                 secrets from ALL git history + force-push (destructive)",
       "  commonwealth pending                           list notes awaiting review",
       "  commonwealth promote   <id...> | --all [--pr]  approve staged notes into canon (--pr opens a review PR)",
       "  commonwealth reject    <id...>                 discard staged notes",
@@ -282,6 +284,10 @@ export async function run(argv: string[]): Promise<number> {
       const sub = rest[0] === "once" ? "sync" : (rest[0] ?? "status");
       return delegateSync([sub, ...rest.slice(1)]);
     }
+    case "redact":
+      // Destructive history purge (#271, ADR-0037): rewrite leaked credentials out of ALL history and
+      // force-push. Delegates to the sync bin (stdio is inherited, so its confirm prompt works).
+      return delegateSync(["redact-history", ...rest]);
     case "health":
       return delegateCurate(["health", ...rest]);
     case "map":

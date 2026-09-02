@@ -131,6 +131,7 @@ commonwealth promote --all --pr           # open a brain-repo PR to review the p
 commonwealth reject <id...>               # discard staged notes
 commonwealth sync once                    # sync now (lifecycle hooks do this automatically)
 commonwealth sync start|stop              # opt into/out of the continuous daemon profile
+commonwealth redact [--dry-run] [--yes]   # PURGE leaked secrets from ALL git history + force-push (destructive)
 commonwealth service <install|uninstall|status|restart>  # run sync as an OS background service
 commonwealth health                       # freshness/trust score + capture coverage (what fraction of sessions land a note)
 commonwealth health --fail-under-capture 0.3  # exit non-zero when 7-day capture coverage is below 30% (CI/cron gate)
@@ -148,6 +149,16 @@ commonwealth --version                    # print the installed CLI version
 
 The CLI checks npm at most once a day and prints a note on stderr when a newer version is
 published (TTY only, never in CI; set `COMMONWEALTH_NO_UPDATE_CHECK=1` to silence it).
+
+> **`commonwealth redact` rewrites shared history.** The capture and pre-commit secret gates stop a
+> credential entering a _new_ commit; they can't remove one already sitting in an _old_ blob (a
+> working-tree "redaction" leaves the raw value recoverable via `git log -p` and in every clone).
+> `commonwealth redact` scans **all** history, rewrites every leaked value out of it, and
+> **force-pushes** the result to scrub the remote — so afterwards **every teammate must run
+> `git fetch origin && git reset --hard origin/<branch>`** (unpushed local work needs a manual
+> rebase). It requires typing the brain name to confirm, supports `--dry-run`, and is never run by
+> the sync daemon. Rewriting history is damage-limitation — **rotate the exposed credential too**
+> (ADR-0037).
 
 ### Capturing decisions
 
