@@ -2,6 +2,7 @@ import { loadBrainConfig } from "@cmnwlth/core";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { resolveServerBrain } from "./brain.js";
 import { createServer } from "./server.js";
+import { createMcpSync, formatOutcome, resolveSyncOwner, type McpSync } from "./sync.js";
 
 /**
  * Commonwealth MCP server entry point. Resolves the brain (explicit `COMMONWEALTH_BRAIN_DIR`
@@ -10,6 +11,10 @@ import { createServer } from "./server.js";
  * but its tools report why — "no brain configured" (#64), or, when the config file is broken, that
  * it is unparseable and how to fix it (#210) — rather than silently using the cwd. The transport
  * owns stdout for the JSON-RPC stream, so all diagnostics go to stderr.
+ *
+ * On a host that does NOT run our lifecycle hooks the server also owns sync (#290, ADR-0040): it
+ * pulls before serving and pushes what it writes. Our own plugin sets `COMMONWEALTH_MCP_SYNC=off`
+ * because Claude Code and Codex already sync at their session boundaries (ADR-0032).
  */
 async function main(): Promise<void> {
   const resolved = await resolveServerBrain();
@@ -21,9 +26,16 @@ async function main(): Promise<void> {
           .then((c) => c.name)
           .catch(() => undefined)
       : undefined;
+  // Sync ownership: `server` (default — an unknown, hookless host publishes its own writes) or
+  // `host` (our plugin's hosts, which sync through the lifecycle hooks). There is nothing to sync
+  // when no brain resolved.
+  const sync: McpSync | null =
+    resolved.kind === "brain" && resolveSyncOwner() === "server"
+      ? createMcpSync(resolved.brain)
+      : null;
   const server =
     resolved.kind === "brain"
-      ? createServer(resolved.brain, { kind: "none" }, brainName)
+      ? createServer(resolved.brain, { kind: "none" }, brainName, sync)
       : resolved.kind === "corrupt-config"
         ? createServer(null, {
             kind: "corrupt-config",
@@ -31,6 +43,12 @@ async function main(): Promise<void> {
             error: resolved.error,
           })
         : createServer(null, { kind: "none" });
+  // Pull-on-start, BEFORE serving, so the first read isn't answered from a week-old working copy —
+  // but hard-capped and fail-open: a slow or unreachable remote must degrade to "serving stale
+  // notes", never to "the server won't start". Past the cap the pass keeps running detached and
+  // lands on its own, which is exactly how SessionStart behaves (ADR-0032 §3).
+  if (sync) console.error(formatOutcome("pull-on-start", await sync.pullOnStart()));
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(

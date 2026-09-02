@@ -10,6 +10,7 @@ import {
   readNoteResource,
   RESOURCE_SCHEME,
 } from "./resources.js";
+import { describePublish, type McpSync } from "./sync.js";
 import {
   askBrainTool,
   listWorkState,
@@ -107,11 +108,17 @@ function brainUnavailable(reason: BrainUnavailable): ToolError {
  * @param brainName Human-readable brain name used in resource URIs (`commonwealth://<name>/…`,
  *   #217). Defaults to the brain directory's basename (which is also the scaffold's default config
  *   name); `index.ts` passes the real configured name. Ignored when `brainDir` is `null`.
+ * @param sync Sync driver for hosts that do NOT run our lifecycle hooks (#290, ADR-0040). When
+ *   given, a `remember` that lands in canon is committed + pushed before the tool answers, and the
+ *   answer says whether it actually reached the remote. `null` (the default, and what our own
+ *   plugin configures via `COMMONWEALTH_MCP_SYNC=off`) leaves the write path exactly as it was:
+ *   Claude Code and Codex sync through their hooks, and a second syncer here would be redundant.
  */
 export function createServer(
   brainDir: string | null = process.cwd(),
   unavailable: BrainUnavailable = { kind: "none" },
   brainName: string = brainDir ? path.basename(brainDir) : "commonwealth",
+  sync: McpSync | null = null,
 ): McpServer {
   const server = new McpServer({ name: "commonwealth", version: "0.0.0" });
 
@@ -297,15 +304,31 @@ export function createServer(
       // refresh their listing (#217). In-process trigger only; cross-process sync-driven changes
       // (a teammate's note arriving via `git pull`) are a follow-up (they need a filesystem watcher).
       if (result.status === "promoted") server.sendResourceListChanged();
+      // Publish the write ourselves when this host has no hooks to do it (#290, ADR-0040). Only a
+      // PROMOTED note is worth a pass: `staging/` is gitignored and per-user by design (ADR-0008),
+      // so a staged note is unpublishable until promoted — and a rejected one wrote nothing at all.
+      const outcome = sync && result.status === "promoted" ? await sync.publish() : null;
+      const published = outcome?.status === "synced" && outcome.summary.pushed;
       const text =
         result.status === "promoted"
-          ? `Remembered "${title}" as ${result.id} (${result.path}).`
+          ? `Remembered "${title}" as ${result.id} (${result.path}).` +
+            (outcome ? ` ${describePublish(outcome)}` : "")
           : result.status === "staged"
-            ? `Staged "${title}" for review as ${result.id} (${result.path}); approve with /commonwealth:promote.`
+            ? `Staged "${title}" for review as ${result.id} (${result.path}); approve with /commonwealth:promote.` +
+              // Say it outright rather than let "staged" read as "shared": the review queue never
+              // syncs, so a teammate cannot see this note until someone promotes it.
+              (sync
+                ? " The review queue is local to you and is never synced — promoting it is what shares it."
+                : "")
             : `Did not remember "${title}": ${result.reason}.`;
       return {
         content: [{ type: "text", text }],
-        structuredContent: { ...result },
+        structuredContent: {
+          ...result,
+          // Machine-readable counterpart to the sentence above, so an agent can branch on whether
+          // the note reached the team without parsing prose. Absent when this host owns sync.
+          ...(outcome ? { sync: { status: outcome.status, published } } : {}),
+        },
       };
     },
   );

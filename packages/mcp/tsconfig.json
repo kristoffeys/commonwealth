@@ -8,7 +8,9 @@
       // tsup still externalizes them at build time (they're dependencies).
       "@cmnwlth/core": ["../core/src/index.ts"],
       // curate's LIBRARY entry (src/lib.ts) — NOT src/index.ts, which is the CLI (#82).
-      "@cmnwlth/curate": ["../curate/src/lib.ts"]
+      "@cmnwlth/curate": ["../curate/src/lib.ts"],
+      // sync's LIBRARY entry (src/lib.ts) — NOT src/index.ts, which is the CLI (#290).
+      "@cmnwlth/sync": ["../sync/src/lib.ts"]
     }
   },
   "include": ["src"]

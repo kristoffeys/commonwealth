@@ -67,8 +67,8 @@ commonwealth init
    plus host-specific lifecycle hooks; Codex also gets a generated `AGENTS.md` brain snapshot.
 4. Sets up your capture scope. Sync then runs **automatically in the session lifecycle** — the
    plugin hooks commit/pull/push at session start and after each capture, no background service
-   required (ADR-0032). A resident daemon is available as an opt-in profile for continuous
-   propagation.
+   required (ADR-0032). On a host that runs no hooks the MCP server does it instead (ADR-0040).
+   A resident daemon is available as an opt-in profile for continuous propagation.
 
 > After install, restart the selected agent and open a new session/thread so it loads the plugin.
 > In Claude Code, `/mcp` should list the `commonwealth` server. Beyond its tools (`search`,
@@ -76,7 +76,11 @@ commonwealth init
 > (`/mcp__commonwealth__ask`, `remember`, `decide`, `meeting`, `recall`, `status`, `promote`) and the brain
 > as read-only **resources** (`commonwealth://<brain>/…` — the map, per-kind indexes, and
 > individual notes you can @-mention to pin into context), so Cursor/Windsurf/Zed/Claude Desktop
-> users get Commonwealth's verbs and browsing natively, not just Claude Code.
+> users get Commonwealth's verbs and browsing natively, not just Claude Code. On those hosts the
+> MCP server also **owns sync itself** — it pulls at startup and commits + pushes a note as it is
+> written, telling you whether it actually reached the remote (ADR-0040). What it does *not* do
+> without our hooks is capture automatically or inject context proactively; see
+> [agent parity](docs/07-agent-parity.md#hosts-without-our-hooks).
 > In Codex, run `/hooks`, review Commonwealth, and trust the current hook definitions; unreviewed
 > plugin hooks are skipped.
 
@@ -378,6 +382,12 @@ plugin hooks commit/pull/push at session start and after each capture, so a fres
 with no resident process. The **daemon profile** below is opt-in for cases that want *continuous*
 background propagation regardless of sessions: headless/server installs, shared machines, or
 high-frequency teams. When the daemon is live, the lifecycle hooks stand down (it owns sync).
+
+On a host with no lifecycle hooks at all (Claude Desktop's Chat tab, a bare MCP client) the **MCP
+server** syncs: a bounded pull when it starts, and a commit + push when a note lands in canon, with
+the `remember` answer stating whether it was published (ADR-0040). Our own plugin turns that off
+(`COMMONWEALTH_MCP_SYNC=off` in its MCP declaration) because there the hooks already do it — set
+that variable yourself only if you wire the server up by hand *and* run sync some other way.
 
 `commonwealth sync start` runs the daemon in the **foreground** (it holds the terminal). To keep a
 brain syncing across logout and reboot, install it as a **user-level service** that auto-restarts

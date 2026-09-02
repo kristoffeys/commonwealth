@@ -40,6 +40,7 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 | [0037](0037-purge-secrets-from-history.md)    | Purge leaked secrets from git history: destructive rewrite + force-push | Accepted |
 | [0038](0038-capture-provenance-tier.md)       | Notes carry an ingestion trust tier: internal vs. external | Accepted |
 | [0039](0039-capture-receipts.md)          | Capture receipts: every dropped candidate leaves a structured, persisted trace | Accepted |
+| [0040](0040-sync-for-hookless-hosts.md)   | The MCP server syncs for itself on hosts without our lifecycle hooks | Accepted |
 | [0043](0043-external-ingestion-candidate-producer-contract.md) | External ingestion is a candidate-producer contract; connectors never write to the brain | Accepted |
 | [0044](0044-agent-assisted-ingestion.md)  | Agent-assisted ingestion: the host's own connectors are the fetch layer for OAuth sources | Accepted |
 | [0045](0045-external-intake-does-not-auto-promote.md) | External intake does not auto-promote; bulk import lands as a promotion PR | Accepted |
