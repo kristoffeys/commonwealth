@@ -114,6 +114,13 @@ scrutiny to it because it cannot *see* the difference, and neither can the revie
 
 - #150: the connectors themselves, and the `autoPromote` / gate policy for external content, chosen
   against a real connector's output.
-- Whether `graduate` should refuse an `external` note (ADR-0023 interaction).
+- **Passes that synthesize a NEW note from an existing one currently drop the tier.**
+  `synthesizeCandidate` in graduation (ADR-0023) and the reclassify pass (ADR-0030 / #265) both
+  build a fresh candidate from a source note's title/body/tags and do not carry its `intake`
+  forward, so an `external` note that graduates cross-brain or is reclassified from `memory` into
+  `decision` becomes internal-by-absence in the note that replaces it. Both files belong to other
+  in-flight work and are deliberately untouched here; recorded so the gap is visible rather than
+  discovered later. Carrying the tier through derivation — and deciding whether graduation should
+  refuse an `external` note at all (ADR-0023 interaction) — is a follow-up.
 - Meeting-note ingestion (#270's `meeting` kind): transcripts arriving from a recorder are a likely
   `external` source, and that kind inherits `intake` from `baseShape` for free.
