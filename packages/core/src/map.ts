@@ -9,7 +9,7 @@ import { NOTE_KINDS, type Note, type NoteKind } from "./schema.js";
  * decay-focused {@link brainHealth} rollup; the CLI `map` command renders both together.
  */
 
-/** Note count for one of the four kinds. All four kinds are always present (0 if none). */
+/** Note count for one of the note kinds. Every kind is always present (0 if none). */
 export interface KindCount {
   kind: NoteKind;
   count: number;
@@ -36,7 +36,7 @@ export interface BrainMap {
 export const UNATTRIBUTED = "(unattributed)";
 
 /**
- * Compute the {@link BrainMap} for `notes`. Every one of the four {@link NOTE_KINDS} appears in
+ * Compute the {@link BrainMap} for `notes`. Every one of the {@link NOTE_KINDS} appears in
  * `byKind` (count 0 when absent) so coverage gaps are legible, and contributors are ranked by note
  * count then author name. Notes with no `author` are grouped under {@link UNATTRIBUTED}.
  */

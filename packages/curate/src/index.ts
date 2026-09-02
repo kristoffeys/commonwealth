@@ -148,8 +148,11 @@ function usage(): void {
       "  commonwealth-curate reject <id...> [--dir <brain>]",
       "  commonwealth-curate approve-all [--dir <brain>]",
       "  commonwealth-curate promote-pr <id...> | --all [--dir <brain>]   open a promotion PR",
-      "  commonwealth-curate stage --kind <kind> --title <t> --body <b> [--tags a,b]",
-      "      [--deciders a,b] [--status <s>] [--dir <brain>]   (deciders/status: decisions)",
+      "  commonwealth-curate stage --kind <kind> --title <t> --body <b|-> [--tags a,b]",
+      "      [--deciders a,b] [--status <s>] [--owner <o>] [--relates id,id] [--dir <brain>]",
+      '      [--attendees "a, b"] [--meeting-date YYYY-MM-DD] [--source-type <plaud|recording|paste|manual>]',
+      "      (deciders/status: decisions; owner: work-state; attendees/meeting-date/source-type: meeting;",
+      "       --body - reads the body from STDIN so a large transcript is piped, not passed as argv)",
       "  commonwealth-curate context [--dir <brain>] [--cwd <dir>] [--query <q>] [--limit <n>]",
       "  commonwealth-curate capture [--dir <brain>] [--cwd <dir>] [--from <json-file>]",
       "  commonwealth-curate neighbors [--dir <brain>] [--cwd <dir>] [--from <json-file>] [--k <n>]",
@@ -288,18 +291,37 @@ async function cmdStage(dir: string, args: string[]): Promise<void> {
       // as kind-specific `fields` on the note (schema-validated); meaningful for `--kind decision`.
       deciders: { type: "string" },
       status: { type: "string" },
+      // Work-state provenance: the owner of an action item / workstream (`--kind work-state`).
+      owner: { type: "string" },
+      // Meeting-record fields (ADR-0036, `--kind meeting`): attendees (comma-split), the calendar
+      // date (defaults to today), and how the raw material arrived (plaud/recording/paste/manual).
+      attendees: { type: "string" },
+      "meeting-date": { type: "string" },
+      "source-type": { type: "string" },
+      // Cross-links usable on ANY kind: the extracted notes point `relates` back at the meeting id.
+      relates: { type: "string" },
       // Tolerated here (handled by the top-level parser) so `--dir` doesn't error.
       dir: { type: "string" },
     },
     allowPositionals: false,
   });
 
-  const { kind, title, body, tags, deciders, status } = values;
-  if (!kind || !title || !body) {
+  const { kind, title, tags, deciders, status, owner, attendees, relates } = values;
+  const sourceType = values["source-type"];
+  const meetingDate = values["meeting-date"];
+  if (!kind || !title || values.body === undefined) {
     throw new Error("stage requires --kind, --title and --body");
   }
   if (!isNoteKind(kind)) {
     throw new Error(`invalid --kind "${kind}"; expected one of: ${NOTE_KINDS.join(", ")}`);
+  }
+
+  // A meeting transcript (a Plaud export, a full recording) is far too large to pass as a shell
+  // `--body` argv (ARG_MAX). `--body -` reads the whole body from STDIN instead, so it is piped,
+  // never placed on the command line. The staged content still runs the secret + dedup gates.
+  const body = values.body === "-" ? await readStdin() : values.body;
+  if (body.length === 0) {
+    throw new Error("stage requires a non-empty --body (or piped content with `--body -`)");
   }
 
   const csv = (s: string): string[] =>
@@ -312,6 +334,14 @@ async function cmdStage(dir: string, args: string[]): Promise<void> {
   const fields: Record<string, unknown> = {};
   if (deciders) fields.deciders = csv(deciders);
   if (status) fields.status = status;
+  if (owner) fields.owner = owner;
+  if (relates) fields.relates = csv(relates);
+  if (kind === "meeting") {
+    // Default the meeting date to today (YYYY-MM-DD) when the caller omits it.
+    fields.meeting_date = meetingDate ?? new Date().toISOString().slice(0, 10);
+    if (attendees) fields.attendees = csv(attendees);
+    if (sourceType) fields.source_type = sourceType;
+  }
 
   const candidate: NewNoteInput = {
     kind,
@@ -539,7 +569,9 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
     const withSource = c.source ? c : { ...c, source };
     const src = withSource.source;
     const linkedProject =
-      typeof src === "string" && src.length > 0 ? (projectForSource(src, aliasMap) ?? undefined) : undefined;
+      typeof src === "string" && src.length > 0
+        ? (projectForSource(src, aliasMap) ?? undefined)
+        : undefined;
     const project = withSource.project ?? stamp?.project ?? linkedProject;
     const tags =
       stamp?.tag && !(withSource.tags ?? []).includes(stamp.tag)
@@ -1071,7 +1103,9 @@ async function cmdProject(dir: string, args: string[]): Promise<number> {
       return renderRelayout(result);
     } catch (err) {
       // A destination collision fails the whole pass closed (nothing was moved) — surface it clearly.
-      console.error(`[commonwealth-curate] relayout aborted: ${err instanceof Error ? err.message : err}`);
+      console.error(
+        `[commonwealth-curate] relayout aborted: ${err instanceof Error ? err.message : err}`,
+      );
       return 1;
     }
   }

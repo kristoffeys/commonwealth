@@ -39,11 +39,11 @@ describe("MCP prompts (#216)", () => {
     await server.close();
   });
 
-  it("lists the six ported command prompts with argument metadata", async () => {
+  it("lists the ported command prompts with argument metadata", async () => {
     const { client, server } = await connectedClient();
     const { prompts } = await client.listPrompts();
     const names = prompts.map((p) => p.name).sort();
-    expect(names).toEqual(["ask", "decide", "promote", "recall", "remember", "status"]);
+    expect(names).toEqual(["ask", "decide", "meeting", "promote", "recall", "remember", "status"]);
 
     const ask = prompts.find((p) => p.name === "ask");
     expect(ask?.arguments?.map((a) => a.name)).toEqual(["question"]);

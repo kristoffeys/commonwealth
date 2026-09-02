@@ -94,7 +94,7 @@ function readmeContent(name: string): string {
     "",
     "## What's in here",
     "",
-    "Four kinds of note:",
+    "Five kinds of note:",
     "",
     "| Kind | Holds |",
     "| --- | --- |",
@@ -102,6 +102,7 @@ function readmeContent(name: string): string {
     "| `decisions` | Team and business decisions: what was decided, when, by whom, and why |",
     "| `work-state` | In-flight context — what is underway right now, and where it stands |",
     "| `people` | Who is who: roles, responsibilities, and areas of ownership |",
+    "| `meetings` | Immutable meeting records: a structured summary + folded-in transcript, with decisions/actions extracted as their own notes |",
     "",
     "Notes are grouped per project, with a shared bucket for anything unattributed:",
     "",
@@ -271,7 +272,7 @@ async function writeFileIfAbsent(file: string, contents: string): Promise<void> 
 /**
  * Initialize a brain repository skeleton at `dir` (see docs/01-architecture.md §1,
  * docs/02-data-model.md). Creates:
- *   - the four kind folders: memory/ decisions/ work-state/ people/ (each with `.gitkeep`)
+ *   - the five kind folders: memory/ decisions/ work-state/ people/ meetings/ (each with `.gitkeep`)
  *   - `.commonwealth/` with `schema-version` and a `config.json` (name, schemaVersion, remotes, curation)
  *   - `.gitattributes` with `merge=union` for derived/append-only files (ADR-0003)
  *   - `.gitignore` ignoring the derived `index/` and `*.db`
