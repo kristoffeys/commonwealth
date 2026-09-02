@@ -88,9 +88,7 @@ export async function askBrain(
   const maxChars = opts.maxChars ?? 4000;
   // Sink for the result-set-level pruned-count (#272 follow-up); only wired up when diagnostics
   // is requested, so an uninstrumented caller pays nothing and sees no shape change.
-  const prunedOut = opts.diagnostics
-    ? { prunedBelowThreshold: null as number | null }
-    : undefined;
+  const prunedOut = opts.diagnostics ? { prunedBelowThreshold: null as number | null } : undefined;
   const results = await search(brainDir, question, {
     limit,
     ...(opts.minLexicalSupport !== undefined ? { minLexicalSupport: opts.minLexicalSupport } : {}),

@@ -126,8 +126,9 @@ describe("createServer", () => {
     // No gate on this lexical-only brain — the honest coverage value is null, and since nothing
     // was pruned the text carries no "additional candidates" note (#272 follow-up).
     expect(askText).not.toContain("additional candidate");
-    const askCoverage = (askDiag.structuredContent as { coverage: { prunedBelowThreshold?: unknown } })
-      .coverage;
+    const askCoverage = (
+      askDiag.structuredContent as { coverage: { prunedBelowThreshold?: unknown } }
+    ).coverage;
     expect(askCoverage.prunedBelowThreshold).toBeNull();
 
     await client.close();
