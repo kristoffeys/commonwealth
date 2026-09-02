@@ -236,7 +236,7 @@ export async function captureCandidates(
 
   const rejected = [...preRejected, ...result.rejected];
 
-  // (4) Persist a receipt per drop (ADR-0037, #266). This runs in the detached SessionEnd worker,
+  // (4) Persist a receipt per drop (ADR-0039, #266). This runs in the detached SessionEnd worker,
   // AFTER everything that can affect canon — so a receipt-write failure can never cost a note — and
   // it is the only reason a user can still be told "2 decision candidates were vetoed by autoAdr"
   // once this process is gone. Derived + gitignored + never synced; see `@cmnwlth/core/receipts`.

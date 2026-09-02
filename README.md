@@ -189,7 +189,7 @@ commonwealth promote <id...> | --all         # approve into canon
 #### Why a candidate wasn't captured
 
 A gate declining a candidate is normal; a gate declining it *silently* is a bug. Every drop leaves
-a **capture receipt** ([ADR-0037](docs/adr/0037-capture-receipts.md)) recording what class it was —
+a **capture receipt** ([ADR-0039](docs/adr/0039-capture-receipts.md)) recording what class it was —
 duplicate, secret-blocked, too thin, `autoAdr`-vetoed, trivia — whether you can do anything about
 it, and what. `commonwealth status` shows the rollup; `commonwealth doctor` names the fix:
 

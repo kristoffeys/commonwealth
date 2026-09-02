@@ -136,7 +136,7 @@ export interface DoctorEnv {
   /** Optional host-specific Claude/Codex diagnostics (#226); absent preserves the legacy report. */
   hostIntegrations?: () => Promise<DoctorCheck[]>;
   /**
-   * Persisted capture receipts for a brain (ADR-0037, #266), oldest first — one per candidate the
+   * Persisted capture receipts for a brain (ADR-0039, #266), oldest first — one per candidate the
    * curation gate DROPPED. Optional: when absent (older API consumers), the drop links are simply
    * not emitted. This is what turns "capture ran and saved nothing" from a shrug into a named,
    * countable, actionable answer.
@@ -516,7 +516,7 @@ function captureOutcomeCheck(entries: CaptureLogEntry[]): DoctorCheck {
 }
 
 /**
- * The links built from persisted capture receipts (ADR-0037, #266). Two checks, because they answer
+ * The links built from persisted capture receipts (ADR-0039, #266). Two checks, because they answer
  * two different questions and each deserves exactly one fix line:
  *
  * - **Decisions** — what #266 asks for: say `autoAdr` vetoed decision candidates, say how many, say
@@ -906,7 +906,7 @@ export async function diagnose(
         : `${staged} note(s) awaiting review${staged >= 25 ? " — consider `commonwealth promote --all`." : "."}`,
   });
 
-  // 6b) Dropped candidates (ADR-0037, #266): the receipts persisted by the capture worker. Without
+  // 6b) Dropped candidates (ADR-0039, #266): the receipts persisted by the capture worker. Without
   //     this, a gate veto — `autoAdr` off, a pasted credential, a body under the relevance floor —
   //     left no trace once the detached worker exited, and "capture ran, brain stayed empty" had no
   //     answer anywhere. A veto is a normal outcome; a SILENT veto is the bug (CLAUDE.md #4).

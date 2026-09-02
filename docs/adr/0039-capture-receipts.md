@@ -1,4 +1,4 @@
-# 37. Capture receipts: every dropped candidate leaves a structured, persisted trace
+# 39. Capture receipts: every dropped candidate leaves a structured, persisted trace
 
 - Status: Accepted
 - Date: 2026-09-02

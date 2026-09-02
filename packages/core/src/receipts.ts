@@ -3,7 +3,7 @@ import path from "node:path";
 import { hasSecrets, type ScanOptions } from "./secrets.js";
 
 /**
- * Capture receipts (ADR-0037, #266). Curation is *gated* — a veto is a normal, correct outcome —
+ * Capture receipts (ADR-0039, #266). Curation is *gated* — a veto is a normal, correct outcome —
  * but CLAUDE.md principle 4 says it must never be SILENT, and until now a dropped candidate left
  * only a free-text `reason` string on a `CurateResult` that the detached capture worker threw away
  * when it exited. `autoAdr: false` silently swallowing every decision candidate (#266) is one
@@ -171,7 +171,7 @@ export function dropFor(category: DropCategory, ctx: DropContext = {}): DropClas
         recoverable: false,
         cause: `A curator declined the candidate with a reason this version has no category for${detail}.`,
         nextAction:
-          "Give the gate its own `DropCategory` (ADR-0037) so the drop stops being opaque.",
+          "Give the gate its own `DropCategory` (ADR-0039) so the drop stops being opaque.",
       };
   }
 }

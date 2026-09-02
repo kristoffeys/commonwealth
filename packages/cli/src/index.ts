@@ -278,7 +278,7 @@ export async function run(argv: string[]): Promise<number> {
       if (captures.length > 0) {
         process.stdout.write(`${formatCaptureLine(captures[captures.length - 1]!)}\n`);
       }
-      // Then what curation DROPPED (ADR-0037, #266), aggregated by class — "2 autoAdr-vetoed,
+      // Then what curation DROPPED (ADR-0039, #266), aggregated by class — "2 autoAdr-vetoed,
       // 1 secret-blocked" is actionable in a way three unrelated reason strings never were. Silent
       // on an empty receipt log (nothing dropped, or a fresh clone whose derived state is gone).
       const brainDir = await resolveBrainDir(process.cwd());

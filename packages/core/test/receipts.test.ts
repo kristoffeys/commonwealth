@@ -19,7 +19,7 @@ import {
 } from "../src/receipts.js";
 
 /**
- * Capture receipts (ADR-0037, #266): the structured, persisted answer to "a candidate was dropped —
+ * Capture receipts (ADR-0039, #266): the structured, persisted answer to "a candidate was dropped —
  * why, and what do I do about it?". These cover the classification table, the redaction rule, the
  * derived/disposable storage (including the CONCURRENT writer path, which is the one that must not
  * lose or tear receipts), the rolling bound, and the aggregate.

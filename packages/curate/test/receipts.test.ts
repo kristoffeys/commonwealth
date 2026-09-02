@@ -7,7 +7,7 @@ import { captureCandidates } from "../src/capture.js";
 import { curate } from "../src/curate.js";
 
 /**
- * Capture receipts through the real gates (ADR-0037, #266). The unit table lives in
+ * Capture receipts through the real gates (ADR-0039, #266). The unit table lives in
  * `@cmnwlth/core`; these prove the wiring: every gate that drops a candidate attaches a structured
  * classification, and `captureCandidates` PERSISTS one receipt per drop into the brain's derived
  * `index/` — the thing that was missing when a detached SessionEnd worker vetoed a decision and

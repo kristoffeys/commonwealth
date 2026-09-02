@@ -451,7 +451,7 @@ describe("commonwealth doctor — diagnose()", () => {
   });
 
   /**
-   * Capture receipts (ADR-0037, #266). `receipts` is optional on {@link DoctorEnv}, so the checks
+   * Capture receipts (ADR-0039, #266). `receipts` is optional on {@link DoctorEnv}, so the checks
    * above are unchanged for callers that do not supply it; these cover the two links it adds.
    */
   describe("dropped candidates", () => {

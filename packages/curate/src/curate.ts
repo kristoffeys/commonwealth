@@ -126,7 +126,7 @@ export const defaultCurator: Curator = {
  *
  * `reason` is the original free-text string and stays exactly as it was — stderr breadcrumbs, the
  * `llm-duplicate` tally in the CLI, and the MCP `remember` result all still read it. `drop` is the
- * structured receipt added by ADR-0037 (#266): a stable category, whether the user can recover the
+ * structured receipt added by ADR-0039 (#266): a stable category, whether the user can recover the
  * candidate, and what to do about it. It is REQUIRED, not optional, on purpose — that is what makes
  * it impossible to add a new gate here without also saying what its drop means.
  */
@@ -134,7 +134,7 @@ export interface RejectedCandidate {
   candidate: NewNoteInput;
   reason: string;
   duplicateOf?: string;
-  /** Structured classification of this drop (ADR-0037). */
+  /** Structured classification of this drop (ADR-0039). */
   drop: DropClassification;
 }
 
