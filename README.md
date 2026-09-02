@@ -144,6 +144,8 @@ commonwealth project list                 # engagement links: which sources are 
 commonwealth project link <id> <src...>   # link a dev repo + business folder into one engagement
 commonwealth project unlink <id> [<src>]  # undo a link (derived views only; no notes change)
 commonwealth project adopt <id> [--dry-run]  # promote a proven link into note frontmatter (one commit), then retire the entry
+commonwealth project relayout [<id>] [--dry-run]  # move canon files so folders key off the resolved project (<project>/<kind>/)
+commonwealth project rename <old> <new> [--dry-run]  # rename a project everywhere it is the identity (alias key + frontmatter) and move the folders, one commit
 commonwealth statusline [install]         # ambient status line for Claude Code (see below)
 commonwealth graduate [--suggest]         # propose facts recurring across ≥2 brains to the org-brain
 commonwealth consolidate [--dry-run]      # supersede near-duplicate canon notes onto one survivor
@@ -374,6 +376,14 @@ reviewable commit, then retires the now-redundant alias entry — the identity n
 themselves (`--dry-run` previews the counts first). Adoption refuses on a dirty worktree, never
 touches a note that already declares a different project (reported as a conflict), and leaves the
 derived views byte-identical (the read-time and save-time tiers resolve the same way).
+
+Need to **rename** an engagement? `commonwealth project rename <old> <new>` changes the id
+everywhere it is the identity — the alias-map key (carrying its sources and customer) and any note
+that declares `project: <old>` in its own frontmatter — then moves the folders to follow so every
+note lands under `<new>/<kind>/…`, all in one reviewable commit (`--dry-run` previews the key
+rename, the re-stamp count and the move plan). It refuses to run if `<new>` already names a project
+(never a silent merge — pick a free id or unlink the existing one first) and, like adopt, refuses on
+a dirty worktree.
 
 ## Optional: run sync as a continuous background service (daemon profile)
 

@@ -38,6 +38,7 @@ import {
 } from "@cmnwlth/core";
 import { adoptProject, type AdoptResult } from "./adopt.js";
 import { relayoutBrain, type RelayoutResult } from "./relayout.js";
+import { renameProject, type RenameResult } from "./rename.js";
 import { captureCandidates } from "./capture.js";
 import { consolidateCanon } from "./consolidate.js";
 import { graduateToOrgBrain } from "./graduate.js";
@@ -166,7 +167,8 @@ function usage(): void {
       "  commonwealth-curate health [--dir <brain>] [--fail-under-capture <ratio>]",
       "  commonwealth-curate map [--dir <brain>]",
       "  commonwealth-curate project <list | link <id> <src...> | unlink <id> [<src...>]",
-      "      | adopt <id> [--dry-run] | relayout [<id>] [--dry-run]> [--dir <brain>]",
+      "      | adopt <id> [--dry-run] | relayout [<id>] [--dry-run]",
+      "      | rename <old> <new> [--dry-run]> [--dir <brain>]",
       "  commonwealth-curate status-cache [--dir <brain>]",
       "  commonwealth-curate consolidate [--dry-run] [--force] [--dir <brain>]",
       "  commonwealth-curate reclassify [--project <src>] [--limit <n>] (--emit | [--apply] [--from <file>]) [--dir <brain>]",
@@ -997,6 +999,8 @@ async function cmdMap(dir: string): Promise<void> {
  *     notes' frontmatter in one commit, then retire the redundant alias entry (ADR-0031, #241).
  *   - `relayout [projectId] [--dry-run]` — MOVE canon note files so the physical tree keys off the
  *     resolved project (`<project>/<kind>/`), stamping `project` onto each moved note (ADR-0035).
+ *   - `rename <old> <new> [--dry-run]`   — rename a project id everywhere it is the identity (alias
+ *     key + declared frontmatter) and move the folders to follow, in one commit (#304).
  *
  * Writes go through the guarded {@link persistProjectAliasMap} (refuses to clobber a corrupt map),
  * and every mutation regenerates the derived router + index so the grouping updates atomically with
@@ -1125,9 +1129,70 @@ async function cmdProject(dir: string, args: string[]): Promise<number> {
     }
   }
 
+  if (sub === "rename") {
+    const [oldId, newId] = rest;
+    if (!oldId || !newId) {
+      console.error("usage: commonwealth project rename <old> <new> [--dry-run]");
+      return 2;
+    }
+    // `--dry-run` is a flag, not a positional; re-parse `args` to read it cleanly.
+    const { values } = parseArgs({
+      args,
+      options: { dir: { type: "string" }, "dry-run": { type: "boolean" } },
+      allowPositionals: true,
+      strict: false,
+    });
+    try {
+      const result = await renameProject(dir, oldId, newId, {
+        dryRun: values["dry-run"] === true,
+      });
+      return renderRename(result);
+    } catch (err) {
+      // A destination collision fails the whole relayout closed (nothing moved) — surface it clearly.
+      console.error(
+        `[commonwealth-curate] rename aborted: ${err instanceof Error ? err.message : err}`,
+      );
+      return 1;
+    }
+  }
+
   console.error(`Unknown project subcommand: ${sub}`);
-  console.error("usage: commonwealth project <list | link | unlink | adopt | relayout>");
+  console.error("usage: commonwealth project <list | link | unlink | adopt | relayout | rename>");
   return 2;
+}
+
+/** Render a {@link RenameResult} to stdout (summary) / stderr (refusals); returns the exit code. */
+function renderRename(result: RenameResult): number {
+  if (result.skipped) {
+    console.error(`[commonwealth-curate] rename skipped: ${result.skipped}`);
+    return 1;
+  }
+
+  const arrow = `"${result.oldId}" -> "${result.newId}"`;
+  const restamped = result.restamped.length;
+  const moved = result.moves.length;
+
+  if (result.dryRun) {
+    console.log(`Dry run — no changes written. Rename ${arrow}:`);
+  } else if (result.committed) {
+    console.log(`Renamed ${arrow}; committed ${result.commit}.`);
+  } else {
+    console.log(`Renamed ${arrow} (no commit — non-git brain or no changes).`);
+  }
+
+  if (result.keyRenamed) {
+    const customer = result.customer ? ` (customer: ${result.customer})` : "";
+    const carried = result.sources.length > 0 ? result.sources.join(", ") : "(none)";
+    console.log(`  alias key renamed${customer}; sources carried: ${carried}`);
+  } else {
+    console.log("  no alias-map key (identity came from note frontmatter / source)");
+  }
+  console.log(`  ${result.dryRun ? "would re-stamp" : "re-stamped"} ${restamped} note(s)`);
+  console.log(`  ${result.dryRun ? "would move" : "moved"} ${moved} file(s)`);
+  for (const m of result.moves) {
+    console.log(`    ${m.from}  ->  ${m.to}`);
+  }
+  return 0;
 }
 
 /** Render a {@link RelayoutResult} to stdout; returns the exit code. */
