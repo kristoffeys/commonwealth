@@ -227,3 +227,21 @@ export async function push(dir: string): Promise<void> {
   if (!branch) return;
   await git.push(["-u", "origin", branch]);
 }
+
+/**
+ * Force-push `branch` to `origin`, overwriting the remote ref with local (rewritten) history. Used
+ * ONLY by the explicit history-redaction remediation (`redactHistory`, #271) to scrub a leaked
+ * credential from the shared remote after rewriting it out locally — never by ordinary sync, which
+ * must never clobber a teammate's commits. `tags` also force-pushes tags (their targets move when
+ * history is rewritten). No-ops when there is no `origin` remote.
+ */
+export async function forcePush(
+  dir: string,
+  branch: string,
+  opts: { tags?: boolean } = {},
+): Promise<void> {
+  if (!(await hasRemote(dir))) return;
+  const git = openRepo(dir);
+  await git.raw(["push", "--force", "origin", branch]);
+  if (opts.tags) await git.raw(["push", "--force", "--tags", "origin"]);
+}
