@@ -1,7 +1,9 @@
 import path from "node:path";
 import {
   acquireSyncLock,
+  brainConfigPath,
   buildIndex,
+  confirmCheckpoint,
   cosineSimilarity,
   embedProvider,
   ensureBrainCloned,
@@ -11,12 +13,14 @@ import {
   listWiredBrainDirs,
   loadBrainConfig,
   loadVectors,
+  quietTick,
+  recordCheckpoint,
   type Embedder,
   type NewNoteInput,
   type Note,
 } from "@cmnwlth/core";
 import { curate, defaultCurator, textSimilarity, type RejectedCandidate } from "./curate.js";
-import { graduationClusterKey, loadTombstonedKeys } from "./tombstone.js";
+import { graduationClusterKey, loadTombstonedKeys, tombstoneDir } from "./tombstone.js";
 
 /**
  * Org-brain graduation (#110, ADR-0023): detect a fact/decision that **recurs across ≥2 project
@@ -43,6 +47,18 @@ import { graduationClusterKey, loadTombstonedKeys } from "./tombstone.js";
  * the org-brain's shared tombstone store (see {@link loadTombstonedKeys}); this pass computes each
  * surviving cluster's key and skips tombstoned ones, reporting a `suppressed` count rather than
  * silently dropping them. `--include-rejected` (`GraduateOptions.includeRejected`) resurfaces them.
+ *
+ * QUIET TICK (#273): this is the most expensive pass in the codebase — it resolves an embeddings
+ * provider, may re-index every wired brain, and then runs an O(n·m) cross-brain cosine scan. Run on
+ * a schedule it is almost always repeated work for a guaranteed no-op. A cheap checkpoint pre-flight
+ * ({@link quietTick}) fingerprints EVERY input the pass reads and skips the whole stage — before the
+ * embedder is even resolved — when none of them has changed since the last successful run. The
+ * fingerprinted inputs are each project brain's canon, the org-brain's canon (the dedup gate reads
+ * it), the org-brain's `staging/` (so a hand-deleted candidate is re-staged rather than lost), and
+ * the tombstone store (so a fresh rejection is honoured), and the org-brain's own config (its
+ * feature flags gate what may graduate). The checkpoint advances ONLY on a pass that scanned
+ * everything: every `skipped:` bail-out, every throw, and any PARTIAL pass that could not read a
+ * brain ({@link completed}) leaves it untouched, so that window is re-processed.
  */
 
 /** Default cosine similarity at/above which two same-kind notes count as the same fact. */
@@ -61,8 +77,17 @@ export interface GraduateOptions {
   orgBrainDir?: string;
   /** Cosine threshold (default {@link DEFAULT_RECURRENCE_THRESHOLD}). */
   threshold?: number;
-  /** Report the plan without staging anything. The org-brain lock is still taken. */
+  /**
+   * Report the plan without staging anything. The org-brain lock is still taken. A dry run
+   * BYPASSES the quiet-tick guard and never touches the checkpoint (#273): it is a diagnostic the
+   * user asked for explicitly, and its "would stage" answer must not mark a window as processed.
+   */
   dryRun?: boolean;
+  /**
+   * Run the full pass even when the quiet-tick guard says nothing has changed (#273). The escape
+   * hatch for "I don't trust the checkpoint".
+   */
+  force?: boolean;
   /**
    * The one shared embedder used across every brain so vectors are comparable. Injected in tests;
    * in production it is resolved from the org-brain's embeddings config. Passing `null` forces the
@@ -112,6 +137,23 @@ export interface GraduationResult {
   suppressed: number;
   /** Set when the whole pass did nothing (no org-brain, lock held, no embedder). */
   skipped?: string;
+  /**
+   * Set when the quiet-tick guard skipped the expensive stage because no input brain had changed
+   * since this ISO 8601 time (#273). A deliberate no-op, NOT a failure and NOT `skipped:`.
+   */
+  unchangedSince?: string;
+}
+
+/**
+ * Whether a pass scanned everything it set out to scan (#273). A brain whose sync lock was held, or
+ * whose index rebuild failed, was NOT read — its notes never entered the pool — so the pass is only
+ * PARTIALLY complete, and advancing the checkpoint would make the next tick skip that brain
+ * entirely until something unrelated changed. That is the silent skip the quiet-tick guard must
+ * never introduce, so a partial pass leaves the checkpoint where it was and the window is
+ * re-processed. The skips are still reported to the caller either way.
+ */
+function completed(skippedBrains: GraduationResult["skippedBrains"]): boolean {
+  return skippedBrains.length === 0;
 }
 
 /** One project note carried through detection with its brain + comparable vector. */
@@ -281,7 +323,49 @@ export async function graduateToOrgBrain(opts: GraduateOptions = {}): Promise<Gr
   const release = await acquireSyncLock(orgBrainDir);
   if (!release) return empty("another writer holds the org-brain sync lock");
   try {
-    // 3) Resolve the ONE shared embedder — the whole cross-brain comparison rests on it.
+    // 3) Enumerate project brains (org-brain excluded), dedupe by absolute path. Cheap (a registry
+    //    read), and it must happen before the quiet-tick check so the fingerprint covers every
+    //    brain the pass would actually read.
+    const orgAbs = orgBrainDir;
+    const brainDirs = [
+      ...new Set(
+        (opts.brainDirs ?? (await listWiredBrainDirs({ registryPath: opts.registryPath })))
+          .map((d) => path.resolve(d))
+          .filter((d) => d !== orgAbs),
+      ),
+    ];
+
+    // 4) Quiet-tick pre-flight (#273) — deliberately BEFORE the embedder is resolved, which is the
+    //    expensive part (it can load a local model). Keyed on the org-brain, since that is the
+    //    brain this pass writes to and whose derived index area holds the checkpoint. Captured now,
+    //    recorded only after the pass completes, so any throw below re-processes this window.
+    let fingerprint: string | undefined;
+    if (!opts.dryRun) {
+      const tick = await quietTick(orgAbs, "graduate", {
+        trees: [orgAbs, path.join(orgAbs, "staging"), ...brainDirs],
+        dirs: [tombstoneDir(orgAbs)],
+        // The org config is a real input, not decoration: `features.autoAdr` decides whether
+        // decisions may graduate at all, and `features.semanticDedup` + `embeddings` change how
+        // curate()'s gate judges the candidates. Flipping a flag must NOT read as a quiet tick.
+        files: [brainConfigPath(orgAbs)],
+        params: { threshold, includeRejected: opts.includeRejected === true },
+      });
+      if (tick.unchanged && !opts.force) {
+        await confirmCheckpoint(orgAbs, "graduate", Date.now());
+        return {
+          clusters: 0,
+          candidates: [],
+          staged: [],
+          rejected: [],
+          skippedBrains: [],
+          suppressed: 0,
+          unchangedSince: tick.since,
+        };
+      }
+      fingerprint = tick.fingerprint;
+    }
+
+    // 5) Resolve the ONE shared embedder — the whole cross-brain comparison rests on it.
     let embedder: Embedder | null;
     if (opts.embedder !== undefined) {
       embedder = opts.embedder;
@@ -293,23 +377,15 @@ export async function graduateToOrgBrain(opts: GraduateOptions = {}): Promise<Gr
         embedder = null;
       }
     }
+    // No embedder ⇒ the pass could not run. `empty()` returns a `skipped:` result WITHOUT recording
+    // the checkpoint, so once a provider is configured the same window is processed in full.
     if (!embedder) return empty("no embedder available for cross-brain comparison");
 
     // decisions graduate only when the org-brain captures decisions as canon (mirrors curate()).
     const orgConfig = await loadBrainConfig(orgBrainDir);
     const allowDecisions = Boolean(orgConfig.features.autoAdr);
 
-    // 4) Enumerate project brains (org-brain excluded), dedupe by absolute path.
-    const orgAbs = orgBrainDir;
-    const brainDirs = [
-      ...new Set(
-        (opts.brainDirs ?? (await listWiredBrainDirs({ registryPath: opts.registryPath })))
-          .map((d) => path.resolve(d))
-          .filter((d) => d !== orgAbs),
-      ),
-    ];
-
-    // 5) Build the cross-brain pool of opted-in notes with comparable vectors.
+    // 6) Build the cross-brain pool of opted-in notes with comparable vectors.
     const pool: PoolEntry[] = [];
     const skippedBrains: GraduationResult["skippedBrains"] = [];
     for (const dir of brainDirs) {
@@ -324,7 +400,7 @@ export async function graduateToOrgBrain(opts: GraduateOptions = {}): Promise<Gr
       pool.push(...loaded.entries);
     }
 
-    // 6) Cluster, drop reviewer-rejected clusters (#172), synthesize candidates, stage via curate().
+    // 7) Cluster, drop reviewer-rejected clusters (#172), synthesize candidates, stage via curate().
     //    A cluster's key is a stable hash of its origin refs — the same identity the tombstone was
     //    written under on reject — so a rejected cluster is skipped even after paraphrase, as long
     //    as it still clusters to the same origin set. Skips are counted, never silently dropped.
@@ -355,6 +431,11 @@ export async function graduateToOrgBrain(opts: GraduateOptions = {}): Promise<Gr
     }
 
     if (opts.dryRun || inputs.length === 0) {
+      // Nothing to stage is still a completed pass, so the checkpoint advances (a dry run never
+      // has a fingerprint, so it cannot) — unless a brain was skipped; see {@link completed}.
+      if (fingerprint !== undefined && completed(skippedBrains)) {
+        await recordCheckpoint(orgAbs, "graduate", fingerprint, Date.now());
+      }
       return {
         clusters: candidates.length,
         candidates,
@@ -368,6 +449,12 @@ export async function graduateToOrgBrain(opts: GraduateOptions = {}): Promise<Gr
     // curate() runs the secret + dedup gate and stages into the org-brain's local staging/ —
     // NEVER captureCandidates, so nothing auto-promotes across the trust boundary.
     const curateResult = await curate(orgBrainDir, inputs, defaultCurator, embedder);
+    // Success ⇒ advance the checkpoint. As with consolidate, the fingerprint describes the inputs
+    // BEFORE staging, so a pass that staged something leaves the org-brain looking "changed" and
+    // the next tick runs once more before settling quiet.
+    if (fingerprint !== undefined && completed(skippedBrains)) {
+      await recordCheckpoint(orgAbs, "graduate", fingerprint, Date.now());
+    }
     return {
       clusters: candidates.length,
       candidates,
