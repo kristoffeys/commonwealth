@@ -52,6 +52,9 @@ the door with whoever wrote it. Commonwealth is that layer, made multiplayer.
 - :material-map-marker-path: **[Roadmap](04-roadmap.md)**
   The phased plan (M0–M5), mapped to GitHub milestones.
 
+- :material-magnify-scan: **[Agent-friendliness audit](09-agent-friendliness-audit.md)**
+  A self-audit of our own MCP/CLI surface against the standard we hold agents to.
+
 </div>
 
 ## Design principles
