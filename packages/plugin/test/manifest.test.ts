@@ -41,6 +41,16 @@ describe(".claude-plugin/plugin.json", () => {
     expect(server.command).toBe("npx");
     expect(server.args.join(" ")).toContain("@cmnwlth/mcp");
   });
+
+  it("hands sync to the host, because THIS host syncs through the hooks (#290, ADR-0040)", () => {
+    const manifest = readJson(".claude-plugin/plugin.json") as { mcpServers: string };
+    const mcp = readJson(manifest.mcpServers) as {
+      mcpServers: Record<string, { env?: Record<string, string> }>;
+    };
+    // Without this opt-out the server would ALSO commit/push on write (its safe default for
+    // unknown, hookless hosts), duplicating the lifecycle sync ADR-0032 already owns here.
+    expect(mcp.mcpServers["commonwealth"]?.env?.["COMMONWEALTH_MCP_SYNC"]).toBe("off");
+  });
 });
 
 describe(".codex-plugin/plugin.json", () => {

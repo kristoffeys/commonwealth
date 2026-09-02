@@ -8,6 +8,8 @@ export default defineConfig({
       "@cmnwlth/seed": new URL("./packages/seed/src/index.ts", import.meta.url).pathname,
       // curate's LIBRARY entry (lib.ts), not the CLI index.ts (#82).
       "@cmnwlth/curate": new URL("./packages/curate/src/lib.ts", import.meta.url).pathname,
+      // sync's LIBRARY entry (lib.ts), not the CLI index.ts (#290).
+      "@cmnwlth/sync": new URL("./packages/sync/src/lib.ts", import.meta.url).pathname,
     },
   },
   test: {
