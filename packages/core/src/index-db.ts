@@ -50,6 +50,16 @@ export interface SearchOptions {
    * allocations). Surfaced through `ask` hits and `recall --verbose`.
    */
   diagnostics?: boolean;
+  /**
+   * Write-back slot (#272 follow-up) for the "kept/dropped" signal at the RESULT-SET level: the
+   * count of hybrid-path candidates pruned below `minLexicalSupport` before ranking. This can't
+   * live on a per-hit {@link ResultDiagnostics} field — a *returned* hit was always kept by
+   * construction — so `search()` writes it here instead, keeping the public array return type
+   * untouched. When provided, it is always set before `search()` returns: `null` on the
+   * lexical-only path (no such gate exists there, so nothing is ever pruned), a number ≥ 0 on the
+   * hybrid path (0 = gate present but nothing dropped). Internal channel used by `askBrain`.
+   */
+  prunedOut?: { prunedBelowThreshold: number | null };
 }
 
 /**
@@ -75,13 +85,6 @@ export interface ResultDiagnostics {
    * its permissive default.
    */
   threshold: number | null;
-  /**
-   * Whether this result's lexical support met `threshold`. Always `true` for a hybrid-path result
-   * that carries a threshold — a candidate that falls short is dropped before fusion output is
-   * built, so this field documents the gate that was applied rather than a possible failure on a
-   * returned hit. `null` when `threshold` is `null`.
-   */
-  clearedThreshold: boolean | null;
 }
 
 export interface SearchResult {
@@ -676,7 +679,12 @@ export async function search(
 
   const db = new Database(dbPath(brainDir), { readonly: true });
   try {
-    if (!semantic) return lexicalSearch(db, match, matchOr, opts, limit);
+    if (!semantic) {
+      // No support gate exists on this path (every hit has support ≥ 1 by construction) — null is
+      // the honest value, not a fabricated zero.
+      if (opts?.prunedOut) opts.prunedOut.prunedBelowThreshold = null;
+      return lexicalSearch(db, match, matchOr, opts, limit);
+    }
     return hybridSearch(db, query, match, matchOr, opts, limit, semantic);
   } finally {
     db.close();
@@ -773,7 +781,6 @@ function lexicalSearch(
             // No support gate exists on this path (every hit has support ≥ 1 by construction) —
             // null is the honest value, not a fabricated threshold.
             threshold: null,
-            clearedThreshold: null,
           } satisfies ResultDiagnostics,
         }
       : {}),
@@ -884,6 +891,11 @@ function hybridSearch(
   const withDiagnostics = opts?.diagnostics === true;
   const keptIds = [...rrf.keys()].filter((id) => minSupport === 0 || supportOf(id) >= minSupport);
 
+  // The result-set-level "kept/dropped" signal (#272 follow-up): how many fused candidates never
+  // made it past the support floor. Always computed (cheap — `rrf` and `keptIds` already exist);
+  // written back only when the caller asked for it via `prunedOut`.
+  if (opts?.prunedOut) opts.prunedOut.prunedBelowThreshold = rrf.size - keptIds.length;
+
   // Bodies only for the semantic-only hits (no FTS snippet) that survive and will be returned.
   const bodies = loadBodies(
     db,
@@ -913,10 +925,10 @@ function hybridSearch(
               tier: lr !== null && sr !== null ? "hybrid" : lr !== null ? "lexical" : "semantic",
               // The real minLexicalSupport gate (#236), always meaningful on this path (0 = its
               // permissive default). `id` is only ever a member of `keptIds` when it already cleared
-              // this bar (see the `keptIds` filter above), so `clearedThreshold` is always true here —
-              // it documents the gate that was applied, not a live pass/fail check.
+              // this bar (see the `keptIds` filter above) — a returned hit was always kept by
+              // construction, so there is no per-hit pass/fail to report here; the count of what
+              // DIDN'T survive lives at the result-set level (see `prunedOut` above).
               threshold: minSupport,
-              clearedThreshold: true,
             } satisfies ResultDiagnostics,
           }
         : {}),

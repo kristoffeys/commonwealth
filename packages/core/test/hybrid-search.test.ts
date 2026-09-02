@@ -267,7 +267,6 @@ describe("hybrid semantic retrieval (ADR-0025, #213)", () => {
       rrfScore: wrongHit.score,
       tier: "semantic",
       threshold: 0,
-      clearedThreshold: true,
     });
     expect(rightHit.diagnostics).toMatchObject({
       lexicalRank: 2,
@@ -283,7 +282,7 @@ describe("hybrid semantic retrieval (ADR-0025, #213)", () => {
 
     // Default (no minLexicalSupport passed): the bar is still a real, permissive 0 — not fabricated.
     const permissive = await search(dir, "deploy", { embedder, diagnostics: true });
-    expect(permissive[0]!.diagnostics).toMatchObject({ threshold: 0, clearedThreshold: true });
+    expect(permissive[0]!.diagnostics).toMatchObject({ threshold: 0 });
 
     // An explicit bar is surfaced verbatim; every returned hit already cleared it (candidates that
     // don't are dropped before fusion output is built — see hybridSearch's `keptIds` filter).
@@ -292,7 +291,43 @@ describe("hybrid semantic retrieval (ADR-0025, #213)", () => {
       diagnostics: true,
       minLexicalSupport: 1,
     });
-    expect(strict[0]!.diagnostics).toMatchObject({ threshold: 1, clearedThreshold: true });
+    expect(strict[0]!.diagnostics).toMatchObject({ threshold: 1 });
+  });
+
+  it("prunedOut reports the result-set-level kept/dropped count (#272 follow-up)", async () => {
+    // Same "vector noise" fixture as the strict-mode test above: one note (`wrong`) is semantic-only
+    // with zero lexical/title/tag overlap, so `minLexicalSupport: 1` prunes exactly it.
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Scheduler internals",
+      body: "pod scheduling internals for the cluster",
+    });
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Deploy guide",
+      body: "deploy the application to the environment here",
+    });
+    const embedder = keywordEmbedder({ orchestration: 0, scheduling: 0 });
+    await buildIndex(dir, { embedder });
+
+    // Permissive (default minLexicalSupport 0): nothing is pruned.
+    const permissiveOut: { prunedBelowThreshold: number | null } = { prunedBelowThreshold: null };
+    await search(dir, "deploy orchestration", { embedder, prunedOut: permissiveOut });
+    expect(permissiveOut.prunedBelowThreshold).toBe(0);
+
+    // Strict (minLexicalSupport 1): exactly the one vector-only note is pruned.
+    const strictOut: { prunedBelowThreshold: number | null } = { prunedBelowThreshold: null };
+    await search(dir, "deploy orchestration", {
+      embedder,
+      minLexicalSupport: 1,
+      prunedOut: strictOut,
+    });
+    expect(strictOut.prunedBelowThreshold).toBe(1);
+
+    // Lexical-only path: no gate exists, so the honest value is null, never a fabricated 0.
+    const lexicalOut: { prunedBelowThreshold: number | null } = { prunedBelowThreshold: 99 };
+    await search(dir, "deploy", { embedder: null, prunedOut: lexicalOut });
+    expect(lexicalOut.prunedBelowThreshold).toBeNull();
   });
 
   it("diagnostics is purely additive: identical order and membership on vs. off (#272)", async () => {
@@ -378,7 +413,6 @@ describe("hybrid semantic retrieval (ADR-0025, #213)", () => {
       rrfScore: hits[0]!.score,
       tier: "lexical",
       threshold: null,
-      clearedThreshold: null,
     });
   });
 

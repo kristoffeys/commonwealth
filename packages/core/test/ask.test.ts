@@ -102,6 +102,7 @@ describe("askBrain", () => {
   it("attaches per-hit retrieval diagnostics only when asked (#236)", async () => {
     const plain = await askBrain(dir, "jwt sessions stateless");
     expect(plain.hits[0]!.diagnostics).toBeUndefined();
+    expect(plain.coverage.prunedBelowThreshold).toBeUndefined();
 
     const diag = await askBrain(dir, "jwt sessions stateless", { diagnostics: true });
     const top = diag.hits[0]!;
@@ -109,6 +110,49 @@ describe("askBrain", () => {
     // Lexical FTS path (no embeddings configured here): a body match at lexical rank 1.
     expect(top.diagnostics!.lexicalRank).toBe(1);
     expect(top.diagnostics!.tier).toBe("lexical");
+    // No gate exists on the lexical-only path, so the honest coverage value is null (#272 follow-up).
+    expect(diag.coverage.prunedBelowThreshold).toBeNull();
+  });
+
+  it("coverage.prunedBelowThreshold reports the result-set kept/dropped count on the hybrid path (#272 follow-up)", async () => {
+    // A semantic-only note with zero lexical/title/tag overlap on the query — pure vector noise,
+    // pruned by a minLexicalSupport floor (same fixture shape as the core hybrid-search test).
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Scheduler internals",
+      body: "pod scheduling internals for the cluster",
+    });
+    const config = await loadBrainConfig(dir);
+    config.embeddings = { provider: "hosted", threshold: 0.85, endpoint: "https://embed.test/v1" };
+    await saveBrainConfig(dir, config);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: string, init: { body: string }) => {
+      const { input } = JSON.parse(init.body) as { input: string[] };
+      const axis = (t: string) =>
+        t.toLowerCase().includes("scheduling") || t.toLowerCase().includes("orchestration")
+          ? [1, 0, 0, 0]
+          : [0, 0, 0, 0];
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({ data: input.map((t) => ({ embedding: axis(t) })) }),
+      };
+    }) as unknown as typeof fetch;
+    try {
+      await buildIndex(dir);
+      const permissive = await askBrain(dir, "jwt orchestration", { diagnostics: true });
+      expect(permissive.coverage.prunedBelowThreshold).toBe(0);
+
+      const strict = await askBrain(dir, "jwt orchestration", {
+        diagnostics: true,
+        minLexicalSupport: 1,
+      });
+      expect(strict.coverage.prunedBelowThreshold).toBe(1);
+      expect(strict.hits.map((h) => h.title)).not.toContain("Scheduler internals");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   it("honors the character budget, keeping the most relevant hits", async () => {

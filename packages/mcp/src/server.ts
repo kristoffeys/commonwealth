@@ -35,8 +35,7 @@ function summarizeNote(note: Note): string {
  * behind a citation (#272) without needing to parse the structured payload.
  */
 function formatDiagnostics(d: ResultDiagnostics): string {
-  const threshold =
-    d.threshold === null ? "n/a" : `${d.threshold} (cleared: ${String(d.clearedThreshold)})`;
+  const threshold = d.threshold === null ? "n/a" : String(d.threshold);
   return (
     `    [diagnostics] tier=${d.tier} lexicalRank=${d.lexicalRank ?? "—"} ` +
     `semanticRank=${d.semanticRank ?? "—"} score=${d.rrfScore.toFixed(4)} threshold=${threshold}`
@@ -189,7 +188,11 @@ export function createServer(
           .describe(
             "Attach retrieval provenance to each hit (lexical/semantic rank, fused score, evidence " +
               "tier, and the lexical-support threshold it was judged against) so you can decide " +
-              "whether a citation is well-supported before answering from it. Off by default.",
+              "whether a citation is well-supported before answering from it. Also reports " +
+              "`coverage.prunedBelowThreshold`, the count of candidates dropped by the lexical-" +
+              "support floor before ranking even began — if that's nonzero, the brain may cover " +
+              "this question better than the returned hits suggest; consider a broader question or " +
+              "a lower `minLexicalSupport`. Off by default.",
           ),
         minLexicalSupport: z
           .number()
@@ -212,6 +215,13 @@ export function createServer(
         diagnostics,
         minLexicalSupport,
       });
+      const pruned = result.coverage.prunedBelowThreshold;
+      const prunedNote =
+        pruned !== undefined && pruned !== null && pruned > 0
+          ? `\n\n(${pruned} additional candidate${pruned === 1 ? "" : "s"} were filtered out by ` +
+            `the lexical-support floor before ranking — the brain may cover this question better ` +
+            `than these hits suggest. Consider a broader question or a lower minLexicalSupport.)`
+          : "";
       const text = !result.coverage.matched
         ? `No notes in the brain matched "${question}". Tell the user you don't have enough to answer.`
         : `Answer "${question}" using ONLY these notes, citing each by id/path; if they don't cover it, say so:\n\n` +
@@ -220,7 +230,8 @@ export function createServer(
               const base = `- [${h.kind}] ${h.title} (id: ${h.id}, path: ${h.path})\n    ${h.excerpt}`;
               return h.diagnostics ? `${base}\n${formatDiagnostics(h.diagnostics)}` : base;
             })
-            .join("\n");
+            .join("\n") +
+          prunedNote;
       return { content: [{ type: "text", text }], structuredContent: { ...result } };
     },
   );
