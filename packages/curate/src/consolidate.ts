@@ -1,4 +1,12 @@
-import { acquireSyncLock, listNotes, supersedeNote, type Note } from "@cmnwlth/core";
+import {
+  acquireSyncLock,
+  confirmCheckpoint,
+  listNotes,
+  quietTick,
+  recordCheckpoint,
+  supersedeNote,
+  type Note,
+} from "@cmnwlth/core";
 import { textSimilarity } from "./curate.js";
 
 /**
@@ -15,6 +23,11 @@ import { textSimilarity } from "./curate.js";
  *
  * Similarity is the deterministic token-set Jaccard today; the pluggable embedder/curator seam
  * (ADR-0005) can replace it later without changing this control flow.
+ *
+ * QUIET TICK (#273): the clustering above is O(n²) token-set comparisons over all of canon, so on a
+ * schedule over a mostly-quiescent brain it is repeated work for a guaranteed no-op. A cheap
+ * checkpoint pre-flight (see {@link quietTick}) skips the whole stage when canon has not changed
+ * since the last successful pass, and the checkpoint advances ONLY on success.
  */
 
 /** Default similarity at/above which two same-kind canon notes are treated as duplicates. */
@@ -38,6 +51,13 @@ export interface ConsolidationResult {
   superseded: Supersession[];
   /** Set when the pass did nothing because another writer holds the lock (single-writer). */
   skipped?: string;
+  /**
+   * Set when the quiet-tick guard skipped the expensive stage because canon had not changed since
+   * this ISO 8601 time (#273). This is a deliberate no-op, NOT a failure and NOT `skipped:` — the
+   * caller reports it as "nothing changed", and `clusters`/`superseded` are empty because there was
+   * genuinely nothing to do.
+   */
+  unchangedSince?: string;
 }
 
 /** Options for {@link consolidateCanon}. */
@@ -46,9 +66,17 @@ export interface ConsolidateOptions {
   threshold?: number;
   /**
    * Report the plan without writing (no supersessions applied). The lock is still taken so the
-   * preview reflects a quiescent tree.
+   * preview reflects a quiescent tree. A dry run BYPASSES the quiet-tick guard and never touches
+   * the checkpoint: it is a diagnostic the user asked for explicitly, and its "would supersede"
+   * answer must not be able to mark a window as processed.
    */
   dryRun?: boolean;
+  /**
+   * Run the full pass even when the quiet-tick guard says canon has not changed (#273). The escape
+   * hatch for "I don't trust the checkpoint" — e.g. after a threshold change we can't see, or an
+   * edit that preserved both size and mtime.
+   */
+  force?: boolean;
 }
 
 /** Title+body text used for similarity. */
@@ -115,6 +143,23 @@ export async function consolidateCanon(
   if (!release)
     return { clusters: 0, superseded: [], skipped: "another writer holds the sync lock" };
   try {
+    // Quiet-tick pre-flight (#273) — inside the lock, so the fingerprint describes a quiescent
+    // tree. Only canon feeds this pass (staging is never consolidated), so canon is the only input.
+    // `fingerprint` is captured BEFORE the work and recorded after it succeeds, so an exception or
+    // an interrupt below leaves the previous checkpoint intact and this window is re-processed.
+    let fingerprint: string | undefined;
+    if (!opts.dryRun) {
+      const tick = await quietTick(brainDir, "consolidate", {
+        trees: [brainDir],
+        params: { threshold },
+      });
+      if (tick.unchanged && !opts.force) {
+        await confirmCheckpoint(brainDir, "consolidate", Date.now());
+        return { clusters: 0, superseded: [], unchangedSince: tick.since };
+      }
+      fingerprint = tick.fingerprint;
+    }
+
     const notes = await listNotes(brainDir);
     // Only supersede-able kinds, and only notes not already superseded.
     const active = notes.filter(
@@ -143,6 +188,13 @@ export async function consolidateCanon(
       }
     }
     superseded.sort((a, b) => (a.id < b.id ? -1 : 1));
+    // Success ⇒ advance the checkpoint. Note the fingerprint describes the tree as it was BEFORE
+    // any supersession, so a pass that actually wrote something leaves canon looking "changed" and
+    // the next tick runs once more. That is intended: a supersession can open up a new merge, and
+    // the follow-up run settles into the quiet state.
+    if (fingerprint !== undefined) {
+      await recordCheckpoint(brainDir, "consolidate", fingerprint, Date.now());
+    }
     return { clusters, superseded };
   } finally {
     await release();

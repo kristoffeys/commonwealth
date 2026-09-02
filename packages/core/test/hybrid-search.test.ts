@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Embedder } from "../src/embed.js";
-import { buildIndex, search } from "../src/index-db.js";
+import { buildIndex, search, type SearchResult } from "../src/index-db.js";
 import { writeNote } from "../src/notes.js";
 
 let dir: string;
@@ -266,12 +266,98 @@ describe("hybrid semantic retrieval (ADR-0025, #213)", () => {
       semanticRank: 1,
       rrfScore: wrongHit.score,
       tier: "semantic",
+      threshold: 0,
     });
     expect(rightHit.diagnostics).toMatchObject({
       lexicalRank: 2,
       semanticRank: null,
       tier: "lexical",
     });
+  });
+
+  it("surfaces the configured minLexicalSupport bar in diagnostics (#272)", async () => {
+    await writeNote(dir, { kind: "memory", title: "Deploy guide", body: "deploy the application" });
+    const embedder = keywordEmbedder({ deploy: 0 });
+    await buildIndex(dir, { embedder });
+
+    // Default (no minLexicalSupport passed): the bar is still a real, permissive 0 — not fabricated.
+    const permissive = await search(dir, "deploy", { embedder, diagnostics: true });
+    expect(permissive[0]!.diagnostics).toMatchObject({ threshold: 0 });
+
+    // An explicit bar is surfaced verbatim; every returned hit already cleared it (candidates that
+    // don't are dropped before fusion output is built — see hybridSearch's `keptIds` filter).
+    const strict = await search(dir, "deploy", {
+      embedder,
+      diagnostics: true,
+      minLexicalSupport: 1,
+    });
+    expect(strict[0]!.diagnostics).toMatchObject({ threshold: 1 });
+  });
+
+  it("prunedOut reports the result-set-level kept/dropped count (#272 follow-up)", async () => {
+    // Same "vector noise" fixture as the strict-mode test above: one note (`wrong`) is semantic-only
+    // with zero lexical/title/tag overlap, so `minLexicalSupport: 1` prunes exactly it.
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Scheduler internals",
+      body: "pod scheduling internals for the cluster",
+    });
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Deploy guide",
+      body: "deploy the application to the environment here",
+    });
+    const embedder = keywordEmbedder({ orchestration: 0, scheduling: 0 });
+    await buildIndex(dir, { embedder });
+
+    // Permissive (default minLexicalSupport 0): nothing is pruned.
+    const permissiveOut: { prunedBelowThreshold: number | null } = { prunedBelowThreshold: null };
+    await search(dir, "deploy orchestration", { embedder, prunedOut: permissiveOut });
+    expect(permissiveOut.prunedBelowThreshold).toBe(0);
+
+    // Strict (minLexicalSupport 1): exactly the one vector-only note is pruned.
+    const strictOut: { prunedBelowThreshold: number | null } = { prunedBelowThreshold: null };
+    await search(dir, "deploy orchestration", {
+      embedder,
+      minLexicalSupport: 1,
+      prunedOut: strictOut,
+    });
+    expect(strictOut.prunedBelowThreshold).toBe(1);
+
+    // Lexical-only path: no gate exists, so the honest value is null, never a fabricated 0.
+    const lexicalOut: { prunedBelowThreshold: number | null } = { prunedBelowThreshold: 99 };
+    await search(dir, "deploy", { embedder: null, prunedOut: lexicalOut });
+    expect(lexicalOut.prunedBelowThreshold).toBeNull();
+  });
+
+  it("diagnostics is purely additive: identical order and membership on vs. off (#272)", async () => {
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Alpha both",
+      body: "alpha and beta signal here",
+    });
+    await writeNote(dir, {
+      kind: "memory",
+      title: "Beta semantic",
+      body: "beta concept described",
+    });
+    const embedder = keywordEmbedder({ alpha: 0, beta: 1 });
+    await buildIndex(dir, { embedder });
+
+    const stripDiagnostics = (hits: SearchResult[]) =>
+      hits.map(({ diagnostics: _diagnostics, ...rest }) => rest);
+
+    // Hybrid path.
+    const hybridOff = await search(dir, "alpha beta", { embedder });
+    const hybridOn = await search(dir, "alpha beta", { embedder, diagnostics: true });
+    expect(hybridOn.map((h) => h.id)).toEqual(hybridOff.map((h) => h.id));
+    expect(stripDiagnostics(hybridOn)).toEqual(stripDiagnostics(hybridOff));
+
+    // Lexical-only path.
+    const lexOff = await search(dir, "alpha", { embedder: null });
+    const lexOn = await search(dir, "alpha", { embedder: null, diagnostics: true });
+    expect(lexOn.map((h) => h.id)).toEqual(lexOff.map((h) => h.id));
+    expect(stripDiagnostics(lexOn)).toEqual(stripDiagnostics(lexOff));
   });
 
   it("#213 stopword-paraphrase still retrieves under the strict injection default (minLexicalSupport 1)", async () => {
@@ -326,6 +412,7 @@ describe("hybrid semantic retrieval (ADR-0025, #213)", () => {
       semanticRank: null,
       rrfScore: hits[0]!.score,
       tier: "lexical",
+      threshold: null,
     });
   });
 

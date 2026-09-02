@@ -37,6 +37,12 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 | [0034](0034-obsidian-friendly-derived-layout.md) | Obsidian-friendly derived layout: per-project MOCs, wikilinks, shipped vault config | Accepted |
 | [0035](0035-physical-layout-keys-off-resolved-project.md) | Physical layout keys off the resolved project (supersedes ADR-0031 §1's "no file moves") | Accepted |
 | [0036](0036-meeting-note-kind.md) | A fifth note kind: `meeting` (paste-and-summarize, hybrid extraction) | Accepted |
+| [0037](0037-purge-secrets-from-history.md)    | Purge leaked secrets from git history: destructive rewrite + force-push | Accepted |
+| [0038](0038-capture-provenance-tier.md)       | Notes carry an ingestion trust tier: internal vs. external | Accepted |
+| [0039](0039-capture-receipts.md)          | Capture receipts: every dropped candidate leaves a structured, persisted trace | Accepted |
+| [0043](0043-external-ingestion-candidate-producer-contract.md) | External ingestion is a candidate-producer contract; connectors never write to the brain | Accepted |
+| [0044](0044-agent-assisted-ingestion.md)  | Agent-assisted ingestion: the host's own connectors are the fetch layer for OAuth sources | Accepted |
+| [0045](0045-external-intake-does-not-auto-promote.md) | External intake does not auto-promote; bulk import lands as a promotion PR | Accepted |
 
 ## Process
 

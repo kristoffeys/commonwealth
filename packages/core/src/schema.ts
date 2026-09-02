@@ -39,6 +39,16 @@ export const SafeId = z
     message: "id must be a single path segment (no '/', '\\\\', or '..')",
   });
 
+/**
+ * How a note ENTERED the brain — a coarse trust tier, not a source taxonomy (ADR-0038).
+ * `internal`: distilled from work happening inside the team's own sessions. `external`: ingested
+ * from a system outside the brain (a seed connector, #150). Deliberately two values: consumers
+ * need "how much scrutiny does this deserve?", and a richer taxonomy of channels belongs in the
+ * connector's own metadata, not in the tier every gate has to switch on.
+ */
+export const INTAKE_TIERS = ["internal", "external"] as const;
+export type IntakeTier = (typeof INTAKE_TIERS)[number];
+
 /** Fields common to every note kind. */
 const baseShape = {
   id: SafeId,
@@ -72,6 +82,18 @@ const baseShape = {
    * additive — a note without it is simply never a graduation candidate (no schema-version bump).
    */
   graduate: z.boolean().optional(),
+  /**
+   * Ingestion trust tier (ADR-0038, #274): `external` marks a note that arrived from a system
+   * outside the brain, `internal` one distilled from the team's own sessions. Answers HOW the note
+   * entered, the axis `author`/`author_ref` (who) and `source`/`project` (where from) leave open.
+   * Stamped once at capture by the trusted caller of that run — never self-declared by a candidate
+   * (which may itself be extracted from the external content whose trust is being graded) and never
+   * rewritten on an existing note (ADR-0031's no-frontmatter-rewrite discipline).
+   * Optional and additive: absent means `internal`, so every note in every existing brain stays
+   * valid and no `SCHEMA_VERSION` bump is needed. Read it through `noteIntake` rather than
+   * defaulting at each call site.
+   */
+  intake: z.enum(INTAKE_TIERS).optional(),
   /** Wikilink targets (`[[id]]` or bare id) to related notes. */
   relates: z.array(z.string()).default([]),
 };

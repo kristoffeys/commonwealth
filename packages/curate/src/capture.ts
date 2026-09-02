@@ -1,10 +1,18 @@
 import {
+  acquireSyncLock,
+  appendReceipts,
   attributeNoteInputs,
+  dropFor,
   ensureContributorPerson,
   isFeatureEnabled,
   listNotes,
+  loadBrainConfig,
+  receiptFor,
+  scanOptions,
   supersedeNote,
+  type CaptureReceipt,
   type ContributorIdentity,
+  type IntakeTier,
   type NewNoteInput,
 } from "@cmnwlth/core";
 import { curate, type CurateResult, type Curator } from "./curate.js";
@@ -54,6 +62,14 @@ export interface CaptureResult extends CurateResult {
    * autoPromote off the intent rides the staged note's `supersedes` frontmatter for review instead.
    */
   superseded: ConsolidationLink[];
+  /**
+   * Supersessions that were NOT applied because another writer held the cross-process sync lock
+   * (#281). The new notes are in canon and carry their forward `supersedes` link; only the target's
+   * `status`/`superseded_by` was left alone. Skipping is deliberate — see {@link captureCandidates}
+   * step (3) — and each entry also gets a persisted `supersession-deferred` receipt, because this
+   * result object dies with the detached SessionEnd worker that produced it.
+   */
+  supersessionsDeferred: ConsolidationLink[];
   /** New notes flagged as CONTRADICTING a canon note (kept, never auto-rejected; ADR-0030 / #214). */
   contradictions: ConsolidationLink[];
   /** Count of candidates the durability judge filtered as trivia (logged, never staged). */
@@ -70,6 +86,25 @@ export interface CaptureResult extends CurateResult {
 export interface CaptureOptions {
   /** Trusted local person responsible for these candidates; omitted for impersonal imports. */
   contributor?: ContributorIdentity;
+  /**
+   * Ingestion trust tier for this whole run (ADR-0038, #274) — `external` for a seed connector
+   * pulling from a system outside the brain (#150), omitted for the ordinary session path where
+   * absence already means `internal`. Declared once here by the trusted caller: an individual
+   * candidate may itself have been extracted from the external content whose trust we are grading,
+   * so a self-declared tier on a candidate is discarded in favour of this one.
+   */
+  intake?: IntakeTier;
+}
+
+/**
+ * Normalize a candidate's ingestion tier to the run's declared tier (ADR-0038): the caller's tier
+ * wins, and any tier the candidate declared for itself is dropped rather than trusted. Omitting
+ * `intake` writes a note byte-identical to a pre-ADR-0038 one, so the internal case is recorded by
+ * documented absence.
+ */
+function withRunIntake(input: NewNoteInput, intake: IntakeTier | undefined): NewNoteInput {
+  const { intake: _selfDeclared, ...rest } = input;
+  return intake ? { ...rest, intake } : rest;
 }
 
 /**
@@ -87,9 +122,16 @@ export interface CaptureOptions {
  *    fully in force), then, unless the brain turned `autoPromote` off, each freshly-staged note is
  *    approved straight into canon (ADR-0014).
  * 3. For a `supersedes` verdict whose new note actually reached canon, the TARGET canon note is
- *    marked superseded (`status` + `superseded_by`) — supersede-not-delete. With autoPromote off
- *    the target is left untouched (the new note isn't canon yet); the `supersedes` frontmatter link
+ *    marked superseded (`status` + `superseded_by`) — supersede-not-delete. That mutation is a
+ *    read-modify-write of a pre-existing file, so it runs under the cross-process sync lock, and a
+ *    contended lock DEFERS it with a receipt rather than racing it (#281). With autoPromote off the
+ *    target is left untouched (the new note isn't canon yet); the `supersedes` frontmatter link
  *    surfaces the pending consolidation for the curator (#198).
+ *
+ * Every candidate that reaches the gate is stamped with the run's ingestion trust tier
+ * ({@link CaptureOptions.intake}, ADR-0038) — omitted for the ordinary internal session path,
+ * `external` when a connector declares it. The tier is recorded, not acted on: it changes nothing
+ * about gating or autoPromote here, and is surfaced at review time instead.
  */
 export async function captureCandidates(
   brainDir: string,
@@ -125,6 +167,10 @@ export async function captureCandidates(
         candidate: bare,
         reason: plan.reason,
         ...(plan.duplicateOf ? { duplicateOf: plan.duplicateOf } : {}),
+        drop:
+          plan.reason === "llm-trivia"
+            ? dropFor("trivia")
+            : dropFor("duplicate-llm", plan.duplicateOf ? { duplicateOf: plan.duplicateOf } : {}),
       });
       continue;
     }
@@ -135,7 +181,7 @@ export async function captureCandidates(
           `keeping candidate "${plan.input.title}" rather than dropping it against an unvetted target.`,
       );
     }
-    toStage.push(plan.input);
+    toStage.push(withRunIntake(plan.input, options.intake));
     if (plan.supersedes && plan.input.id) supersedesById.set(plan.input.id, plan.supersedes);
     if (plan.contradicts && plan.input.id) contradictsById.set(plan.input.id, plan.contradicts);
   }
@@ -185,7 +231,11 @@ export async function captureCandidates(
     if (stagedIds.has(id)) contradictions.push({ id, targetId });
   }
   const superseded: ConsolidationLink[] = [];
+  const supersessionsDeferred: ConsolidationLink[] = [];
   if (autoPromote) {
+    // Resolve the targets first, off the lock: a run with nothing to consolidate — the overwhelming
+    // majority — must not reach for the lock at all, let alone contend with a sync for it.
+    const pending: { link: ConsolidationLink; path: string }[] = [];
     for (const [id, targetId] of supersedesById) {
       if (!stagedIds.has(id)) continue;
       // The target is pre-existing canon (a superseder's target came from the neighbor set), so it
@@ -194,16 +244,97 @@ export async function captureCandidates(
       // Only supersede-able kinds carry status/superseded_by; supersedeNote no-ops otherwise. A
       // missing/unknown target is left alone — never drop or merge against a note we can't find.
       if (!target) continue;
-      await supersedeNote(brainDir, target.path, id);
-      superseded.push({ id, targetId });
+      pending.push({ link: { id, targetId }, path: target.path });
+    }
+    if (pending.length > 0) {
+      // SINGLE-WRITER (#281). Everything above this line is atomic-by-construction: a new note is
+      // its own collision-proof file, so concurrent captures union-merge (ADR-0003). Supersession
+      // is the exception — `supersedeNote` is a read-modify-write of a note that ALREADY EXISTS, so
+      // two processes racing it are plain last-write-wins with no conflict and no sibling file. It
+      // therefore takes the same cross-process lock every other caller of that mutation holds
+      // (`consolidate`, `graduate`, `adopt`, the sync engine).
+      //
+      // Contention SKIPS rather than waits, following `consolidateCanon`: the fact itself is
+      // already safely in canon and carries its forward `supersedes` link, so the only thing at
+      // stake is the backward link on the older note — not worth blocking a SessionEnd worker
+      // behind an arbitrarily long `git push`. But a skip is REPORTED, never silent (CLAUDE.md
+      // principle 4): it rides `supersessionsDeferred` for in-process callers and a persisted
+      // receipt at (4) for everyone after this process exits.
+      const release = await acquireSyncLock(brainDir);
+      if (release) {
+        try {
+          for (const { link, path: targetPath } of pending) {
+            await supersedeNote(brainDir, targetPath, link.id);
+            superseded.push(link);
+          }
+        } finally {
+          // In a `finally` so a mid-loop throw can't wedge the brain's lock for every later writer.
+          await release();
+        }
+      } else {
+        supersessionsDeferred.push(...pending.map((p) => p.link));
+        console.error(
+          `[commonwealth-curate] another writer holds the sync lock; deferred ${pending.length} ` +
+            `supersession(s) — the new note(s) are in canon, the older note(s) stay active ` +
+            `(${pending.map((p) => p.link.targetId).join(", ")}).`,
+        );
+      }
     }
   }
 
+  const rejected = [...preRejected, ...result.rejected];
+
+  // (4) Persist a receipt per drop (ADR-0039, #266). This runs in the detached SessionEnd worker,
+  // AFTER everything that can affect canon — so a receipt-write failure can never cost a note — and
+  // it is the only reason a user can still be told "2 decision candidates were vetoed by autoAdr"
+  // once this process is gone. Derived + gitignored + never synced; see `@cmnwlth/core/receipts`.
+  const now = Date.now();
+  // The brain's OWN scanner settings, so a receipt redacts exactly what the gate would have caught.
+  // A brain with entropy detection on has a stricter scan than the defaults (#46), and the pre-gate
+  // classifier drops above never went through the gate at all.
+  const secretOpts = scanOptions(await loadBrainConfig(brainDir));
+  const receipts: CaptureReceipt[] = rejected.map((r) =>
+    receiptFor(
+      brainDir,
+      {
+        title: r.candidate.title,
+        kind: r.candidate.kind,
+        reason: r.reason,
+        ...(r.duplicateOf !== undefined ? { duplicateOf: r.duplicateOf } : {}),
+        drop: r.drop,
+      },
+      now,
+      secretOpts,
+    ),
+  );
+  // A deferred supersession (#281) is the one receipt that is not a dropped candidate — the note
+  // landed, the LINK did not. It shares the channel because it shares the audience and the
+  // invariant: `doctor`/`status` are the only surfaces that outlive this worker, and a supersession
+  // that vanished with the worker would be exactly the silent loss this fix exists to prevent.
+  for (const link of supersessionsDeferred) {
+    const note = result.staged.find((n) => n.frontmatter.id === link.id);
+    receipts.push(
+      receiptFor(
+        brainDir,
+        {
+          title: note?.frontmatter.title ?? link.id,
+          kind: note?.frontmatter.kind ?? "memory",
+          reason: "supersede-lock-contended",
+          drop: dropFor("supersession-deferred", { targetId: link.targetId }),
+        },
+        now,
+        secretOpts,
+      ),
+    );
+  }
+  await appendReceipts(brainDir, receipts);
+
   return {
     ...result,
-    rejected: [...preRejected, ...result.rejected],
+    rejected,
     promoted,
     superseded,
+    supersessionsDeferred,
     contradictions,
     triviaFiltered,
     clamped,

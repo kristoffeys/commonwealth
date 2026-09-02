@@ -71,7 +71,8 @@ clone on a new platform, run `pnpm rebuild better-sqlite3 esbuild` if native mod
 ## Definition of done (per feature)
 
 Typechecks, lints, has tests (the concurrency-sensitive paths _must_ have tests), and the
-relevant issue is moved to Done with a one-line note of what shipped.
+relevant issue is moved to Done with a one-line note of what shipped. A PR that changes a
+capability's tested behavior updates its row in `docs/08-test-coverage.md` in the same PR.
 
 **Keep `README.md` current.** When the feature set broadens (a new package, CLI, or
 user-facing capability), update the README's Getting Started, Packages table, and Status

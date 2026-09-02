@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { dropFor, type CaptureReceipt } from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { diagnose, formatDoctorText, type DoctorEnv } from "../src/doctor.js";
 
@@ -447,6 +448,127 @@ describe("commonwealth doctor — diagnose()", () => {
   it("skips the link when no captures are recorded yet", async () => {
     const report = await diagnose(healthyEnv({ lastCaptures: () => Promise.resolve([]) }));
     expect(check(report, "last-capture").status).toBe("skip");
+  });
+
+  /**
+   * Capture receipts (ADR-0039, #266). `receipts` is optional on {@link DoctorEnv}, so the checks
+   * above are unchanged for callers that do not supply it; these cover the two links it adds.
+   */
+  describe("dropped candidates", () => {
+    const receipt = (
+      category: Parameters<typeof dropFor>[0],
+      count = 1,
+      agoMs = 0,
+    ): CaptureReceipt[] =>
+      Array.from({ length: count }, (_, i) => ({
+        ...dropFor(category, { duplicateOf: "n1" }),
+        ts: Date.now() - agoMs - i * 1000,
+        brain,
+        title: `candidate ${i}`,
+        kind: "memory",
+        reason: category,
+      }));
+
+    /** Write a brain config so the live `autoAdr` flag can be read by `diagnose`. */
+    async function setAutoAdr(on: boolean): Promise<void> {
+      await fs.mkdir(path.join(brain, ".commonwealth"), { recursive: true });
+      await fs.writeFile(
+        path.join(brain, ".commonwealth", "config.json"),
+        JSON.stringify({ name: "test", features: { autoAdr: on } }),
+      );
+    }
+
+    it("says WHAT #266 asks: autoAdr vetoed N decision candidates, and how to change it", async () => {
+      await setAutoAdr(false);
+      const report = await diagnose(
+        healthyEnv({ receipts: () => Promise.resolve(receipt("autoadr-vetoed", 3)) }),
+      );
+
+      const c = check(report, "autoadr-drops");
+      expect(c.status).toBe("warn");
+      expect(c.detail).toContain("3 decision candidate(s)");
+      expect(c.detail).toContain("autoAdr");
+      expect(c.fix).toContain("autoAdr");
+      expect(c.fix).toContain("config.json");
+      // A warning, not a failure — the veto itself is a legitimate configuration.
+      expect(report.ok).toBe(true);
+    });
+
+    it("reports duplicates/trivia as ok — the gate working is not a problem to fix", async () => {
+      const report = await diagnose(
+        healthyEnv({
+          receipts: () =>
+            Promise.resolve([...receipt("duplicate-lexical", 3), ...receipt("trivia", 2)]),
+        }),
+      );
+
+      const c = check(report, "capture-drops");
+      expect(c.status).toBe("ok");
+      expect(c.detail).toContain("3 duplicate (lexical), 2 trivia");
+      expect(c.fix).toBeUndefined();
+      expect(report.checks.some((x) => x.id === "autoadr-drops")).toBe(false);
+    });
+
+    it("warns with the fix when a recoverable class shows up (a pasted credential)", async () => {
+      const report = await diagnose(
+        healthyEnv({
+          receipts: () =>
+            Promise.resolve([...receipt("secret-detected", 2), ...receipt("duplicate-llm", 1)]),
+        }),
+      );
+
+      const c = check(report, "capture-drops");
+      expect(c.status).toBe("warn");
+      expect(c.detail).toContain("2 secret-blocked");
+      expect(c.fix).toContain("1Password");
+    });
+
+    it("stops warning once autoAdr is back ON — following the fix must clear the finding", async () => {
+      // The receipts are historical facts; the LIVE flag is what the sentence asserts. Reading the
+      // warning off the log alone would leave it standing forever after the user fixed it.
+      await setAutoAdr(true);
+      const report = await diagnose(
+        healthyEnv({ receipts: () => Promise.resolve(receipt("autoadr-vetoed", 3)) }),
+      );
+
+      const c = check(report, "autoadr-drops");
+      expect(c.status).toBe("ok");
+      expect(c.detail).toContain("is ON now");
+      expect(c.fix).toBeUndefined();
+    });
+
+    it("ignores receipts outside the trailing report window — findings age out", async () => {
+      await setAutoAdr(false);
+      const report = await diagnose(
+        healthyEnv({
+          receipts: () => Promise.resolve(receipt("autoadr-vetoed", 3, 90 * 86_400_000)),
+        }),
+      );
+
+      expect(report.checks.some((x) => x.id === "autoadr-drops")).toBe(false);
+      expect(check(report, "capture-drops").status).toBe("skip");
+    });
+
+    it("always emits `capture-drops`, even when only autoAdr receipts exist", async () => {
+      await setAutoAdr(false);
+      const report = await diagnose(
+        healthyEnv({ receipts: () => Promise.resolve(receipt("autoadr-vetoed", 1)) }),
+      );
+
+      expect(check(report, "autoadr-drops").status).toBe("warn");
+      expect(check(report, "capture-drops").status).toBe("skip");
+    });
+
+    it("an empty receipt log is `skip` — derived state may legitimately be gone", async () => {
+      const report = await diagnose(healthyEnv({ receipts: () => Promise.resolve([]) }));
+      expect(check(report, "capture-drops").status).toBe("skip");
+      expect(report.ok).toBe(true);
+    });
+
+    it("emits no drop links at all when the env does not supply receipts", async () => {
+      const report = await diagnose(healthyEnv());
+      expect(report.checks.some((c) => c.id.endsWith("drops"))).toBe(false);
+    });
   });
 });
 

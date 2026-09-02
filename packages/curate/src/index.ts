@@ -11,6 +11,8 @@ import {
   computeHealthByProject,
   ensureContributorPerson,
   FEATURE_FLAGS,
+  type Frontmatter,
+  isExternalIntake,
   linkSources,
   listNotes,
   loadBrainConfig,
@@ -154,7 +156,7 @@ function usage(): void {
       "      (deciders/status: decisions; owner: work-state; attendees/meeting-date/source-type: meeting;",
       "       --body - reads the body from STDIN so a large transcript is piped, not passed as argv)",
       "  commonwealth-curate context [--dir <brain>] [--cwd <dir>] [--query <q>] [--limit <n>]",
-      "  commonwealth-curate capture [--dir <brain>] [--cwd <dir>] [--from <json-file>]",
+      "  commonwealth-curate capture [--dir <brain>] [--cwd <dir>] [--from <json-file>] [--external]",
       "  commonwealth-curate neighbors [--dir <brain>] [--cwd <dir>] [--from <json-file>] [--k <n>]",
       "  commonwealth-curate contradiction-check [--dir <brain>] [--cwd <dir>] [--summary <text>] [--threshold <n>]",
       "  commonwealth-curate scope show",
@@ -166,9 +168,9 @@ function usage(): void {
       "  commonwealth-curate project <list | link <id> <src...> | unlink <id> [<src...>]",
       "      | adopt <id> [--dry-run] | relayout [<id>] [--dry-run]> [--dir <brain>]",
       "  commonwealth-curate status-cache [--dir <brain>]",
-      "  commonwealth-curate consolidate [--dry-run] [--dir <brain>]",
+      "  commonwealth-curate consolidate [--dry-run] [--force] [--dir <brain>]",
       "  commonwealth-curate reclassify [--project <src>] [--limit <n>] (--emit | [--apply] [--from <file>]) [--dir <brain>]",
-      "  commonwealth-curate graduate [--suggest] [--dry-run] [--threshold <n>] [--org-dir <brain>] [--include-rejected]",
+      "  commonwealth-curate graduate [--suggest] [--dry-run] [--force] [--threshold <n>] [--org-dir <brain>] [--include-rejected]",
       "  commonwealth-curate feature list [--dir <brain>]",
       "  commonwealth-curate feature enable <name> [--dir <brain>]",
       "  commonwealth-curate feature disable <name> [--dir <brain>]",
@@ -181,6 +183,16 @@ function usage(): void {
 /** Type guard: is a string one of the four note kinds? */
 function isNoteKind(value: string): value is NoteKind {
   return (NOTE_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * Render the ingestion-tier marker for a staged note's pending line (ADR-0038, #274), or "" for the
+ * internal default. A candidate that arrived from a system outside the brain must be OBVIOUSLY such
+ * at the moment a human (or the curator agent, which reads this same listing) decides on it —
+ * otherwise machine-scraped content reviews exactly like a teammate's considered reasoning.
+ */
+function pendingIntakeAnnotation(fm: Frontmatter): string {
+  return isExternalIntake(fm) ? "  ⇢ external intake" : "";
 }
 
 /** Render an LLM-consolidation annotation for a staged note's pending line (ADR-0030), or "". */
@@ -203,7 +215,7 @@ async function cmdList(dir: string): Promise<void> {
   const pending = await listPending(dir);
   for (const note of pending) {
     const fm = note.frontmatter as unknown as Record<string, unknown>;
-    const annotation = pendingVerdictAnnotation(fm);
+    const annotation = pendingIntakeAnnotation(note.frontmatter) + pendingVerdictAnnotation(fm);
     console.log(
       `${note.frontmatter.id}  [${note.frontmatter.kind}]  ${note.frontmatter.title}${annotation}`,
     );
@@ -529,6 +541,10 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
       // Explicit imports (e.g. seeding a chosen repo) bypass the per-session scope gate,
       // which exists to filter out-of-scope *sessions*, not deliberate imports.
       force: { type: "boolean" },
+      // Declares this run as EXTERNAL ingestion (ADR-0038, #274): the candidates came from a
+      // system outside the brain, not from a teammate's session. A boolean rather than
+      // `--intake <tier>` so the two-value tier stays two-valued and needs no input validation.
+      external: { type: "boolean" },
     },
     allowPositionals: false,
   });
@@ -584,12 +600,11 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
   if (values.force !== true && !contributor) {
     throw new Error("no contributor identity; configure git user.name or set COMMONWEALTH_AUTHOR");
   }
-  const result = await captureCandidates(
-    dir,
-    stamped,
-    undefined,
-    contributor ? { contributor } : {},
-  );
+  const result = await captureCandidates(dir, stamped, undefined, {
+    ...(contributor ? { contributor } : {}),
+    // Omitted for an ordinary session run — absence IS the internal tier (ADR-0038).
+    ...(values.external === true ? { intake: "external" as const } : {}),
+  });
   // One stdout line per captured note (the SessionEnd hook counts these lines). When
   // autoPromote landed them in canon we prefix the canonical path; otherwise the staged id.
   // `result.promoted[i]` aligns with `result.staged[i]` (promotion iterates staged in order).
@@ -1207,18 +1222,36 @@ async function cmdStatusCache(dir: string): Promise<void> {
 }
 
 /**
- * `consolidate [--dry-run]` — cross-user canon consolidation (#29): supersede near-duplicate
- * memory/decision notes onto a single survivor (supersede-not-delete), single-writer.
+ * `consolidate [--dry-run] [--force]` — cross-user canon consolidation (#29): supersede
+ * near-duplicate memory/decision notes onto a single survivor (supersede-not-delete),
+ * single-writer. `--force` overrides the quiet-tick guard (#273), which otherwise makes a run over
+ * unchanged canon a cheap no-op.
  */
 async function cmdConsolidate(dir: string, args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
-    options: { "dry-run": { type: "boolean" }, dir: { type: "string" } },
+    options: {
+      "dry-run": { type: "boolean" },
+      force: { type: "boolean" },
+      dir: { type: "string" },
+    },
     allowPositionals: false,
   });
-  const result = await consolidateCanon(dir, { dryRun: values["dry-run"] === true });
+  const result = await consolidateCanon(dir, {
+    dryRun: values["dry-run"] === true,
+    force: values.force === true,
+  });
   if (result.skipped) {
     console.error(`[commonwealth-curate] consolidate skipped: ${result.skipped}`);
+    return;
+  }
+  // A quiet tick (#273) is a successful no-op, not a failure: say WHY nothing happened and how to
+  // override, and exit 0 with no stdout (there is genuinely nothing to compose downstream).
+  if (result.unchangedSince) {
+    console.error(
+      `[commonwealth-curate] consolidate: nothing to do — canon unchanged since ` +
+        `${result.unchangedSince} (use --force to run the full pass anyway)`,
+    );
     return;
   }
   const verb = values["dry-run"] ? "would supersede" : "superseded";
@@ -1308,11 +1341,13 @@ async function cmdReclassify(dir: string, args: string[]): Promise<void> {
 }
 
 /**
- * `graduate [--suggest] [--dry-run] [--threshold <n>] [--org-dir <brain>]` — org-brain graduation
+ * `graduate [--suggest] [--dry-run] [--force] [--threshold <n>] [--org-dir <brain>]` — org-brain graduation
  * (#110): scan every wired project brain for opted-in notes that recur across ≥2 brains and stage
  * a candidate into the org-brain for manual review. Unlike other subcommands it resolves NO single
  * brain from cwd — it locates the org-brain (from `--org-dir` or the registry pointer) and
  * enumerates the rest itself. `--suggest` is accepted for ergonomics (the only mode is suggest).
+ * `--force` overrides the quiet-tick guard (#273), which otherwise skips the embeddings work
+ * entirely when no wired brain has changed since the last successful pass.
  */
 async function cmdGraduate(args: string[]): Promise<void> {
   const { values } = parseArgs({
@@ -1320,6 +1355,7 @@ async function cmdGraduate(args: string[]): Promise<void> {
     options: {
       suggest: { type: "boolean" },
       "dry-run": { type: "boolean" },
+      force: { type: "boolean" },
       threshold: { type: "string" },
       "org-dir": { type: "string" },
       "include-rejected": { type: "boolean" },
@@ -1334,12 +1370,21 @@ async function cmdGraduate(args: string[]): Promise<void> {
   }
   const result = await graduateToOrgBrain({
     dryRun: values["dry-run"] === true,
+    force: values.force === true,
     includeRejected: values["include-rejected"] === true,
     ...(threshold !== undefined ? { threshold } : {}),
     ...(typeof values["org-dir"] === "string" ? { orgBrainDir: values["org-dir"] } : {}),
   });
   if (result.skipped) {
     console.error(`[commonwealth-curate] graduate skipped: ${result.skipped}`);
+    return;
+  }
+  // A quiet tick (#273) — see cmdConsolidate: a successful no-op with the reason spelled out.
+  if (result.unchangedSince) {
+    console.error(
+      `[commonwealth-curate] graduate: nothing to do — no wired brain changed since ` +
+        `${result.unchangedSince} (use --force to run the full pass anyway)`,
+    );
     return;
   }
   for (const s of result.skippedBrains) {

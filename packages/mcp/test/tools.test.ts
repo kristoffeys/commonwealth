@@ -56,6 +56,26 @@ describe("searchNotes", () => {
     const hits = await searchNotes(brainDir, { query: "nonexistentxyz" });
     expect(hits).toEqual([]);
   });
+
+  it("carries no diagnostics by default, and forwards diagnostics/minLexicalSupport when asked (#272)", async () => {
+    await writeNote(brainDir, {
+      kind: "memory",
+      title: "Pineapple facts",
+      body: "The pineapple grows in tropical climates.",
+    });
+
+    const plain = await searchNotes(brainDir, { query: "pineapple" });
+    expect(plain[0]!.diagnostics).toBeUndefined();
+
+    const diag = await searchNotes(brainDir, {
+      query: "pineapple",
+      diagnostics: true,
+      minLexicalSupport: 0,
+    });
+    expect(diag[0]!.diagnostics).toMatchObject({ tier: "lexical", lexicalRank: 1 });
+    // Membership/order are identical regardless of the diagnostics flag (observability only).
+    expect(diag.map((h) => h.id)).toEqual(plain.map((h) => h.id));
+  });
 });
 
 describe("askBrainTool", () => {
@@ -75,6 +95,24 @@ describe("askBrainTool", () => {
     const result = await askBrainTool(brainDir, { question: "nonexistentxyz topic" });
     expect(result.coverage.matched).toBe(false);
     expect(result.hits).toEqual([]);
+  });
+
+  it("carries no diagnostics by default, and forwards the diagnostics flag when asked (#272)", async () => {
+    await writeNote(brainDir, {
+      kind: "decision",
+      title: "Chose pineapple over mango",
+      body: "We picked pineapple because the mango supply chain was unreliable.",
+    });
+
+    const plain = await askBrainTool(brainDir, { question: "pineapple mango supply" });
+    expect(plain.hits[0]!.diagnostics).toBeUndefined();
+
+    const diag = await askBrainTool(brainDir, {
+      question: "pineapple mango supply",
+      diagnostics: true,
+    });
+    expect(diag.hits[0]!.diagnostics).toMatchObject({ tier: "lexical" });
+    expect(diag.hits.map((h) => h.id)).toEqual(plain.hits.map((h) => h.id));
   });
 });
 

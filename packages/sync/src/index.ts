@@ -4,6 +4,7 @@ import { ensureBrainCloned, resolveBrainMapping, type ResolvedBrain } from "@cmn
 import { Daemon, isRunning, readPid } from "./daemon.js";
 import { SyncEngine, syncOnceWithRetry } from "./engine.js";
 import { formatSyncSummary } from "./format.js";
+import { redactHistory, type RedactEngine } from "./redact-history.js";
 
 /**
  * Commonwealth sync CLI (`commonwealth-sync`). Subcommands:
@@ -79,12 +80,51 @@ async function cmdStop(dir: string): Promise<void> {
   }
 }
 
+/**
+ * `redact-history` (#271, ADR-0037): purge leaked credentials from the brain's ENTIRE git history and
+ * force-push the rewrite to scrub the shared remote. Destructive and human-gated — deliberately a
+ * separate command, never wired into the background sync daemon. `--dry-run` reports what would be
+ * purged and stops; `--yes` skips the interactive brain-name confirmation; `--engine` forces the
+ * rewrite engine (filter-branch is the no-filter-repo fallback). Exit non-zero on a precondition
+ * failure or a declined confirmation.
+ */
+async function cmdRedactHistory(
+  dir: string,
+  engineArg: string | undefined,
+  dryRun: boolean,
+  yes: boolean,
+): Promise<void> {
+  if (engineArg !== undefined && engineArg !== "filter-repo" && engineArg !== "filter-branch") {
+    console.error("[commonwealth-sync] --engine must be filter-repo or filter-branch");
+    process.exit(2);
+  }
+  let result;
+  try {
+    result = await redactHistory(dir, {
+      dryRun,
+      yes,
+      ...(engineArg ? { engine: engineArg as RedactEngine } : {}),
+    });
+  } catch (err) {
+    console.error(`[commonwealth-sync] redact-history failed: ${(err as Error).message}`);
+    process.exit(1);
+  }
+  if (result.status === "aborted") process.exit(1);
+  console.error(
+    `[commonwealth-sync] redact-history: ${result.status} — secrets=${result.secretsPurged} ` +
+      `commits=${result.commitsRewritten} pushed=${result.pushed} engine=${result.engine}`,
+  );
+}
+
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
       dir: { type: "string" },
       interval: { type: "string" },
+      "dry-run": { type: "boolean", default: false },
+      yes: { type: "boolean", default: false },
+      engine: { type: "string" },
     },
   });
 
@@ -103,7 +143,7 @@ async function main(): Promise<void> {
   // Clone-on-demand (ADR-0019): syncing actions need the brain materialized. `status`/`stop` don't
   // clone — they only report on / signal a running daemon. The clone runs under the user's git
   // identity, so a no-access remote fails here with git's own error (that IS the access check).
-  if (sub === "sync" || sub === "start") {
+  if (sub === "sync" || sub === "start" || sub === "redact-history") {
     const outcome = await ensureBrainCloned(dir, mapping.remote);
     if (outcome.status === "cloned") console.error(`[commonwealth-sync] cloned brain into ${dir}`);
     else if (outcome.status === "no-remote") {
@@ -138,9 +178,13 @@ async function main(): Promise<void> {
     case "stop":
       await cmdStop(dir);
       return;
+    case "redact-history":
+      await cmdRedactHistory(dir, values.engine, Boolean(values["dry-run"]), Boolean(values.yes));
+      return;
     default:
       console.error(
-        "usage: commonwealth-sync <sync|start|status|stop> [--dir DIR] [--interval MS]",
+        "usage: commonwealth-sync <sync|start|status|stop|redact-history> [--dir DIR] " +
+          "[--interval MS] [--dry-run] [--yes] [--engine filter-repo|filter-branch]",
       );
       process.exit(sub ? 1 : 2);
   }

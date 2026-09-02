@@ -121,7 +121,7 @@ rest — every command resolves the right brain from the current directory autom
 ```bash
 commonwealth add <folder> [--brain <dir>] # wire another folder to the brain, in one go
 commonwealth registry <show|route|allow|deny|remove|default|pull>  # brain-resolution rules (see below)
-commonwealth status                       # last capture outcome + review queue + sync state
+commonwealth status                       # last capture outcome + dropped candidates + review queue + sync state
 commonwealth recall <query> [--verbose]   # search the brain (--verbose shows per-hit retrieval provenance)
 commonwealth ask <question> [--answer]    # cited retrieval; --answer synthesizes a cited answer via a headless model
 commonwealth reseed [<repo>] [--all]      # mine repo(s) into the brain again
@@ -131,6 +131,7 @@ commonwealth promote --all --pr           # open a brain-repo PR to review the p
 commonwealth reject <id...>               # discard staged notes
 commonwealth sync once                    # sync now (lifecycle hooks do this automatically)
 commonwealth sync start|stop              # opt into/out of the continuous daemon profile
+commonwealth redact [--dry-run] [--yes]   # PURGE leaked secrets from ALL git history + force-push (destructive)
 commonwealth service <install|uninstall|status|restart>  # run sync as an OS background service
 commonwealth health                       # freshness/trust score + capture coverage (what fraction of sessions land a note)
 commonwealth health --fail-under-capture 0.3  # exit non-zero when 7-day capture coverage is below 30% (CI/cron gate)
@@ -141,13 +142,25 @@ commonwealth project unlink <id> [<src>]  # undo a link (derived views only; no 
 commonwealth project adopt <id> [--dry-run]  # promote a proven link into note frontmatter (one commit), then retire the entry
 commonwealth statusline [install]         # ambient status line for Claude Code (see below)
 commonwealth graduate [--suggest]         # propose facts recurring across ≥2 brains to the org-brain
-commonwealth doctor [--fix]               # diagnose the setup + last capture outcome (reads ~/.commonwealth/capture.log)
+commonwealth consolidate [--dry-run]      # supersede near-duplicate canon notes onto one survivor
+commonwealth consolidate|graduate --force # run the full pass even when nothing has changed since the last one
+commonwealth doctor [--fix]               # diagnose the setup, the last capture, and why candidates were dropped
 commonwealth update --agent both          # update the CLI + refresh both host integrations
 commonwealth --version                    # print the installed CLI version
 ```
 
 The CLI checks npm at most once a day and prints a note on stderr when a newer version is
 published (TTY only, never in CI; set `COMMONWEALTH_NO_UPDATE_CHECK=1` to silence it).
+
+> **`commonwealth redact` rewrites shared history.** The capture and pre-commit secret gates stop a
+> credential entering a _new_ commit; they can't remove one already sitting in an _old_ blob (a
+> working-tree "redaction" leaves the raw value recoverable via `git log -p` and in every clone).
+> `commonwealth redact` scans **all** history, rewrites every leaked value out of it, and
+> **force-pushes** the result to scrub the remote — so afterwards **every teammate must run
+> `git fetch origin && git reset --hard origin/<branch>`** (unpushed local work needs a manual
+> rebase). It requires typing the brain name to confirm, supports `--dry-run`, and is never run by
+> the sync daemon. Rewriting history is damage-limitation — **rotate the exposed credential too**
+> (ADR-0037).
 
 ### Capturing decisions
 
@@ -190,6 +203,22 @@ commonwealth config set autoPromote false   # require manual review
 commonwealth pending                         # see what's waiting
 commonwealth promote <id...> | --all         # approve into canon
 ```
+
+#### Why a candidate wasn't captured
+
+A gate declining a candidate is normal; a gate declining it *silently* is a bug. Every drop leaves
+a **capture receipt** ([ADR-0039](docs/adr/0039-capture-receipts.md)) recording what class it was —
+duplicate, secret-blocked, too thin, `autoAdr`-vetoed, trivia — whether you can do anything about
+it, and what. `commonwealth status` shows the rollup; `commonwealth doctor` names the fix:
+
+```
+  ⚠ Decisions 3 decision candidate(s) were VETOED because this brain has `autoAdr` off (2h ago).
+      fix: Set `"features": { "autoAdr": true }` in the brain's `.commonwealth/config.json` …
+  ✓ Drops   9 candidate(s) dropped by curation (12m ago): 7 duplicate (lexical), 2 trivia.
+```
+
+Receipts live in the brain's gitignored `index/` — derived, disposable, never committed or synced.
+A fresh clone starts with none.
 
 #### Review as a pull request
 
@@ -243,6 +272,14 @@ trust boundary, regardless of any brain's `autoPromote`. Rejecting a candidate r
 **reject-tombstone** in the org-brain, so the same cluster is not re-proposed on the next run (it is
 skipped with a `(previously rejected — N suppressed)` note); `commonwealth graduate --include-rejected`
 resurfaces them. See [ADR-0023](docs/adr/0023-org-brain-graduation.md).
+
+**A quiet run is cheap.** `consolidate` and `graduate` are safe to put on a schedule: before doing
+any similarity or embeddings work, each cheaply fingerprints the notes it would read and skips the
+whole pass when nothing has changed since its last _successful_ run, reporting `nothing to do —
+canon unchanged since <time>`. The marker advances only on success, so an interrupted pass
+re-processes the same window rather than skipping it, and it lives in the disposable `index/`
+directory — deleting it just costs one full pass. `--force` runs the full pass regardless, and
+`--dry-run` always does the work.
 
 ### Route projects to brains (rules)
 

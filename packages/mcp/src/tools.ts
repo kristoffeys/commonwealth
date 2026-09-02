@@ -33,6 +33,10 @@ export interface SearchNotesArgs {
   query: string;
   kind?: NoteKind;
   limit?: number;
+  /** Attach per-result retrieval provenance (#236, #272). Default off — unchanged response shape. */
+  diagnostics?: boolean;
+  /** Strict retrieval floor (#236) in the hybrid path. Default 0 (permissive, unchanged behavior). */
+  minLexicalSupport?: number;
 }
 
 /**
@@ -41,15 +45,19 @@ export interface SearchNotesArgs {
  */
 export async function searchNotes(
   brainDir: string,
-  { query, kind, limit }: SearchNotesArgs,
+  { query, kind, limit, diagnostics, minLexicalSupport }: SearchNotesArgs,
 ): Promise<SearchResult[]> {
-  return search(brainDir, query, { kind, limit });
+  return search(brainDir, query, { kind, limit, diagnostics, minLexicalSupport });
 }
 
 /** Arguments for {@link askBrainTool}. */
 export interface AskArgs {
   question: string;
   limit?: number;
+  /** Attach per-hit retrieval provenance (#236, #272). Default off — unchanged response shape. */
+  diagnostics?: boolean;
+  /** Strict retrieval floor (#236) in the hybrid path. Default 0 (permissive, unchanged behavior). */
+  minLexicalSupport?: number;
 }
 
 /**
@@ -59,9 +67,9 @@ export interface AskArgs {
  */
 export async function askBrainTool(
   brainDir: string,
-  { question, limit }: AskArgs,
+  { question, limit, diagnostics, minLexicalSupport }: AskArgs,
 ): Promise<AskResult> {
-  return askBrain(brainDir, question, { limit });
+  return askBrain(brainDir, question, { limit, diagnostics, minLexicalSupport });
 }
 
 /** Arguments for {@link readNoteTool}. */

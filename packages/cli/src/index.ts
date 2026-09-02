@@ -3,6 +3,14 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import {
+  RECEIPT_REPORT_WINDOW_DAYS,
+  formatDropSummary,
+  isFeatureEnabled,
+  readReceipts,
+  resolveBrainDir,
+  summarizeDrops,
+} from "@cmnwlth/core";
 import { defaultAddDeps, runAdd } from "./add.js";
 import { formatCaptureLine, readCaptureLog } from "./capture-log.js";
 import { cmdOrgBrain } from "./org-brain.js";
@@ -166,9 +174,11 @@ function printUsage(): void {
       "  commonwealth map                               brain-at-a-glance: per-kind counts + contributors",
       "  commonwealth project   <list | link <id> <src...> | unlink <id> [<src...>] | adopt <id> [--dry-run]>   link/adopt engagement identity",
       "  commonwealth statusline  [install|uninstall]   Claude Code status line (brain · freshness · pending)",
-      "  commonwealth consolidate  [--dry-run]          supersede near-duplicate canon notes",
-      "  commonwealth graduate  [--suggest] [--dry-run]  promote knowledge recurring across ≥2 brains to the org-brain",
+      "  commonwealth consolidate  [--dry-run] [--force] supersede near-duplicate canon notes",
+      "  commonwealth graduate  [--suggest] [--dry-run] [--force]  promote knowledge recurring across ≥2 brains to the org-brain",
       "  commonwealth sync      <start | stop | once>   control/run the sync daemon",
+      "  commonwealth redact    [--dry-run] [--yes] [--engine filter-repo|filter-branch]   PURGE leaked",
+      "                                                 secrets from ALL git history + force-push (destructive)",
       "  commonwealth pending                           list notes awaiting review",
       "  commonwealth promote   <id...> | --all [--pr]  approve staged notes into canon (--pr opens a review PR)",
       "  commonwealth reject    <id...>                 discard staged notes",
@@ -268,6 +278,24 @@ export async function run(argv: string[]): Promise<number> {
       if (captures.length > 0) {
         process.stdout.write(`${formatCaptureLine(captures[captures.length - 1]!)}\n`);
       }
+      // Then what curation DROPPED (ADR-0039, #266), aggregated by class — "2 autoAdr-vetoed,
+      // 1 secret-blocked" is actionable in a way three unrelated reason strings never were. Silent
+      // on an empty receipt log (nothing dropped, or a fresh clone whose derived state is gone).
+      const brainDir = await resolveBrainDir(process.cwd());
+      if (brainDir) {
+        // Trailing window only — a drop from months ago is history, not status. The live `autoAdr`
+        // flag goes in too, so this line never points at a `doctor` that has nothing left to fix.
+        const since = Date.now() - RECEIPT_REPORT_WINDOW_DAYS * 86_400_000;
+        const autoAdrEnabled = await isFeatureEnabled(brainDir, "autoAdr").catch(() => true);
+        const drops = summarizeDrops(await readReceipts(brainDir), { since, autoAdrEnabled });
+        if (drops.total > 0) {
+          const tail =
+            drops.recoverable > 0
+              ? ` (${drops.recoverable} recoverable — \`commonwealth doctor\` has the fix)`
+              : "";
+          process.stdout.write(`Dropped by curation: ${formatDropSummary(drops)}${tail}.\n`);
+        }
+      }
       const queue = await delegateCurate(["list"]);
       const daemon = await delegateSync(["status"]);
       return queue || daemon;
@@ -282,6 +310,10 @@ export async function run(argv: string[]): Promise<number> {
       const sub = rest[0] === "once" ? "sync" : (rest[0] ?? "status");
       return delegateSync([sub, ...rest.slice(1)]);
     }
+    case "redact":
+      // Destructive history purge (#271, ADR-0037): rewrite leaked credentials out of ALL history and
+      // force-push. Delegates to the sync bin (stdio is inherited, so its confirm prompt works).
+      return delegateSync(["redact-history", ...rest]);
     case "health":
       return delegateCurate(["health", ...rest]);
     case "map":

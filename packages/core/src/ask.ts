@@ -42,6 +42,17 @@ export interface AskCoverage {
   topScore: number;
   /** Total notes that matched before the budget cap. */
   total: number;
+  /**
+   * Result-set-level "kept/dropped" signal (#272 follow-up): how many hybrid-path candidates were
+   * dropped for falling below the `minLexicalSupport` floor before ranking even began. NOT the
+   * same kind of "you aren't seeing everything" as `total` — `total` counts hits you DID get back
+   * (before the char-budget truncation); this counts candidates that never made it that far. Lets
+   * an agent notice "I got `total` hits but `prunedBelowThreshold` more were filtered strictly —
+   * the brain may cover this better than these results suggest." Present only when `diagnostics`
+   * is requested (mirrors {@link AskHit.diagnostics}); `null` when the retrieval path has no such
+   * gate (lexical-only), a number ≥ 0 (0 = nothing pruned) on the hybrid path.
+   */
+  prunedBelowThreshold?: number | null;
 }
 
 /** The retrieval result an agent answers from. Deterministic; no model is called. */
@@ -75,10 +86,14 @@ export async function askBrain(
 ): Promise<AskResult> {
   const limit = opts.limit ?? 8;
   const maxChars = opts.maxChars ?? 4000;
+  // Sink for the result-set-level pruned-count (#272 follow-up); only wired up when diagnostics
+  // is requested, so an uninstrumented caller pays nothing and sees no shape change.
+  const prunedOut = opts.diagnostics ? { prunedBelowThreshold: null as number | null } : undefined;
   const results = await search(brainDir, question, {
     limit,
     ...(opts.minLexicalSupport !== undefined ? { minLexicalSupport: opts.minLexicalSupport } : {}),
     ...(opts.diagnostics ? { diagnostics: true } : {}),
+    ...(prunedOut ? { prunedOut } : {}),
   });
 
   const hits: AskHit[] = [];
@@ -106,6 +121,7 @@ export async function askBrain(
       matched: results.length > 0,
       topScore: results[0]?.score ?? 0,
       total: results.length,
+      ...(prunedOut ? { prunedBelowThreshold: prunedOut.prunedBelowThreshold } : {}),
     },
   };
 }

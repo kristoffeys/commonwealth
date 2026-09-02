@@ -158,6 +158,16 @@ depth) — covering note files _and_ the generated `COMMONWEALTH.md`/`INDEX.md`,
 paths. A withheld note is reported and left uncommitted in your working tree to fix. This holds
 even across a rebase conflict. Tune detection per brain via `secretScan`.
 
+If a secret slipped in _before_ those gates existed — or was only "redacted" in the working tree,
+which leaves the raw value recoverable from the prior commit's blob (`git log -p`) and in every
+clone — `commonwealth redact` **purges it from all history**: it scans every blob in the object
+database, rewrites each leaked value to `[REDACTED:<kind>]`, and **force-pushes** the rewrite to
+scrub the remote (ADR-0037). It is destructive and human-gated (type the brain name; `--dry-run`
+previews; `--engine filter-branch` forces the no-`git-filter-repo` fallback) and is **never** run by
+the sync daemon. Afterwards every teammate must `git fetch origin && git reset --hard origin/<branch>`,
+and the exposed credential should be **rotated regardless** — a history rewrite doesn't un-leak a value
+that was already served.
+
 ## Trust & decay
 
 Run `commonwealth health` for a freshness/trust score plus counts of stale, unverified,
