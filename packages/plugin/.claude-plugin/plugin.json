@@ -1,6 +1,6 @@
 {
   "name": "commonwealth",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Commonwealth \u2014 a multiplayer, git-backed, agent-readable second brain for teams. Registers the Commonwealth MCP server, SessionStart/SessionEnd hooks, and /commonwealth commands.",
   "author": {
     "name": "Commonwealth"

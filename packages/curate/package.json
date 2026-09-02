@@ -1,6 +1,6 @@
 {
   "name": "@cmnwlth/curate",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Capture, curation engine (dedupe/relevance), in-repo review queue, and relevance selection",
   "license": "Apache-2.0",
   "type": "module",
