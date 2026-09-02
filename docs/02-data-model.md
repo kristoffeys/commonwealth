@@ -152,6 +152,15 @@ on our timeline in June — sensitive to scope creep.
   org-brain, the audience-widening promotion of knowledge that recurs across ≥2 project brains
   (ADR-0023). Absent/`false` keeps the note in its repo. Strictly opt-in and even then staged for
   manual review — graduation never leaves a repo silently.
+- **`intake`** — ingestion trust tier: `external` for a note ingested from a system outside the
+  brain (a seed connector), `internal` for one distilled from the team's own sessions. Answers
+  _how_ a note entered, the axis `author` (who) and `source`/`project` (where from) leave open.
+  Deliberately two coarse values — a trust tier, not a channel taxonomy (ADR-0038). Absent means
+  `internal`, so pre-existing notes and ordinary session captures carry no `intake` line at all;
+  read it through `noteIntake()` rather than defaulting per call site. Stamped once per capture run
+  by the trusted caller, never self-declared by a candidate and never rewritten afterwards. The
+  review queue marks an external candidate `⇢ external intake`; gating and `autoPromote` (ADR-0014)
+  are unchanged for both tiers today.
 
 ## Derived artifacts (generated, gitignored or `merge=union`)
 

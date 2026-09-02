@@ -11,6 +11,8 @@ import {
   computeHealthByProject,
   ensureContributorPerson,
   FEATURE_FLAGS,
+  type Frontmatter,
+  isExternalIntake,
   linkSources,
   listNotes,
   loadBrainConfig,
@@ -149,7 +151,7 @@ function usage(): void {
       "  commonwealth-curate stage --kind <kind> --title <t> --body <b> [--tags a,b]",
       "      [--deciders a,b] [--status <s>] [--dir <brain>]   (deciders/status: decisions)",
       "  commonwealth-curate context [--dir <brain>] [--cwd <dir>] [--query <q>] [--limit <n>]",
-      "  commonwealth-curate capture [--dir <brain>] [--cwd <dir>] [--from <json-file>]",
+      "  commonwealth-curate capture [--dir <brain>] [--cwd <dir>] [--from <json-file>] [--external]",
       "  commonwealth-curate neighbors [--dir <brain>] [--cwd <dir>] [--from <json-file>] [--k <n>]",
       "  commonwealth-curate contradiction-check [--dir <brain>] [--cwd <dir>] [--summary <text>] [--threshold <n>]",
       "  commonwealth-curate scope show",
@@ -178,6 +180,16 @@ function isNoteKind(value: string): value is NoteKind {
   return (NOTE_KINDS as readonly string[]).includes(value);
 }
 
+/**
+ * Render the ingestion-tier marker for a staged note's pending line (ADR-0038, #274), or "" for the
+ * internal default. A candidate that arrived from a system outside the brain must be OBVIOUSLY such
+ * at the moment a human (or the curator agent, which reads this same listing) decides on it —
+ * otherwise machine-scraped content reviews exactly like a teammate's considered reasoning.
+ */
+function pendingIntakeAnnotation(fm: Frontmatter): string {
+  return isExternalIntake(fm) ? "  ⇢ external intake" : "";
+}
+
 /** Render an LLM-consolidation annotation for a staged note's pending line (ADR-0030), or "". */
 function pendingVerdictAnnotation(fm: Record<string, unknown>): string {
   const ids = (key: string): string[] =>
@@ -198,7 +210,7 @@ async function cmdList(dir: string): Promise<void> {
   const pending = await listPending(dir);
   for (const note of pending) {
     const fm = note.frontmatter as unknown as Record<string, unknown>;
-    const annotation = pendingVerdictAnnotation(fm);
+    const annotation = pendingIntakeAnnotation(note.frontmatter) + pendingVerdictAnnotation(fm);
     console.log(
       `${note.frontmatter.id}  [${note.frontmatter.kind}]  ${note.frontmatter.title}${annotation}`,
     );
@@ -479,6 +491,10 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
       // Explicit imports (e.g. seeding a chosen repo) bypass the per-session scope gate,
       // which exists to filter out-of-scope *sessions*, not deliberate imports.
       force: { type: "boolean" },
+      // Declares this run as EXTERNAL ingestion (ADR-0038, #274): the candidates came from a
+      // system outside the brain, not from a teammate's session. A boolean rather than
+      // `--intake <tier>` so the two-value tier stays two-valued and needs no input validation.
+      external: { type: "boolean" },
     },
     allowPositionals: false,
   });
@@ -525,12 +541,11 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
   if (values.force !== true && !contributor) {
     throw new Error("no contributor identity; configure git user.name or set COMMONWEALTH_AUTHOR");
   }
-  const result = await captureCandidates(
-    dir,
-    stamped,
-    undefined,
-    contributor ? { contributor } : {},
-  );
+  const result = await captureCandidates(dir, stamped, undefined, {
+    ...(contributor ? { contributor } : {}),
+    // Omitted for an ordinary session run — absence IS the internal tier (ADR-0038).
+    ...(values.external === true ? { intake: "external" as const } : {}),
+  });
   // One stdout line per captured note (the SessionEnd hook counts these lines). When
   // autoPromote landed them in canon we prefix the canonical path; otherwise the staged id.
   // `result.promoted[i]` aligns with `result.staged[i]` (promotion iterates staged in order).

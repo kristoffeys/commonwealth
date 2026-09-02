@@ -2,7 +2,14 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import matter from "gray-matter";
 import { makeNoteId, pathForNote, shortId, today } from "./ids.js";
-import { Frontmatter, KIND_DIR, SafeId, type Note, type NoteKind } from "./schema.js";
+import {
+  Frontmatter,
+  KIND_DIR,
+  SafeId,
+  type IntakeTier,
+  type Note,
+  type NoteKind,
+} from "./schema.js";
 
 /**
  * Input to create a new note. `id`, `created` (defaults to today), and the file path are
@@ -23,6 +30,12 @@ export interface NewNoteInput {
   source?: string;
   /** Declared engagement identity, recorded as frontmatter `project` (ADR-0031); stamped only when a manifest declares it. */
   project?: string;
+  /**
+   * Ingestion trust tier, recorded as frontmatter `intake` (ADR-0038, #274). Omit for the ordinary
+   * internal case — absence IS `internal`, and omitting keeps the written note byte-identical to a
+   * pre-ADR-0038 one. Set by the trusted caller of a capture run, not by the candidate itself.
+   */
+  intake?: IntakeTier;
   /** `YYYY-MM-DD`; defaults to today. */
   created?: string;
   /** Extra kind-specific frontmatter fields, validated against the schema. */
@@ -67,6 +80,7 @@ const KEY_ORDER = [
   "email",
   "source",
   "project",
+  "intake",
   "verified",
   "deciders",
   "supersedes",
@@ -146,6 +160,7 @@ export async function writeNote(brainDir: string, input: NewNoteInput): Promise<
     ...(input.authorRef ? { author_ref: input.authorRef } : {}),
     ...(input.source ? { source: input.source } : {}),
     ...(input.project ? { project: input.project } : {}),
+    ...(input.intake ? { intake: input.intake } : {}),
   };
   const frontmatter = Frontmatter.parse(raw);
   const note: Note = { frontmatter, body: input.body.trim(), path: relPath };
