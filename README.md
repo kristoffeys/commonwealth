@@ -121,7 +121,7 @@ rest — every command resolves the right brain from the current directory autom
 ```bash
 commonwealth add <folder> [--brain <dir>] # wire another folder to the brain, in one go
 commonwealth registry <show|route|allow|deny|remove|default|pull>  # brain-resolution rules (see below)
-commonwealth status                       # last capture outcome + review queue + sync state
+commonwealth status                       # last capture outcome + dropped candidates + review queue + sync state
 commonwealth recall <query> [--verbose]   # search the brain (--verbose shows per-hit retrieval provenance)
 commonwealth ask <question> [--answer]    # cited retrieval; --answer synthesizes a cited answer via a headless model
 commonwealth reseed [<repo>] [--all]      # mine repo(s) into the brain again
@@ -144,7 +144,7 @@ commonwealth statusline [install]         # ambient status line for Claude Code 
 commonwealth graduate [--suggest]         # propose facts recurring across ≥2 brains to the org-brain
 commonwealth consolidate [--dry-run]      # supersede near-duplicate canon notes onto one survivor
 commonwealth consolidate|graduate --force # run the full pass even when nothing has changed since the last one
-commonwealth doctor [--fix]               # diagnose the setup + last capture outcome (reads ~/.commonwealth/capture.log)
+commonwealth doctor [--fix]               # diagnose the setup, the last capture, and why candidates were dropped
 commonwealth update --agent both          # update the CLI + refresh both host integrations
 commonwealth --version                    # print the installed CLI version
 ```
@@ -185,6 +185,22 @@ commonwealth config set autoPromote false   # require manual review
 commonwealth pending                         # see what's waiting
 commonwealth promote <id...> | --all         # approve into canon
 ```
+
+#### Why a candidate wasn't captured
+
+A gate declining a candidate is normal; a gate declining it *silently* is a bug. Every drop leaves
+a **capture receipt** ([ADR-0039](docs/adr/0039-capture-receipts.md)) recording what class it was —
+duplicate, secret-blocked, too thin, `autoAdr`-vetoed, trivia — whether you can do anything about
+it, and what. `commonwealth status` shows the rollup; `commonwealth doctor` names the fix:
+
+```
+  ⚠ Decisions 3 decision candidate(s) were VETOED because this brain has `autoAdr` off (2h ago).
+      fix: Set `"features": { "autoAdr": true }` in the brain's `.commonwealth/config.json` …
+  ✓ Drops   9 candidate(s) dropped by curation (12m ago): 7 duplicate (lexical), 2 trivia.
+```
+
+Receipts live in the brain's gitignored `index/` — derived, disposable, never committed or synced.
+A fresh clone starts with none.
 
 #### Review as a pull request
 

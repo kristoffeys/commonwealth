@@ -3,6 +3,14 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import {
+  RECEIPT_REPORT_WINDOW_DAYS,
+  formatDropSummary,
+  isFeatureEnabled,
+  readReceipts,
+  resolveBrainDir,
+  summarizeDrops,
+} from "@cmnwlth/core";
 import { defaultAddDeps, runAdd } from "./add.js";
 import { formatCaptureLine, readCaptureLog } from "./capture-log.js";
 import { cmdOrgBrain } from "./org-brain.js";
@@ -269,6 +277,24 @@ export async function run(argv: string[]): Promise<number> {
       const captures = await readCaptureLog();
       if (captures.length > 0) {
         process.stdout.write(`${formatCaptureLine(captures[captures.length - 1]!)}\n`);
+      }
+      // Then what curation DROPPED (ADR-0039, #266), aggregated by class — "2 autoAdr-vetoed,
+      // 1 secret-blocked" is actionable in a way three unrelated reason strings never were. Silent
+      // on an empty receipt log (nothing dropped, or a fresh clone whose derived state is gone).
+      const brainDir = await resolveBrainDir(process.cwd());
+      if (brainDir) {
+        // Trailing window only — a drop from months ago is history, not status. The live `autoAdr`
+        // flag goes in too, so this line never points at a `doctor` that has nothing left to fix.
+        const since = Date.now() - RECEIPT_REPORT_WINDOW_DAYS * 86_400_000;
+        const autoAdrEnabled = await isFeatureEnabled(brainDir, "autoAdr").catch(() => true);
+        const drops = summarizeDrops(await readReceipts(brainDir), { since, autoAdrEnabled });
+        if (drops.total > 0) {
+          const tail =
+            drops.recoverable > 0
+              ? ` (${drops.recoverable} recoverable — \`commonwealth doctor\` has the fix)`
+              : "";
+          process.stdout.write(`Dropped by curation: ${formatDropSummary(drops)}${tail}.\n`);
+        }
       }
       const queue = await delegateCurate(["list"]);
       const daemon = await delegateSync(["status"]);

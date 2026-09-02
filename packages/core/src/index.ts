@@ -22,3 +22,4 @@ export * from "./checkpoint.js";
 export * from "./emit.js";
 export * from "./verify.js";
 export * from "./lock.js";
+export * from "./receipts.js";

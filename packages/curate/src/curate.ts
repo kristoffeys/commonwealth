@@ -1,11 +1,14 @@
 import {
+  classifyDrop,
   cosineSimilarity,
+  dropFor,
   embedProvider,
   hasSecrets,
   listNotes,
   loadBrainConfig,
   loadVectors,
   scanOptions,
+  type DropClassification,
   type Embedder,
   type NewNoteInput,
   type Note,
@@ -118,11 +121,21 @@ export const defaultCurator: Curator = {
   },
 };
 
-/** A candidate that the curator declined to stage, with the reason it was dropped. */
+/**
+ * A candidate that the curator declined to stage, with the reason it was dropped.
+ *
+ * `reason` is the original free-text string and stays exactly as it was — stderr breadcrumbs, the
+ * `llm-duplicate` tally in the CLI, and the MCP `remember` result all still read it. `drop` is the
+ * structured receipt added by ADR-0039 (#266): a stable category, whether the user can recover the
+ * candidate, and what to do about it. It is REQUIRED, not optional, on purpose — that is what makes
+ * it impossible to add a new gate here without also saying what its drop means.
+ */
 export interface RejectedCandidate {
   candidate: NewNoteInput;
   reason: string;
   duplicateOf?: string;
+  /** Structured classification of this drop (ADR-0039). */
+  drop: DropClassification;
 }
 
 /** Result of a curation run: what got staged and what was rejected (and why). */
@@ -235,14 +248,22 @@ export async function curate(
     // or field would otherwise pass this gate, promote to canon, then be silently withheld by
     // the scrub on every sync forever (#99).
     if (hasSecrets(candidateSecretScanText(candidate), secretOpts)) {
-      result.rejected.push({ candidate, reason: "contains-secret" });
+      result.rejected.push({
+        candidate,
+        reason: "contains-secret",
+        drop: dropFor("secret-detected"),
+      });
       continue;
     }
 
     // Gate decisions before the normal assess/dedupe path; a dropped decision is not staged
     // and does not count against dedupe (it never enters `existing`).
     if (candidate.kind === "decision" && !autoAdr) {
-      result.rejected.push({ candidate, reason: "auto-adr-disabled" });
+      result.rejected.push({
+        candidate,
+        reason: "auto-adr-disabled",
+        drop: dropFor("autoadr-vetoed"),
+      });
       continue;
     }
 
@@ -252,6 +273,9 @@ export async function curate(
         candidate,
         reason: assessment.reason,
         ...(assessment.duplicateOf !== undefined ? { duplicateOf: assessment.duplicateOf } : {}),
+        // The curator seam (ADR-0007) is pluggable, so its reason is free text — classify it by
+        // string. An unrecognized reason lands in `unknown` rather than vanishing from the tally.
+        drop: classifyDrop(assessment.reason, assessment.duplicateOf),
       });
       continue;
     }
@@ -268,7 +292,14 @@ export async function curate(
         config.embeddings.threshold,
       );
       if (hit) {
-        result.rejected.push({ candidate, reason: "duplicate", duplicateOf: hit.id });
+        // The wire `reason` stays "duplicate" (unchanged for existing readers); the receipt says
+        // which gate actually fired, which is the thing a lexical/semantic tally needs to tell apart.
+        result.rejected.push({
+          candidate,
+          reason: "duplicate",
+          duplicateOf: hit.id,
+          drop: dropFor("duplicate-semantic", { duplicateOf: hit.id }),
+        });
         continue;
       }
     }
@@ -282,9 +313,11 @@ export async function curate(
       // Fold into the existing set so later batch entries dedupe against it too.
       existing.push(note);
     } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
       result.rejected.push({
         candidate,
-        reason: `invalid: ${err instanceof Error ? err.message : String(err)}`,
+        reason: `invalid: ${detail}`,
+        drop: dropFor("invalid", { detail }),
       });
     }
   }
