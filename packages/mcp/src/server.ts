@@ -1,5 +1,5 @@
 import path from "node:path";
-import { NOTE_KINDS, type Note, type NoteKind } from "@cmnwlth/core";
+import { NOTE_KINDS, type Note, type NoteKind, type ResultDiagnostics } from "@cmnwlth/core";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { PROMPTS, promptArgsSchema } from "./prompts.js";
@@ -27,6 +27,20 @@ function summarizeNote(note: Note): string {
   const fm = note.frontmatter;
   const status = "status" in fm ? ` [${fm.status}]` : "";
   return `- ${fm.title}${status} (${note.path})`;
+}
+
+/**
+ * Render a {@link ResultDiagnostics} as a compact human-readable line, appended under a hit so an
+ * agent reading the tool's TEXT content (not just `structuredContent`) can see the evidence class
+ * behind a citation (#272) without needing to parse the structured payload.
+ */
+function formatDiagnostics(d: ResultDiagnostics): string {
+  const threshold =
+    d.threshold === null ? "n/a" : `${d.threshold} (cleared: ${String(d.clearedThreshold)})`;
+  return (
+    `    [diagnostics] tier=${d.tier} lexicalRank=${d.lexicalRank ?? "—"} ` +
+    `semanticRank=${d.semanticRank ?? "—"} score=${d.rrfScore.toFixed(4)} threshold=${threshold}`
+  );
 }
 
 /** The MCP error-result shape returned by a tool: human text + `isError`. */
@@ -105,15 +119,45 @@ export function createServer(
         query: z.string().min(1).describe("Search terms"),
         kind: kindEnum.optional().describe("Restrict to a single note kind"),
         limit: z.number().int().positive().max(100).optional().describe("Max results (default 20)"),
+        diagnostics: z
+          .boolean()
+          .optional()
+          .describe(
+            "Attach retrieval provenance to each result (lexical/semantic rank, fused score, " +
+              "evidence tier, and the lexical-support threshold it was judged against) so you can " +
+              "decide whether a hit is well-supported before citing it. Off by default.",
+          ),
+        minLexicalSupport: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe(
+            "Require at least this many query-token lexical anchors (a hit in the lexical " +
+              "candidate list, or a title/tag keyword match) before a semantic-only match survives " +
+              "fusion — raise it to reject pure vector-similarity noise. Only affects brains with " +
+              "semantic search enabled; default 0 keeps today's permissive behavior unchanged.",
+          ),
       },
     },
-    async ({ query, kind, limit }) => {
+    async ({ query, kind, limit, diagnostics, minLexicalSupport }) => {
       if (brainDir === null) return brainUnavailable(unavailable);
-      const results = await searchNotes(brainDir, { query, kind, limit });
+      const results = await searchNotes(brainDir, {
+        query,
+        kind,
+        limit,
+        diagnostics,
+        minLexicalSupport,
+      });
       const text =
         results.length === 0
           ? `No notes matched "${query}".`
-          : results.map((r) => `- ${r.title} [${r.kind}] (${r.path})\n    ${r.snippet}`).join("\n");
+          : results
+              .map((r) => {
+                const base = `- ${r.title} [${r.kind}] (${r.path})\n    ${r.snippet}`;
+                return r.diagnostics ? `${base}\n${formatDiagnostics(r.diagnostics)}` : base;
+              })
+              .join("\n");
       return { content: [{ type: "text", text }], structuredContent: { results } };
     },
   );
@@ -139,16 +183,43 @@ export function createServer(
           .max(50)
           .optional()
           .describe("Max notes to retrieve (default 8)"),
+        diagnostics: z
+          .boolean()
+          .optional()
+          .describe(
+            "Attach retrieval provenance to each hit (lexical/semantic rank, fused score, evidence " +
+              "tier, and the lexical-support threshold it was judged against) so you can decide " +
+              "whether a citation is well-supported before answering from it. Off by default.",
+          ),
+        minLexicalSupport: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe(
+            "Require at least this many query-token lexical anchors before a semantic-only hit " +
+              "survives fusion — raise it to reject pure vector-similarity noise among the notes " +
+              "you'd cite from. Only affects brains with semantic search enabled; default 0 keeps " +
+              "today's permissive behavior unchanged.",
+          ),
       },
     },
-    async ({ question, limit }) => {
+    async ({ question, limit, diagnostics, minLexicalSupport }) => {
       if (brainDir === null) return brainUnavailable(unavailable);
-      const result = await askBrainTool(brainDir, { question, limit });
+      const result = await askBrainTool(brainDir, {
+        question,
+        limit,
+        diagnostics,
+        minLexicalSupport,
+      });
       const text = !result.coverage.matched
         ? `No notes in the brain matched "${question}". Tell the user you don't have enough to answer.`
         : `Answer "${question}" using ONLY these notes, citing each by id/path; if they don't cover it, say so:\n\n` +
           result.hits
-            .map((h) => `- [${h.kind}] ${h.title} (id: ${h.id}, path: ${h.path})\n    ${h.excerpt}`)
+            .map((h) => {
+              const base = `- [${h.kind}] ${h.title} (id: ${h.id}, path: ${h.path})\n    ${h.excerpt}`;
+              return h.diagnostics ? `${base}\n${formatDiagnostics(h.diagnostics)}` : base;
+            })
             .join("\n");
       return { content: [{ type: "text", text }], structuredContent: { ...result } };
     },

@@ -67,6 +67,21 @@ export interface ResultDiagnostics {
   rrfScore: number;
   /** Evidence class: in both lists (`hybrid`), lexical-only, or semantic-only. */
   tier: "lexical" | "semantic" | "hybrid";
+  /**
+   * The `minLexicalSupport` bar (#236 strict mode) this result was judged against, or `null` when
+   * the retrieval path has no such gate at all (lexical-only, where every hit has support ≥ 1 by
+   * construction — there is nothing for a threshold to prune). Present as a number (0 included) in
+   * the hybrid path, since `minLexicalSupport` is a real per-search option there even when left at
+   * its permissive default.
+   */
+  threshold: number | null;
+  /**
+   * Whether this result's lexical support met `threshold`. Always `true` for a hybrid-path result
+   * that carries a threshold — a candidate that falls short is dropped before fusion output is
+   * built, so this field documents the gate that was applied rather than a possible failure on a
+   * returned hit. `null` when `threshold` is `null`.
+   */
+  clearedThreshold: boolean | null;
 }
 
 export interface SearchResult {
@@ -755,6 +770,10 @@ function lexicalSearch(
             semanticRank: null,
             rrfScore: r.score,
             tier: "lexical",
+            // No support gate exists on this path (every hit has support ≥ 1 by construction) —
+            // null is the honest value, not a fabricated threshold.
+            threshold: null,
+            clearedThreshold: null,
           } satisfies ResultDiagnostics,
         }
       : {}),
@@ -892,6 +911,12 @@ function hybridSearch(
               semanticRank: sr,
               rrfScore,
               tier: lr !== null && sr !== null ? "hybrid" : lr !== null ? "lexical" : "semantic",
+              // The real minLexicalSupport gate (#236), always meaningful on this path (0 = its
+              // permissive default). `id` is only ever a member of `keptIds` when it already cleared
+              // this bar (see the `keptIds` filter above), so `clearedThreshold` is always true here —
+              // it documents the gate that was applied, not a live pass/fail check.
+              threshold: minSupport,
+              clearedThreshold: true,
             } satisfies ResultDiagnostics,
           }
         : {}),
