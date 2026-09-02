@@ -17,6 +17,7 @@ export * from "./health.js";
 export * from "./capture-coverage.js";
 export * from "./map.js";
 export * from "./status.js";
+export * from "./checkpoint.js";
 export * from "./emit.js";
 export * from "./verify.js";
 export * from "./lock.js";

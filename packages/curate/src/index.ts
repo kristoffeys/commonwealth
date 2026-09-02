@@ -161,9 +161,9 @@ function usage(): void {
       "  commonwealth-curate project <list | link <id> <src...> | unlink <id> [<src...>]",
       "      | adopt <id> [--dry-run]> [--dir <brain>]",
       "  commonwealth-curate status-cache [--dir <brain>]",
-      "  commonwealth-curate consolidate [--dry-run] [--dir <brain>]",
+      "  commonwealth-curate consolidate [--dry-run] [--force] [--dir <brain>]",
       "  commonwealth-curate reclassify [--project <src>] [--limit <n>] (--emit | [--apply] [--from <file>]) [--dir <brain>]",
-      "  commonwealth-curate graduate [--suggest] [--dry-run] [--threshold <n>] [--org-dir <brain>] [--include-rejected]",
+      "  commonwealth-curate graduate [--suggest] [--dry-run] [--force] [--threshold <n>] [--org-dir <brain>] [--include-rejected]",
       "  commonwealth-curate feature list [--dir <brain>]",
       "  commonwealth-curate feature enable <name> [--dir <brain>]",
       "  commonwealth-curate feature disable <name> [--dir <brain>]",
@@ -1088,18 +1088,36 @@ async function cmdStatusCache(dir: string): Promise<void> {
 }
 
 /**
- * `consolidate [--dry-run]` — cross-user canon consolidation (#29): supersede near-duplicate
- * memory/decision notes onto a single survivor (supersede-not-delete), single-writer.
+ * `consolidate [--dry-run] [--force]` — cross-user canon consolidation (#29): supersede
+ * near-duplicate memory/decision notes onto a single survivor (supersede-not-delete),
+ * single-writer. `--force` overrides the quiet-tick guard (#273), which otherwise makes a run over
+ * unchanged canon a cheap no-op.
  */
 async function cmdConsolidate(dir: string, args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
-    options: { "dry-run": { type: "boolean" }, dir: { type: "string" } },
+    options: {
+      "dry-run": { type: "boolean" },
+      force: { type: "boolean" },
+      dir: { type: "string" },
+    },
     allowPositionals: false,
   });
-  const result = await consolidateCanon(dir, { dryRun: values["dry-run"] === true });
+  const result = await consolidateCanon(dir, {
+    dryRun: values["dry-run"] === true,
+    force: values.force === true,
+  });
   if (result.skipped) {
     console.error(`[commonwealth-curate] consolidate skipped: ${result.skipped}`);
+    return;
+  }
+  // A quiet tick (#273) is a successful no-op, not a failure: say WHY nothing happened and how to
+  // override, and exit 0 with no stdout (there is genuinely nothing to compose downstream).
+  if (result.unchangedSince) {
+    console.error(
+      `[commonwealth-curate] consolidate: nothing to do — canon unchanged since ` +
+        `${result.unchangedSince} (use --force to run the full pass anyway)`,
+    );
     return;
   }
   const verb = values["dry-run"] ? "would supersede" : "superseded";
@@ -1189,11 +1207,13 @@ async function cmdReclassify(dir: string, args: string[]): Promise<void> {
 }
 
 /**
- * `graduate [--suggest] [--dry-run] [--threshold <n>] [--org-dir <brain>]` — org-brain graduation
+ * `graduate [--suggest] [--dry-run] [--force] [--threshold <n>] [--org-dir <brain>]` — org-brain graduation
  * (#110): scan every wired project brain for opted-in notes that recur across ≥2 brains and stage
  * a candidate into the org-brain for manual review. Unlike other subcommands it resolves NO single
  * brain from cwd — it locates the org-brain (from `--org-dir` or the registry pointer) and
  * enumerates the rest itself. `--suggest` is accepted for ergonomics (the only mode is suggest).
+ * `--force` overrides the quiet-tick guard (#273), which otherwise skips the embeddings work
+ * entirely when no wired brain has changed since the last successful pass.
  */
 async function cmdGraduate(args: string[]): Promise<void> {
   const { values } = parseArgs({
@@ -1201,6 +1221,7 @@ async function cmdGraduate(args: string[]): Promise<void> {
     options: {
       suggest: { type: "boolean" },
       "dry-run": { type: "boolean" },
+      force: { type: "boolean" },
       threshold: { type: "string" },
       "org-dir": { type: "string" },
       "include-rejected": { type: "boolean" },
@@ -1215,12 +1236,21 @@ async function cmdGraduate(args: string[]): Promise<void> {
   }
   const result = await graduateToOrgBrain({
     dryRun: values["dry-run"] === true,
+    force: values.force === true,
     includeRejected: values["include-rejected"] === true,
     ...(threshold !== undefined ? { threshold } : {}),
     ...(typeof values["org-dir"] === "string" ? { orgBrainDir: values["org-dir"] } : {}),
   });
   if (result.skipped) {
     console.error(`[commonwealth-curate] graduate skipped: ${result.skipped}`);
+    return;
+  }
+  // A quiet tick (#273) — see cmdConsolidate: a successful no-op with the reason spelled out.
+  if (result.unchangedSince) {
+    console.error(
+      `[commonwealth-curate] graduate: nothing to do — no wired brain changed since ` +
+        `${result.unchangedSince} (use --force to run the full pass anyway)`,
+    );
     return;
   }
   for (const s of result.skippedBrains) {

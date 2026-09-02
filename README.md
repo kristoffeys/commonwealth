@@ -141,6 +141,8 @@ commonwealth project unlink <id> [<src>]  # undo a link (derived views only; no 
 commonwealth project adopt <id> [--dry-run]  # promote a proven link into note frontmatter (one commit), then retire the entry
 commonwealth statusline [install]         # ambient status line for Claude Code (see below)
 commonwealth graduate [--suggest]         # propose facts recurring across ≥2 brains to the org-brain
+commonwealth consolidate [--dry-run]      # supersede near-duplicate canon notes onto one survivor
+commonwealth consolidate|graduate --force # run the full pass even when nothing has changed since the last one
 commonwealth doctor [--fix]               # diagnose the setup + last capture outcome (reads ~/.commonwealth/capture.log)
 commonwealth update --agent both          # update the CLI + refresh both host integrations
 commonwealth --version                    # print the installed CLI version
@@ -225,6 +227,14 @@ trust boundary, regardless of any brain's `autoPromote`. Rejecting a candidate r
 **reject-tombstone** in the org-brain, so the same cluster is not re-proposed on the next run (it is
 skipped with a `(previously rejected — N suppressed)` note); `commonwealth graduate --include-rejected`
 resurfaces them. See [ADR-0023](docs/adr/0023-org-brain-graduation.md).
+
+**A quiet run is cheap.** `consolidate` and `graduate` are safe to put on a schedule: before doing
+any similarity or embeddings work, each cheaply fingerprints the notes it would read and skips the
+whole pass when nothing has changed since its last _successful_ run, reporting `nothing to do —
+canon unchanged since <time>`. The marker advances only on success, so an interrupted pass
+re-processes the same window rather than skipping it, and it lives in the disposable `index/`
+directory — deleting it just costs one full pass. `--force` runs the full pass regardless, and
+`--dry-run` always does the work.
 
 ### Route projects to brains (rules)
 
