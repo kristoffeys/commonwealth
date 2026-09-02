@@ -156,6 +156,28 @@ describe("captureCandidates persists receipts", () => {
     expect(raw).not.toContain("AKIAIOSFODNN7EXAMPLE");
   });
 
+  it("honours the brain's entropy setting when redacting a pre-gate drop", async () => {
+    await fs.mkdir(path.join(brainDir, ".commonwealth"), { recursive: true });
+    await fs.writeFile(
+      path.join(brainDir, ".commonwealth", "config.json"),
+      JSON.stringify({ name: "test", secretScan: { entropy: true } }),
+    );
+    const token = "f1bjAFsAhASOZ7mGccwx3kNoA4vbAzRslEEXiLzm";
+
+    await captureCandidates(brainDir, [
+      {
+        kind: "memory",
+        title: `api token ${token}`,
+        body: "The nightly job authenticates with this token and it should move to the vault.",
+        verdict: { judge: "trivia", consolidation: "distinct" },
+      },
+    ]);
+
+    const raw = await fs.readFile(path.join(brainDir, "index", "receipts.jsonl"), "utf8");
+    expect(raw).not.toContain(token);
+    expect((await readReceipts(brainDir))[0]?.title).toBe(REDACTED_TITLE);
+  });
+
   it("a capture that drops nothing writes no receipt file at all", async () => {
     await captureCandidates(brainDir, [memory]);
     expect(await readReceipts(brainDir)).toEqual([]);

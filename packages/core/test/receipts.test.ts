@@ -132,6 +132,20 @@ describe("receiptFor", () => {
     expect(JSON.stringify(r)).not.toContain("AKIAIOSFODNN7EXAMPLE");
   });
 
+  it("uses the BRAIN's scanner settings — an entropy-only token is redacted when the brain opted in", () => {
+    // A brain with entropy detection on (#46) has a strictly stronger gate than the defaults.
+    // Redacting with the default scan would leak exactly the prefix-less tokens entropy catches.
+    const token = "f1bjAFsAhASOZ7mGccwx3kNoA4vbAzRslEEXiLzm";
+    const dropped = {
+      title: `api token ${token}`,
+      kind: "memory",
+      reason: "llm-trivia",
+      drop: dropFor("trivia"),
+    };
+    expect(receiptFor(brainDir, dropped, NOW).title).toContain(token);
+    expect(receiptFor(brainDir, dropped, NOW, { detectEntropy: true }).title).toBe(REDACTED_TITLE);
+  });
+
   it("REDACTS the title of a secret-detected drop — a receipt must not persist the credential", () => {
     const r = receiptFor(
       brainDir,
@@ -281,6 +295,24 @@ describe("summarizeDrops", () => {
     expect(entry.recoverable).toBe(true);
     expect(entry.nextAction).toBe(dropFor("autoadr-vetoed").nextAction);
     expect(summarizeDrops([stale]).recoverable).toBe(1);
+  });
+
+  it("reports autoAdr vetoes as history — not as something to fix — once the flag is back on", () => {
+    // Otherwise every surface keeps offering a fix the user already applied, which is the
+    // stale-warning bug in a different costume. One rule, so doctor and status cannot disagree.
+    const receipts = [receipt({ ...dropFor("autoadr-vetoed") }), receipt({ ...dropFor("trivia") })];
+
+    const off = summarizeDrops(receipts, { autoAdrEnabled: false });
+    expect(off.recoverable).toBe(1);
+    expect(off.byCategory.find((e) => e.category === "autoadr-vetoed")?.nextAction).toBeTruthy();
+
+    const on = summarizeDrops(receipts, { autoAdrEnabled: true });
+    expect(on.total).toBe(2);
+    expect(on.recoverable).toBe(0);
+    const entry = on.byCategory.find((e) => e.category === "autoadr-vetoed")!;
+    expect(entry.count).toBe(1);
+    expect(entry.recoverable).toBe(false);
+    expect(entry.nextAction).toBeNull();
   });
 
   it("is empty-safe", () => {

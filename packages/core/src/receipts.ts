@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { hasSecrets } from "./secrets.js";
+import { hasSecrets, type ScanOptions } from "./secrets.js";
 
 /**
  * Capture receipts (ADR-0037, #266). Curation is *gated* — a veto is a normal, correct outcome —
@@ -248,14 +248,20 @@ export interface DroppedCandidate {
  * BEFORE `curate()` scans anything — so a credential in one of those titles would have been written
  * to disk in the clear by the very mechanism that exists to report on the gate. Scanning here
  * covers every drop path, present and future, and costs one regex sweep over a title.
+ *
+ * `secretOpts` MUST be the brain's own {@link ScanOptions} (`scanOptions(config)`), not the
+ * defaults: a brain that opted into entropy detection has a strictly stronger gate, and redacting
+ * with the weaker default scan would leak exactly the prefix-less tokens — vendor-agnostic API
+ * keys, session secrets — that entropy detection exists to catch, in the brains that care most.
  */
 export function receiptFor(
   brainDir: string,
   dropped: DroppedCandidate,
   ts: number,
+  secretOpts: ScanOptions = {},
 ): CaptureReceipt {
   const { drop, title, kind, reason, duplicateOf } = dropped;
-  const unsafe = drop.category === "secret-detected" || hasSecrets(title);
+  const unsafe = drop.category === "secret-detected" || hasSecrets(title, secretOpts);
   return {
     ...drop,
     ts,
@@ -376,6 +382,13 @@ export interface SummarizeOptions {
    * how the brain is configured today (see {@link RECEIPT_REPORT_WINDOW_DAYS}).
    */
   since?: number;
+  /**
+   * The brain's LIVE `autoAdr` flag. When it is `true`, past `autoadr-vetoed` receipts are reported
+   * as history rather than as something to act on (`recoverable: false`, no next action) — the user
+   * already applied the fix, and a surface that keeps offering it is the stale-warning bug wearing
+   * a different hat. Omitted → the receipts are taken at face value.
+   */
+  autoAdrEnabled?: boolean;
 }
 
 /**
@@ -384,6 +397,18 @@ export interface SummarizeOptions {
  * configuration ages out on its own instead of nagging forever after the user fixed it.
  */
 export const RECEIPT_REPORT_WINDOW_DAYS = 7;
+
+/**
+ * The classification a category carries RIGHT NOW, given live brain state. One place, so every
+ * surface that reports drops agrees about what is still actionable.
+ */
+function live(category: DropCategory, opts: SummarizeOptions): DropClassification {
+  const drop = dropFor(category);
+  if (category === "autoadr-vetoed" && opts.autoAdrEnabled === true) {
+    return { ...drop, recoverable: false, nextAction: null };
+  }
+  return drop;
+}
 
 /** Aggregate receipts into a {@link DropSummary}. Pure; safe on an empty list. */
 export function summarizeDrops(
@@ -405,7 +430,7 @@ export function summarizeDrops(
       // Take `recoverable`/`nextAction` from the CURRENT table rather than from the persisted
       // receipt: a receipt written by an older version carries that version's wording, and the
       // advice we print must be the advice this version actually stands behind.
-      const current = dropFor(r.category);
+      const current = live(r.category, opts);
       counts.set(r.category, {
         category: r.category,
         count: 1,
@@ -413,7 +438,7 @@ export function summarizeDrops(
         nextAction: current.nextAction,
       });
     }
-    if (dropFor(r.category).recoverable) recoverable += 1;
+    if (live(r.category, opts).recoverable) recoverable += 1;
     if (typeof r.ts === "number" && (newestTs === null || r.ts > newestTs)) newestTs = r.ts;
   }
   const byCategory = [...counts.values()].sort((a, b) =>

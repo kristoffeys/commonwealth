@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import {
   RECEIPT_REPORT_WINDOW_DAYS,
   formatDropSummary,
+  isFeatureEnabled,
   readReceipts,
   resolveBrainDir,
   summarizeDrops,
@@ -282,9 +283,11 @@ export async function run(argv: string[]): Promise<number> {
       // on an empty receipt log (nothing dropped, or a fresh clone whose derived state is gone).
       const brainDir = await resolveBrainDir(process.cwd());
       if (brainDir) {
-        // Trailing window only — a drop from months ago is history, not status.
+        // Trailing window only — a drop from months ago is history, not status. The live `autoAdr`
+        // flag goes in too, so this line never points at a `doctor` that has nothing left to fix.
         const since = Date.now() - RECEIPT_REPORT_WINDOW_DAYS * 86_400_000;
-        const drops = summarizeDrops(await readReceipts(brainDir), { since });
+        const autoAdrEnabled = await isFeatureEnabled(brainDir, "autoAdr").catch(() => true);
+        const drops = summarizeDrops(await readReceipts(brainDir), { since, autoAdrEnabled });
         if (drops.total > 0) {
           const tail =
             drops.recoverable > 0

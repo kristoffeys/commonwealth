@@ -5,7 +5,9 @@ import {
   ensureContributorPerson,
   isFeatureEnabled,
   listNotes,
+  loadBrainConfig,
   receiptFor,
+  scanOptions,
   supersedeNote,
   type CaptureReceipt,
   type ContributorIdentity,
@@ -239,6 +241,10 @@ export async function captureCandidates(
   // it is the only reason a user can still be told "2 decision candidates were vetoed by autoAdr"
   // once this process is gone. Derived + gitignored + never synced; see `@cmnwlth/core/receipts`.
   const now = Date.now();
+  // The brain's OWN scanner settings, so a receipt redacts exactly what the gate would have caught.
+  // A brain with entropy detection on has a stricter scan than the defaults (#46), and the pre-gate
+  // classifier drops above never went through the gate at all.
+  const secretOpts = scanOptions(await loadBrainConfig(brainDir));
   const receipts: CaptureReceipt[] = rejected.map((r) =>
     receiptFor(
       brainDir,
@@ -250,6 +256,7 @@ export async function captureCandidates(
         drop: r.drop,
       },
       now,
+      secretOpts,
     ),
   );
   await appendReceipts(brainDir, receipts);

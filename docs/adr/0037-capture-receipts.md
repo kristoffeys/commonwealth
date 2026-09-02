@@ -92,7 +92,9 @@ capture ran fine, extracted six candidates, and saved none. That gap is what a r
    redaction is keyed on the *scanner*, not on the `secret-detected` category: the ADR-0030
    classifier drops (`trivia`, `llm-duplicate`) are rejected before `curate()` scans anything, so a
    category-keyed rule would have written those titles to disk in the clear — the exact failure the
-   receipt exists to report on. The category, count, and fix survive; the text does not.
+   receipt exists to report on. The scan uses the *brain's own* scanner settings, not the defaults,
+   so a team that opted into entropy detection (#46) gets that stricter scan here too. The category,
+   count, and fix survive; the text does not.
 
 7. **The surfacing is aggregate.** `commonwealth doctor` gains two links: a **Decisions** link
    emitted only when `autoAdr` vetoed decision candidates — #266 verbatim: say it happened, say how

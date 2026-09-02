@@ -540,7 +540,7 @@ function dropChecks(
   now: number,
 ): DoctorCheck[] {
   const since = now - RECEIPT_REPORT_WINDOW_DAYS * 86_400_000;
-  const summary = summarizeDrops(receipts, { since });
+  const summary = summarizeDrops(receipts, { since, autoAdrEnabled });
   const window = `last ${RECEIPT_REPORT_WINDOW_DAYS}d`;
   if (summary.total === 0) {
     return [
@@ -556,8 +556,10 @@ function dropChecks(
   const checks: DoctorCheck[] = [];
   const when = formatCaptureAge(summary.newestTs ?? undefined);
 
+  // `summarizeDrops` has already folded the live flag in: an autoAdr entry is `recoverable` only
+  // while the flag is still off, so this branch and `status` can never disagree.
   const autoAdr = summary.byCategory.find((e) => e.category === "autoadr-vetoed");
-  if (autoAdr && !autoAdrEnabled) {
+  if (autoAdr?.recoverable) {
     checks.push({
       id: "autoadr-drops",
       label: "Decisions",
