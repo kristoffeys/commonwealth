@@ -185,6 +185,99 @@ describe("renameProject — refusals (never merge, never mass-write a bad id)", 
     expect(head()).toBe(before);
     expect(porcelain()).toBe("");
   });
+
+  it("refuses when <new> exists ONLY via a declared project: frontmatter (no alias key)", async () => {
+    // `<old>` is an alias link; `<new>` is not in the map at all — but a note already DECLARES it in
+    // its own frontmatter. Renaming would fuse two distinct engagements, so it must be refused (F2).
+    await writeNote(brain, mem("A", "acme/web"));
+    await persistProjectAliasMap(brain, (m) => linkSources(m, "acme", ["acme/web"]));
+    await writeNote(brain, { ...mem("Occupier", "other/repo"), project: "newproj" });
+    await regenerateDerived(brain);
+    commitAll("seed");
+
+    const before = head();
+    const mapBefore = await loadProjectAliasMap(brain);
+    const hashesBefore = await noteHashes();
+
+    const result = await renameProject(brain, "acme", "newproj");
+    expect(result.skipped).toMatch(/already exists.*merge/i);
+    expect(result.committed).toBe(false);
+    // Nothing changed: alias map, note contents, HEAD, tree.
+    expect(await loadProjectAliasMap(brain)).toEqual(mapBefore);
+    expect(await noteHashes()).toEqual(hashesBefore);
+    expect(head()).toBe(before);
+    expect(porcelain()).toBe("");
+  });
+
+  it("refuses when <new> exists ONLY as a source-singleton resolved project", async () => {
+    // `<new>` names no alias key and no declared frontmatter — but a note's `source` resolves to it
+    // as a singleton project (`newproj` == its source). Still an occupied identity → refuse (F2).
+    await writeNote(brain, mem("A", "acme/web"));
+    await persistProjectAliasMap(brain, (m) => linkSources(m, "acme", ["acme/web"]));
+    await writeNote(brain, mem("Singleton", "newproj"));
+    await regenerateDerived(brain);
+    commitAll("seed");
+
+    const before = head();
+    const mapBefore = await loadProjectAliasMap(brain);
+    const hashesBefore = await noteHashes();
+
+    const result = await renameProject(brain, "acme", "newproj");
+    expect(result.skipped).toMatch(/already exists.*merge/i);
+    expect(result.committed).toBe(false);
+    expect(await loadProjectAliasMap(brain)).toEqual(mapBefore);
+    expect(await noteHashes()).toEqual(hashesBefore);
+    expect(head()).toBe(before);
+    expect(porcelain()).toBe("");
+  });
+});
+
+describe("renameProject — move-phase collision fails closed BEFORE any mutation (#304 F1)", () => {
+  it("aborts with nothing mutated when the projected move plan would collide (retry still possible)", async () => {
+    // Two notes with the SAME trusted id under different sources, both linked to `acme`, both would
+    // move to the SAME destination under the new id — a collision. The rename must fail closed with
+    // ZERO writes: projects.json + every note frontmatter untouched and the tree clean, so a retry
+    // (after resolving the id clash) is still possible — not a half-applied, dirty, stuck state.
+    await writeNote(brain, {
+      id: "dup-note",
+      kind: "memory",
+      title: "One",
+      body: "b",
+      source: "s-one",
+    });
+    await writeNote(brain, {
+      id: "dup-note",
+      kind: "memory",
+      title: "Two",
+      body: "b",
+      source: "s-two",
+    });
+    await persistProjectAliasMap(brain, (m) => linkSources(m, "acme", ["s-one", "s-two"]));
+    await regenerateDerived(brain);
+    commitAll("seed: colliding ids");
+
+    const before = head();
+    const mapBefore = await loadProjectAliasMap(brain);
+    const hashesBefore = await noteHashes();
+
+    // The pre-flight collision check throws BEFORE step 1/2 write anything.
+    await expect(renameProject(brain, "acme", "acme2")).rejects.toThrow(/collision|overwrite/i);
+
+    // Nothing mutated: the alias key was NOT renamed, no frontmatter re-stamp, no commit, clean tree.
+    const mapAfter = await loadProjectAliasMap(brain);
+    expect(mapAfter).toEqual(mapBefore);
+    expect(mapAfter).toHaveProperty("acme");
+    expect(mapAfter).not.toHaveProperty("acme2");
+    expect(await noteHashes()).toEqual(hashesBefore);
+    expect(head()).toBe(before);
+    expect(porcelain()).toBe("");
+
+    // Retry is not blocked by leftover dirt: because the tree is clean, a second attempt reaches the
+    // same REAL collision again (rather than being rejected by the dirty-worktree guard). The user's
+    // fix is to resolve the duplicate id — not to un-stick a half-applied, dirty tree.
+    await expect(renameProject(brain, "acme", "acme2")).rejects.toThrow(/collision|overwrite/i);
+    expect(porcelain()).toBe("");
+  }, 20000);
 });
 
 describe("renameProject — dry-run writes nothing", () => {

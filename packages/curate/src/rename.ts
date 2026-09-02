@@ -6,12 +6,14 @@ import {
   buildIndex,
   listNotes,
   loadProjectAliasMap,
+  NoteIdCollisionError,
   overwriteNote,
   pathForNote,
   persistProjectAliasMap,
   projectIdError,
   regenerateDerived,
   resolveNoteProject,
+  resolveWithinBrain,
   RUNTIME_STATE_REL_PATHS,
   sourceSegment,
   type Note,
@@ -103,6 +105,41 @@ export interface RenameOptions {
 function currentSegment(relPath: string): string {
   const parts = relPath.split(/[\\/]/).filter((p) => p.length > 0);
   return parts.length >= 3 ? parts[0]! : "";
+}
+
+/**
+ * Project the file moves a rename would produce: every note that resolves to `<old>` today will
+ * resolve to `<new>` after the rename, so its file should live under `sourceSegment(<new>)`. Mirrors
+ * `relayout`'s planning EXACTLY (same target computation, same "already there → no move" skip) so the
+ * pre-flight collision check below sees the identical plan relayout will execute. Pure (read-only).
+ */
+function planMoves(resolvesToOld: Note[], newId: string): RenameMove[] {
+  const targetSeg = sourceSegment(newId);
+  const moves: RenameMove[] = [];
+  for (const n of resolvesToOld) {
+    if (currentSegment(n.path) === targetSeg) continue; // already under the target folder
+    moves.push({ from: n.path, to: pathForNote(n.frontmatter.kind, n.frontmatter.id, newId) });
+  }
+  return moves;
+}
+
+/**
+ * Fail CLOSED on a destination collision BEFORE any mutation (#304 F1). Replicates `relayout`'s
+ * `assertNoCollisions`: a destination claimed by two moves at once, or one that already exists on
+ * disk and isn't itself being vacated by this pass, is an overwrite we refuse (ADR-0003). Throwing
+ * here — before the alias-key rename and frontmatter re-stamp — guarantees a colliding rename leaves
+ * projects.json and every note untouched, so the tree stays clean and a retry is still possible
+ * (rather than the half-applied state a mid-relayout throw would leave behind).
+ */
+function assertNoCollisions(brainDir: string, moves: RenameMove[]): void {
+  const claimed = new Set<string>();
+  const fromSet = new Set(moves.map((m) => m.from));
+  for (const m of moves) {
+    if (claimed.has(m.to)) throw new NoteIdCollisionError(m.to);
+    claimed.add(m.to);
+    const abs = resolveWithinBrain(brainDir, m.to);
+    if (existsSync(abs) && !fromSet.has(m.to)) throw new NoteIdCollisionError(m.to);
+  }
 }
 
 /**
@@ -199,18 +236,29 @@ export async function renameProject(
   if (idErr) return skip(`invalid project id: ${idErr}`);
 
   const aliasMap = await loadProjectAliasMap(brainDir);
-  // Refuse to MERGE: `<new>` already naming an engagement in the map is a distinct project — never
-  // fold two into one silently (ADR-0003, confirmation over inference). The curator must pick a
-  // free id (or unlink the existing one first).
-  if (aliasMap[newId]) return skip(`project "${newId}" already exists in the alias map`);
-
   const oldEntry = aliasMap[oldId];
   const notes = await listNotes(brainDir);
+
+  // Refuse to MERGE (#304 F2): `<new>` is "occupied" if it already names an engagement by ANY tier —
+  // an alias-map key OR any note that resolves to it (declared `project: <new>` frontmatter, a
+  // source→alias link, or a source-singleton). Folding two distinct engagements into one is never
+  // silent (ADR-0003, confirmation over inference); the curator must pick an unused id (or retire the
+  // existing one first). A bare `aliasMap[newId]` check missed the frontmatter/source tiers entirely.
+  const occupyingNew = notes.filter((n) => resolveNoteProject(n, aliasMap) === newId);
+  if (aliasMap[newId] || occupyingNew.length > 0) {
+    return skip(
+      `project "${newId}" already exists (${occupyingNew.length} notes) — ` +
+        `rename would merge them; pick an unused id`,
+    );
+  }
 
   // Every note that DECLARES `project: <old>` in its own frontmatter — the save-time tier we rewrite.
   const declaredOld = notes.filter((n) => n.frontmatter.project === oldId);
   // Every note that RESOLVES to `<old>` today (declared + alias-linked + source-singleton), against
-  // the CURRENT map. Used both to prove `<old>` exists at all and to project the dry-run move plan.
+  // the CURRENT map. Used to prove `<old>` exists at all and to project the move plan (dry-run +
+  // pre-flight collision check). Post-rename these are EXACTLY the notes that resolve to `<new>`
+  // (the F2 guard above guarantees nothing else already resolves to `<new>`), so this set drives the
+  // relayout plan faithfully.
   const resolvesToOld = notes.filter((n) => resolveNoteProject(n, aliasMap) === oldId);
 
   // `<old>` must name SOMETHING: an alias key, a declared frontmatter id, or a resolved identity.
@@ -227,24 +275,22 @@ export async function renameProject(
     restamped: declaredOld.map((n) => ({ id: n.frontmatter.id, path: n.path })),
   };
 
-  if (dryRun) {
-    // Project the relayout WITHOUT writing: after the rename every note in `resolvesToOld` resolves
-    // to `<new>`, so its file should live under `sourceSegment(<new>)`. Compute the same plan
-    // `relayoutBrain` would (it can't see the not-yet-applied rename, so we mirror its planning).
-    const targetSeg = sourceSegment(newId);
-    const moves: RenameMove[] = [];
-    for (const n of resolvesToOld) {
-      if (currentSegment(n.path) === targetSeg) continue; // already under the target folder
-      moves.push({ from: n.path, to: pathForNote(n.frontmatter.kind, n.frontmatter.id, newId) });
-    }
-    return { ...base, moves, committed: false };
-  }
+  // The move plan the rename would produce — computed WITHOUT writing (mirrors relayout's planning).
+  const moves = planMoves(resolvesToOld, newId);
+
+  if (dryRun) return { ...base, moves, committed: false };
 
   // Real run. Refuse on a dirty worktree so the rename is the only thing in its commit (adopt gate).
   const isGit = existsSync(path.join(brainDir, ".git"));
   if (isGit && (await worktreeDirty(brainDir))) {
     return skip("brain worktree is dirty — commit or stash your changes first, then retry");
   }
+
+  // Pre-flight the collision check BEFORE any mutation (#304 F1). relayout also checks — but only
+  // AFTER steps 1-2 have already written the alias-key rename and the frontmatter re-stamps, which
+  // would leave a half-applied, dirty tree that the dirty-worktree guard then blocks from retrying.
+  // Checking the identical plan here means a colliding rename fails closed with ZERO writes.
+  assertNoCollisions(brainDir, moves);
 
   // 1. Rename the alias-map key, carrying its sources + customer. Guarded atomic write.
   if (oldEntry) {
@@ -266,8 +312,8 @@ export async function renameProject(
   // 3. Move files so folders follow the new id. relayoutBrain manages its own sync lock, moves via
   // link-not-rename (fails CLOSED on a destination collision), stamps `project` onto moved notes,
   // and regenerates the derived index — all scoped to `<new>` so unrelated projects are untouched.
+  // Its plan is identical to the pre-flighted `moves` above (same target computation, same note set).
   const relayout = await relayoutBrain(brainDir, { projectId: newId });
-  const moves: RenameMove[] = relayout.moves.map((m) => ({ from: m.from, to: m.to }));
 
   // relayout only regenerates derived when it actually moved something. When the key rename changed
   // the grouping but no file needed to move (every note already sat under the target segment), the
