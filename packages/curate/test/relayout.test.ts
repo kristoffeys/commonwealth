@@ -50,7 +50,8 @@ async function mocPaths(): Promise<string[]> {
   async function walk(abs: string): Promise<void> {
     for (const e of await fs.readdir(abs, { withFileTypes: true })) {
       if (e.isDirectory()) {
-        if ([".git", ".commonwealth", "index", "staging", "node_modules"].includes(e.name)) continue;
+        if ([".git", ".commonwealth", "index", "staging", "node_modules"].includes(e.name))
+          continue;
         await walk(path.join(abs, e.name));
         continue;
       }
@@ -168,8 +169,20 @@ describe("relayoutBrain", () => {
   it("fails closed (no overwrite) when a destination already exists", async () => {
     // Two notes with the SAME trusted id under different sources both resolve to project "p" and would
     // collide on the same destination path — the pass must abort before moving anything.
-    await writeNote(brain, { id: "dup-note", kind: "memory", title: "One", body: "b", source: "s-one" });
-    await writeNote(brain, { id: "dup-note", kind: "memory", title: "Two", body: "b", source: "s-two" });
+    await writeNote(brain, {
+      id: "dup-note",
+      kind: "memory",
+      title: "One",
+      body: "b",
+      source: "s-one",
+    });
+    await writeNote(brain, {
+      id: "dup-note",
+      kind: "memory",
+      title: "Two",
+      body: "b",
+      source: "s-two",
+    });
     await persistProjectAliasMap(brain, (m) => linkSources(m, "p", ["s-one", "s-two"]));
 
     const before = await notePaths();

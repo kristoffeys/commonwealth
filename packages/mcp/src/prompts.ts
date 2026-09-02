@@ -243,7 +243,9 @@ export const PROMPTS: PromptDef[] = [
           "decision / action item / durable fact becomes its own atomic note cross-linked back to that " +
           "record.",
         "",
-        raw ? `**Raw meeting material:** ${raw}` : "No meeting text was given — ask the user to paste the transcript (and, if handy, the title, attendees, and date).",
+        raw
+          ? `**Raw meeting material:** ${raw}`
+          : "No meeting text was given — ask the user to paste the transcript (and, if handy, the title, attendees, and date).",
         "",
         "You (the host) do the summarizing and extracting — Commonwealth only stores. Produce a concise " +
           "structured summary (purpose, attendees, date, key points), then extract the decisions " +

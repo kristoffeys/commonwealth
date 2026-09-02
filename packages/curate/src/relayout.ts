@@ -93,7 +93,12 @@ function currentSegment(relPath: string): string {
 async function planRelayout(
   brainDir: string,
   projectId: string | undefined,
-): Promise<{ moves: RelayoutMove[]; snapshot: Map<string, Note>; unchanged: number; total: number }> {
+): Promise<{
+  moves: RelayoutMove[];
+  snapshot: Map<string, Note>;
+  unchanged: number;
+  total: number;
+}> {
   const aliasMap = await loadProjectAliasMap(brainDir);
   const notes = await listNotes(brainDir);
 
@@ -119,7 +124,13 @@ async function planRelayout(
       continue;
     }
     const to = pathForNote(note.frontmatter.kind, note.frontmatter.id, target);
-    moves.push({ id: note.frontmatter.id, kind: note.frontmatter.kind, from: note.path, to, project: target });
+    moves.push({
+      id: note.frontmatter.id,
+      kind: note.frontmatter.kind,
+      from: note.path,
+      to,
+      project: target,
+    });
     snapshot.set(note.path, note);
   }
 
@@ -145,7 +156,12 @@ function assertNoCollisions(brainDir: string, moves: RelayoutMove[]): void {
 }
 
 /** Publish `note` (with `project` stamped) to `toRel`, failing CLOSED on an existing destination. */
-async function moveNote(brainDir: string, note: Note, toRel: string, project: string): Promise<void> {
+async function moveNote(
+  brainDir: string,
+  note: Note,
+  toRel: string,
+  project: string,
+): Promise<void> {
   const fromAbs = resolveWithinBrain(brainDir, note.path);
   const toAbs = resolveWithinBrain(brainDir, toRel);
   const stamped: Note = { ...note, frontmatter: { ...note.frontmatter, project }, path: toRel };

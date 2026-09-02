@@ -150,7 +150,7 @@ function usage(): void {
       "  commonwealth-curate promote-pr <id...> | --all [--dir <brain>]   open a promotion PR",
       "  commonwealth-curate stage --kind <kind> --title <t> --body <b|-> [--tags a,b]",
       "      [--deciders a,b] [--status <s>] [--owner <o>] [--relates id,id] [--dir <brain>]",
-      "      [--attendees \"a, b\"] [--meeting-date YYYY-MM-DD] [--source-type <plaud|recording|paste|manual>]",
+      '      [--attendees "a, b"] [--meeting-date YYYY-MM-DD] [--source-type <plaud|recording|paste|manual>]',
       "      (deciders/status: decisions; owner: work-state; attendees/meeting-date/source-type: meeting;",
       "       --body - reads the body from STDIN so a large transcript is piped, not passed as argv)",
       "  commonwealth-curate context [--dir <brain>] [--cwd <dir>] [--query <q>] [--limit <n>]",
@@ -569,7 +569,9 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
     const withSource = c.source ? c : { ...c, source };
     const src = withSource.source;
     const linkedProject =
-      typeof src === "string" && src.length > 0 ? (projectForSource(src, aliasMap) ?? undefined) : undefined;
+      typeof src === "string" && src.length > 0
+        ? (projectForSource(src, aliasMap) ?? undefined)
+        : undefined;
     const project = withSource.project ?? stamp?.project ?? linkedProject;
     const tags =
       stamp?.tag && !(withSource.tags ?? []).includes(stamp.tag)
@@ -1101,7 +1103,9 @@ async function cmdProject(dir: string, args: string[]): Promise<number> {
       return renderRelayout(result);
     } catch (err) {
       // A destination collision fails the whole pass closed (nothing was moved) — surface it clearly.
-      console.error(`[commonwealth-curate] relayout aborted: ${err instanceof Error ? err.message : err}`);
+      console.error(
+        `[commonwealth-curate] relayout aborted: ${err instanceof Error ? err.message : err}`,
+      );
       return 1;
     }
   }
