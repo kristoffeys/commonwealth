@@ -115,6 +115,8 @@ Gate-level rows are in the concurrency table above. Additional capabilities:
 | Verdict capture (per-candidate accept/reject bookkeeping) | `verdict-capture.test.ts` | ✅ Full | — |
 | Smoke (built curate binary runs) | `smoke.test.ts` | ✅ Full | — |
 | Project stamping on capture | `capture-project.test.ts` | ✅ Full | — |
+| Project relayout (move files to `<project>/<kind>/`, ADR-0035) | `relayout.test.ts` | ✅ Full | — |
+| Project rename (id + folders, one commit, #304) | `project-rename.test.ts` | ✅ Full | Alias-only + declared-frontmatter rename, collision/invalid/unknown refusals, write-nothing dry-run |
 
 ## `packages/sync`
 

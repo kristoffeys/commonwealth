@@ -172,7 +172,7 @@ function printUsage(): void {
       "  commonwealth emit      [--commit]              write brain context for Cursor/Copilot/Codex into this repo",
       "  commonwealth health    [--fail-under-capture <ratio>]   freshness/trust + capture-coverage rollup (CI gate)",
       "  commonwealth map                               brain-at-a-glance: per-kind counts + contributors",
-      "  commonwealth project   <list | link <id> <src...> | unlink <id> [<src...>] | adopt <id> [--dry-run]>   link/adopt engagement identity",
+      "  commonwealth project   <list | link <id> <src...> | unlink <id> [<src...>] | adopt <id> [--dry-run] | relayout [<id>] [--dry-run] | rename <old> <new> [--dry-run]>   manage engagement identity",
       "  commonwealth statusline  [install|uninstall]   Claude Code status line (brain · freshness · pending)",
       "  commonwealth consolidate  [--dry-run] [--force] supersede near-duplicate canon notes",
       "  commonwealth graduate  [--suggest] [--dry-run] [--force]  promote knowledge recurring across ≥2 brains to the org-brain",
