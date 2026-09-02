@@ -5,6 +5,7 @@ import {
   listNotes,
   supersedeNote,
   type ContributorIdentity,
+  type IntakeTier,
   type NewNoteInput,
 } from "@cmnwlth/core";
 import { curate, type CurateResult, type Curator } from "./curate.js";
@@ -70,6 +71,25 @@ export interface CaptureResult extends CurateResult {
 export interface CaptureOptions {
   /** Trusted local person responsible for these candidates; omitted for impersonal imports. */
   contributor?: ContributorIdentity;
+  /**
+   * Ingestion trust tier for this whole run (ADR-0038, #274) — `external` for a seed connector
+   * pulling from a system outside the brain (#150), omitted for the ordinary session path where
+   * absence already means `internal`. Declared once here by the trusted caller: an individual
+   * candidate may itself have been extracted from the external content whose trust we are grading,
+   * so a self-declared tier on a candidate is discarded in favour of this one.
+   */
+  intake?: IntakeTier;
+}
+
+/**
+ * Normalize a candidate's ingestion tier to the run's declared tier (ADR-0038): the caller's tier
+ * wins, and any tier the candidate declared for itself is dropped rather than trusted. Omitting
+ * `intake` writes a note byte-identical to a pre-ADR-0038 one, so the internal case is recorded by
+ * documented absence.
+ */
+function withRunIntake(input: NewNoteInput, intake: IntakeTier | undefined): NewNoteInput {
+  const { intake: _selfDeclared, ...rest } = input;
+  return intake ? { ...rest, intake } : rest;
 }
 
 /**
@@ -90,6 +110,11 @@ export interface CaptureOptions {
  *    marked superseded (`status` + `superseded_by`) — supersede-not-delete. With autoPromote off
  *    the target is left untouched (the new note isn't canon yet); the `supersedes` frontmatter link
  *    surfaces the pending consolidation for the curator (#198).
+ *
+ * Every candidate that reaches the gate is stamped with the run's ingestion trust tier
+ * ({@link CaptureOptions.intake}, ADR-0038) — omitted for the ordinary internal session path,
+ * `external` when a connector declares it. The tier is recorded, not acted on: it changes nothing
+ * about gating or autoPromote here, and is surfaced at review time instead.
  */
 export async function captureCandidates(
   brainDir: string,
@@ -135,7 +160,7 @@ export async function captureCandidates(
           `keeping candidate "${plan.input.title}" rather than dropping it against an unvetted target.`,
       );
     }
-    toStage.push(plan.input);
+    toStage.push(withRunIntake(plan.input, options.intake));
     if (plan.supersedes && plan.input.id) supersedesById.set(plan.input.id, plan.supersedes);
     if (plan.contradicts && plan.input.id) contradictsById.set(plan.input.id, plan.contradicts);
   }

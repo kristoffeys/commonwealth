@@ -35,6 +35,7 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 | [0032](0032-daemonless-lifecycle-sync.md)     | Sync moves from resident daemon to session lifecycle; daemon becomes an opt-in profile | Accepted |
 | [0033](0033-action-time-contradiction-guard.md) | Action-time contradiction guard (PreToolUse, opt-in, non-blocking default) | Accepted |
 | [0034](0034-obsidian-friendly-derived-layout.md) | Obsidian-friendly derived layout: per-project MOCs, wikilinks, shipped vault config | Accepted |
+| [0038](0038-capture-provenance-tier.md)       | Notes carry an ingestion trust tier: internal vs. external | Accepted |
 
 ## Process
 
