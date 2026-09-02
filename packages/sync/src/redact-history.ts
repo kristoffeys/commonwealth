@@ -108,7 +108,9 @@ function spawnGitBuffer(dir: string, args: string[]): Promise<Buffer> {
     child.on("error", reject);
     child.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(`git ${args[0] ?? ""} failed: ${Buffer.concat(errChunks).toString().trim()}`));
+        reject(
+          new Error(`git ${args[0] ?? ""} failed: ${Buffer.concat(errChunks).toString().trim()}`),
+        );
         return;
       }
       resolve(Buffer.concat(chunks));
@@ -235,7 +237,10 @@ async function filterRepoAvailable(dir: string): Promise<boolean> {
 }
 
 /** Resolve the engine to use, honoring an explicit request and falling back when filter-repo is absent. */
-async function resolveEngine(dir: string, requested: RedactEngine | undefined): Promise<RedactEngine> {
+async function resolveEngine(
+  dir: string,
+  requested: RedactEngine | undefined,
+): Promise<RedactEngine> {
   if (requested === "filter-branch") return "filter-branch";
   const haveFilterRepo = await filterRepoAvailable(dir);
   if (requested === "filter-repo") {
@@ -391,7 +396,9 @@ export async function redactHistory(
   // rather than rewriting local history and then failing on `push --force origin HEAD`.
   const branch = status.current;
   if (status.detached || !branch) {
-    throw new Error("could not resolve the current branch (detached HEAD?) — checkout a branch first.");
+    throw new Error(
+      "could not resolve the current branch (detached HEAD?) — checkout a branch first.",
+    );
   }
 
   const engine = await resolveEngine(dir, opts.engine);

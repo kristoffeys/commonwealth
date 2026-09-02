@@ -35,7 +35,11 @@ afterEach(async () => {
  */
 async function seedLinkedLeak(): Promise<string> {
   const rel = "memory/leak.md";
-  await fs.writeFile(path.join(fx.alice, rel), `${FRONTMATTER}The deploy key is ${SECRET}.\n`, "utf8");
+  await fs.writeFile(
+    path.join(fx.alice, rel),
+    `${FRONTMATTER}The deploy key is ${SECRET}.\n`,
+    "utf8",
+  );
   git(fx.alice, ["add", "-A"]);
   git(fx.alice, ["commit", "-qm", "add note with secret"]);
   git(fx.alice, ["push", "-q", "origin", "main"]);
