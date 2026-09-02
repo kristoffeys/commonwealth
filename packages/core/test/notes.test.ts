@@ -56,6 +56,28 @@ describe("parse/serialize round-trip", () => {
     // id and kind lead the frontmatter for readability
     expect(raw.indexOf("id:")).toBeLessThan(raw.indexOf("title:"));
   });
+
+  it("round-trips a meeting note preserving meeting_date, attendees, source_type, relates", () => {
+    const note: Note = {
+      frontmatter: {
+        id: "2026-09-01-standup-a1b2",
+        kind: "meeting",
+        title: "Weekly standup",
+        tags: [],
+        created: "2026-09-01",
+        relates: ["2026-09-01-ship-x-c3d4", "2026-09-01-owner-e5f6"],
+        meeting_date: "2026-08-31",
+        attendees: ["alice", "bob", "carol"],
+        source_type: "plaud",
+      },
+      body: "Summary.\n\n## Transcript\n\nalice: hi\nbob: hi",
+      path: "meetings/2026-09-01-standup-a1b2.md",
+    };
+    const raw = serializeNote(note);
+    const back = parseNote(raw, note.path);
+    expect(back.frontmatter).toEqual(note.frontmatter);
+    expect(back.body).toContain("## Transcript");
+  });
 });
 
 describe("writeNote / readNote / listNotes", () => {
@@ -81,6 +103,30 @@ describe("writeNote / readNote / listNotes", () => {
   it("defaults created to a YYYY-MM-DD date", async () => {
     const note = await writeNote(dir, { kind: "memory", title: "T", body: "b" });
     expect(note.frontmatter.created).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("writes a meeting note under meetings/ with its meeting fields", async () => {
+    const note = await writeNote(dir, {
+      kind: "meeting",
+      title: "Kickoff",
+      body: "Summary.\n\n## Transcript\n\n...",
+      created: "2026-09-01",
+      fields: {
+        meeting_date: "2026-08-31",
+        attendees: ["alice", "bob"],
+        source_type: "recording",
+        relates: ["2026-09-01-decision-a1b2"],
+      },
+    });
+    expect(note.path).toMatch(/^meetings\/2026-09-01-kickoff-[0-9a-z]{4}\.md$/);
+    const onDisk = await readNote(dir, note.path);
+    expect(onDisk.frontmatter.kind).toBe("meeting");
+    if (onDisk.frontmatter.kind === "meeting") {
+      expect(onDisk.frontmatter.meeting_date).toBe("2026-08-31");
+      expect(onDisk.frontmatter.attendees).toEqual(["alice", "bob"]);
+      expect(onDisk.frontmatter.source_type).toBe("recording");
+    }
+    expect(onDisk.frontmatter.relates).toEqual(["2026-09-01-decision-a1b2"]);
   });
 
   it("lists notes and filters by kind", async () => {
@@ -209,6 +255,34 @@ describe("project provenance (ADR-0015)", () => {
     const note = await writeNote(dir, { kind: "memory", title: "plain", body: "no project here" });
     expect(note.path).toBe(`memory/${note.frontmatter.id}.md`);
     expect(note.frontmatter.source).toBeUndefined();
+  });
+
+  it("writeNote files under the resolved PROJECT when both project and source are set (ADR-0035)", async () => {
+    const note = await writeNote(dir, {
+      kind: "memory",
+      title: "Consolidated fact",
+      body: "one engagement, one folder",
+      source: "acme/widgets",
+      project: "acme-engagement",
+    });
+    // The folder keys off the project, not the source; provenance stays in frontmatter.
+    expect(note.path).toBe(`acme-engagement/memory/${note.frontmatter.id}.md`);
+    expect(note.frontmatter.project).toBe("acme-engagement");
+    expect(note.frontmatter.source).toBe("acme/widgets");
+    const back = await readNote(dir, note.path);
+    expect(back.frontmatter.source).toBe("acme/widgets");
+    expect(back.frontmatter.project).toBe("acme-engagement");
+  });
+
+  it("writeNote files under source when only source is set (no project) (ADR-0035)", async () => {
+    const note = await writeNote(dir, {
+      kind: "memory",
+      title: "Source-only fact",
+      body: "no declared project",
+      source: "acme/widgets",
+    });
+    expect(note.path).toBe(`acme-widgets/memory/${note.frontmatter.id}.md`);
+    expect(note.frontmatter).not.toHaveProperty("project");
   });
 
   it("listNotes finds notes across project subtrees and the flat root, filtered by kind", async () => {

@@ -12,11 +12,13 @@ Design goals: **human-readable and hand-editable**, **agent-parseable**,
 **concurrency-safe** (atomic files that union-merge), and **diffable** in git/PRs.
 Everything is markdown with YAML frontmatter. No format that only a machine can read.
 
-## The four note kinds
+## The five note kinds
 
-From the brief: _memory / decisions / work-state / people-threads_. Each is a folder of
-atomic files. One concept per file — this is what makes merges conflict-free (see
-[architecture §2](01-architecture.md)).
+From the brief: _memory / decisions / work-state / people-threads_, plus _meetings_. Each is a
+folder of atomic files. One concept per file — this is what makes merges conflict-free (see
+[architecture §2](01-architecture.md)). Meetings are the one deliberate exception (see below): a
+meeting record is an immutable *event* blob, while the decisions and actions inside it are still
+extracted as atomic notes.
 
 ### `memory/` — durable facts & learnings
 
@@ -130,6 +132,49 @@ Owns Acme's billing rules. Prefers async, decisive. Open thread: confirming the
 tax-rounding rule blocking [[work-state/acme-billing-migration]]. History: pushed back
 on our timeline in June — sensitive to scope creep.
 ```
+
+### `meetings/` — immutable meeting records (paste-and-summarize)
+
+A user pastes raw meeting material — a Plaud export, a call transcript, or notes — and it is stored
+**hybrid** (ADR-0036): one immutable `meeting` record note holds a clean structured summary with the
+raw transcript folded in at the bottom, and each decision / action item / durable fact inside it is
+**extracted as its own atomic note** (`decision` / `work-state` / `memory`), cross-linked to the
+record via `relates`. The summarizing and extracting is done by the host agent running
+`/commonwealth:meeting` (host synthesizes, Commonwealth stores — ADR-0020); the record is the
+re-mineable backstop if a decision was missed.
+
+```markdown
+---
+id: 2026-08-31-acme-standup-a1b2
+kind: meeting
+title: Acme weekly standup
+tags: [acme, standup]
+created: 2026-09-01
+author: Kristof Feys
+meeting_date: 2026-08-31 # when the meeting took place (YYYY-MM-DD)
+attendees: [kristof, dana, acme-billing-lead]
+source_type: plaud # plaud | recording | paste | manual
+relates:
+  [decisions/2026-09-01-ship-storefront-c3d4, work-state/2026-09-01-storefront-spec-e5f6]
+---
+
+## Summary
+
+Agreed to ship the storefront before the admin panel; Bob owns the spec draft.
+
+## Transcript
+
+kristof: let's start with the storefront…
+dana: …
+```
+
+Frontmatter beyond the [common fields](#cross-cutting-conventions): **`meeting_date`** (required,
+`YYYY-MM-DD`) is the calendar date the meeting happened (distinct from `created`, the capture date);
+**`attendees`** is a free-form string array of names/handles; **`source_type`** (optional) records how
+the raw material arrived. The extracted notes each carry `relates: <meeting-id>` back to the record,
+and the record's `relates` lists them. The meeting record is immutable — never edited or superseded,
+only referenced. Its transcript passes the same secret-scan + dedup gates as any staged write, and a
+large transcript is piped via STDIN (`stage … --body -`) rather than passed on the command line.
 
 ## Cross-cutting conventions
 

@@ -186,6 +186,96 @@ describe("built binary", () => {
     }
   });
 
+  it("stages a meeting record from a large piped transcript, then cross-links extracted notes (ADR-0036)", async () => {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-meeting-")),
+    );
+    try {
+      const brain = path.join(root, "brain");
+      await initBrain(brain, { name: "meeting-brain" });
+      const env = {
+        ...process.env,
+        COMMONWEALTH_AUTHOR: "Meeting Author",
+        COMMONWEALTH_AUTHOR_EMAIL: "meeting@example.com",
+      };
+
+      // A large transcript — far too big to pass as a shell argv (ARG_MAX). It is piped over
+      // STDIN via `--body -`, and the unique end marker proves the whole body survived.
+      const endMarker = "TRANSCRIPT-END-SENTINEL-9f3a";
+      const bigBody = `Summary of the kickoff.\n\n## Transcript\n\n${"alice: blah blah blah\n".repeat(20_000)}${endMarker}`;
+      expect(bigBody.length).toBeGreaterThan(200_000);
+
+      const stageOut = execFileSync(
+        "node",
+        // prettier-ignore
+        [
+          distEntry, "stage", "--dir", brain,
+          "--kind", "meeting",
+          "--title", "Project kickoff",
+          "--attendees", "alice, bob, carol",
+          "--source-type", "plaud",
+          "--body", "-",
+        ],
+        { cwd: root, env, input: bigBody, stdio: "pipe" },
+      ).toString();
+      // First stdout line: `<id>  [meeting]  <title>`.
+      const meetingId = stageOut.split("\n")[0]!.trim().split(/\s+/)[0]!;
+      expect(meetingId).toMatch(/^\d{4}-\d{2}-\d{2}-project-kickoff-[0-9a-z]{4}$/);
+
+      const pendingAfterMeeting = await listPending(brain);
+      const meeting = pendingAfterMeeting.find((n) => n.frontmatter.id === meetingId)!;
+      expect(meeting.frontmatter.kind).toBe("meeting");
+      if (meeting.frontmatter.kind === "meeting") {
+        // --attendees comma-splits into an array; --source-type is stored; --meeting-date defaulted to today.
+        expect(meeting.frontmatter.attendees).toEqual(["alice", "bob", "carol"]);
+        expect(meeting.frontmatter.source_type).toBe("plaud");
+        expect(meeting.frontmatter.meeting_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      }
+      // The full piped transcript round-tripped through staging.
+      expect(meeting.body).toContain(endMarker);
+      expect(meeting.body.length).toBeGreaterThan(200_000);
+
+      // Extract a decision cross-linked back to the meeting via --relates.
+      execFileSync(
+        "node",
+        // prettier-ignore
+        [
+          distEntry, "stage", "--dir", brain,
+          "--kind", "decision",
+          "--title", "Ship the storefront first",
+          "--relates", meetingId,
+          "--body", "The team agreed to prioritise the storefront over the admin panel.",
+        ],
+        { cwd: root, env, stdio: "pipe" },
+      );
+      // And an action item with an owner.
+      execFileSync(
+        "node",
+        // prettier-ignore
+        [
+          distEntry, "stage", "--dir", brain,
+          "--kind", "work-state",
+          "--title", "Draft the storefront spec",
+          "--owner", "bob",
+          "--relates", meetingId,
+          "--body", "Bob will draft the storefront spec before the next standup.",
+        ],
+        { cwd: root, env, stdio: "pipe" },
+      );
+
+      const pending = await listPending(brain);
+      const decision = pending.find((n) => n.frontmatter.title === "Ship the storefront first")!;
+      // --relates points back at the meeting id (attribution may also append the contributor id).
+      expect(decision.frontmatter.relates).toContain(meetingId);
+
+      const action = pending.find((n) => n.frontmatter.title === "Draft the storefront spec")!;
+      expect(action.frontmatter.relates).toContain(meetingId);
+      expect(action.frontmatter.kind === "work-state" && action.frontmatter.owner).toBe("bob");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("applies LLM curation verdicts end-to-end and emits the hook's summary line (ADR-0030)", async () => {
     const root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-verdict-e2e-")),

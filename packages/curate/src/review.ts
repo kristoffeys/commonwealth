@@ -33,9 +33,14 @@ export async function approve(brainDir: string, id: string): Promise<string> {
   if (!note) {
     throw new Error(`No staged note with id "${id}" to approve`);
   }
-  // Promote into the same project subtree the note carries (ADR-0015), mirroring writeNote's
-  // layout: `<project>/<kind>/<id>.md`, or `<kind>/<id>.md` when unattributed.
-  const canonRel = pathForNote(note.frontmatter.kind, id, note.frontmatter.source);
+  // Promote into the same folder writeNote would file it under — keyed off the RESOLVED PROJECT
+  // (ADR-0035), so a note declaring a `project` lands under `<project>/<kind>/<id>.md`; a source-only
+  // note under `<source>/<kind>/<id>.md`; an unattributed one at `<kind>/<id>.md`.
+  const canonRel = pathForNote(
+    note.frontmatter.kind,
+    id,
+    note.frontmatter.project ?? note.frontmatter.source,
+  );
   // Containment guard (#77): the schema already forbids a `..`/slash id, but assert the resolved
   // write path stays inside the brain so a crafted id/source can never escape on promote.
   const canonAbs = resolveWithinBrain(brainDir, canonRel);

@@ -34,6 +34,7 @@ describe("brainMap (#205)", () => {
       { kind: "decision", count: 0 },
       { kind: "work-state", count: 0 },
       { kind: "person", count: 0 },
+      { kind: "meeting", count: 0 },
     ]);
     expect(m.contributors).toEqual([]);
   });
@@ -51,6 +52,7 @@ describe("brainMap (#205)", () => {
       { kind: "decision", count: 1 },
       { kind: "work-state", count: 0 }, // absent kind still listed
       { kind: "person", count: 1 },
+      { kind: "meeting", count: 0 },
     ]);
   });
 

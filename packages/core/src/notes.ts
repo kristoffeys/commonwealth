@@ -71,6 +71,9 @@ const KEY_ORDER = [
   "role",
   "owner",
   "status",
+  "meeting_date",
+  "attendees",
+  "source_type",
   "tags",
   "created",
   "updated",
@@ -143,7 +146,12 @@ export function serializeNote(note: Note): string {
 export async function writeNote(brainDir: string, input: NewNoteInput): Promise<Note> {
   const created = input.created ?? today();
   const id = input.id === undefined ? makeNoteId(input.title, created) : parseProvidedId(input.id);
-  const relPath = pathForNote(input.kind, id, input.source);
+  // Physical layout keys off the RESOLVED PROJECT, not the raw source (ADR-0035, superseding the
+  // "on-disk stays `<source>/`" line of ADR-0031/0015): a note that declares a `project` files under
+  // `<project>/<kind>/`, so every repo of one engagement shares one folder. Provenance is untouched —
+  // `source` stays in frontmatter; it just stops being the folder key. A source-only note (no declared
+  // project) is unchanged: it still files under `<source>/<kind>/`.
+  const relPath = pathForNote(input.kind, id, input.project ?? input.source);
   const absPath = resolveWithinBrain(brainDir, relPath);
 
   // Spread caller `fields` FIRST so the derived, trusted keys below always win. Otherwise a

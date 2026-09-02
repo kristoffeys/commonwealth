@@ -1198,6 +1198,7 @@ const MOC_SECTIONS: ReadonlyArray<{ kind: NoteKind; label: string }> = [
   { kind: "decision", label: "Decisions" },
   { kind: "memory", label: "Memory" },
   { kind: "work-state", label: "Work-state" },
+  { kind: "meeting", label: "Meetings" },
   { kind: "person", label: "People" },
 ];
 
@@ -1208,12 +1209,12 @@ const MOC_SECTIONS: ReadonlyArray<{ kind: NoteKind; label: string }> = [
  * **Relations** section renders `supersedes`/`relates` as wikilink edges, surfacing the knowledge
  * structure (e.g. a decision → the memory it replaced) in the graph. Pure/deterministic (ADR-0003).
  */
-function mocMarkdown(displayName: string, source: string, notes: Note[]): string {
+function mocMarkdown(displayName: string, projectId: string, notes: Note[]): string {
   const lines: string[] = [];
   lines.push(`# ${displayName}`);
   lines.push("");
   lines.push(
-    `> Generated index for \`${inlineText(source)}\`. Regenerated from the note set (ADR-0003) — do not edit.`,
+    `> Generated index for \`${inlineText(projectId)}\`. Regenerated from the note set (ADR-0003) — do not edit.`,
   );
   lines.push("");
 
@@ -1250,12 +1251,14 @@ function mocMarkdown(displayName: string, source: string, notes: Note[]): string
 /**
  * Regenerate derived, never-hand-merged artifacts from the note set: the `COMMONWEALTH.md` hub
  * (grouped by project, ADR-0015) and one per-project **MOC** named after the project at its folder
- * root (`<source-segment>/<Name>.md`, P1) — replacing the old per-kind `INDEX.md` files. Idempotent —
+ * root (`<project-segment>/<Name>.md`, P1) — replacing the old per-kind `INDEX.md` files. Idempotent —
  * output is a pure function of the files (ADR-0003), so running twice yields byte-identical files.
  *
- * The MOC lives at the project-folder ROOT (parent is not a kind folder), so {@link listNotes} never
- * mistakes it for a note — no skip rule needed. Unattributed notes (no `source`) carry no MOC; they
- * are surfaced in `COMMONWEALTH.md` only.
+ * Notes are grouped by the physical folder they live under, keyed off the RESOLVED PROJECT
+ * (`sourceSegment(resolveNoteProject(note))`, ADR-0035) — the same key the layout uses — so all repos
+ * of one engagement share a single MOC. The MOC lives at the project-folder ROOT (parent is not a kind
+ * folder), so {@link listNotes} never mistakes it for a note — no skip rule needed. Unattributed notes
+ * (no `source` and no `project`) carry no MOC; they are surfaced in `COMMONWEALTH.md` only.
  */
 export async function regenerateDerived(brainDir: string): Promise<void> {
   const notes = await listNotes(brainDir);
@@ -1271,21 +1274,25 @@ export async function regenerateDerived(brainDir: string): Promise<void> {
   );
   written.add("COMMONWEALTH.md");
 
-  // One MOC per project-source FOLDER — the physical `<segment>/` a source's notes live under.
-  const byFolder = new Map<string, { source: string; notes: Note[] }>();
+  // One MOC per project FOLDER — the physical `<segment>/` a note's file now lives under, which is
+  // keyed off the RESOLVED PROJECT (ADR-0035), not the raw source. Grouping by the same
+  // `sourceSegment(resolveNoteProject(...))` the layout uses means all repos of one engagement share a
+  // single MOC after a `relayout`; before it, an alias-linked source still resolves here so the MOC
+  // names the project. Unattributed notes (no source and no project) carry no MOC.
+  const byFolder = new Map<string, { project: string; notes: Note[] }>();
   for (const n of notes) {
-    const source = n.frontmatter.source;
-    if (!source || source.length === 0) continue; // unattributed → COMMONWEALTH only
-    const folder = sourceSegment(source);
-    const bucket = byFolder.get(folder) ?? byFolder.set(folder, { source, notes: [] }).get(folder)!;
+    const project = resolveNoteProject(n, aliasMap);
+    if (!project || project.length === 0) continue; // unattributed → COMMONWEALTH only
+    const folder = sourceSegment(project);
+    const bucket =
+      byFolder.get(folder) ?? byFolder.set(folder, { project, notes: [] }).get(folder)!;
     bucket.notes.push(n);
   }
-  for (const [folder, { source, notes: group }] of byFolder) {
+  for (const [folder, { project, notes: group }] of byFolder) {
     const abs = path.join(brainDir, folder);
     await fs.mkdir(abs, { recursive: true });
-    const projectId = resolveNoteProject(group[0]!, aliasMap) ?? source;
-    const name = projectDisplayName(projectId, aliasMap);
-    await fs.writeFile(path.join(abs, `${name}.md`), mocMarkdown(name, source, group), "utf8");
+    const name = projectDisplayName(project, aliasMap);
+    await fs.writeFile(path.join(abs, `${name}.md`), mocMarkdown(name, project, group), "utf8");
     written.add(`${folder}/${name}.md`);
   }
 

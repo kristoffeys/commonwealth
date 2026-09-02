@@ -1,10 +1,10 @@
 import { z } from "zod";
 
 /**
- * The four note kinds that make up a brain. See docs/02-data-model.md.
+ * The five note kinds that make up a brain. See docs/02-data-model.md.
  * One concept per file; kind determines the folder it lives in.
  */
-export const NOTE_KINDS = ["memory", "decision", "work-state", "person"] as const;
+export const NOTE_KINDS = ["memory", "decision", "work-state", "person", "meeting"] as const;
 export type NoteKind = (typeof NOTE_KINDS)[number];
 
 /** Folder each kind is stored in, relative to the brain root. */
@@ -13,6 +13,7 @@ export const KIND_DIR: Record<NoteKind, string> = {
   decision: "decisions",
   "work-state": "work-state",
   person: "people",
+  meeting: "meetings",
 };
 
 /**
@@ -156,6 +157,20 @@ export const PersonFrontmatter = z
   .passthrough();
 export type PersonFrontmatter = z.infer<typeof PersonFrontmatter>;
 
+export const MeetingFrontmatter = z
+  .object({
+    ...baseShape,
+    kind: z.literal("meeting"),
+    /** Calendar date the meeting took place (`YYYY-MM-DD`). */
+    meeting_date: IsoDate,
+    /** People who attended, by name/handle. Free-form; not required to be `person` note ids. */
+    attendees: z.array(z.string()).default([]),
+    /** How the raw material reached the brain (a Plaud export, a recording transcript, pasted notes, or hand-typed). */
+    source_type: z.enum(["plaud", "recording", "paste", "manual"]).optional(),
+  })
+  .passthrough();
+export type MeetingFrontmatter = z.infer<typeof MeetingFrontmatter>;
+
 /**
  * Discriminated union over `kind` — the validated frontmatter of any note. Each member is
  * `.passthrough()` so unknown keys survive parse→serialize (#81): a field this build's schema
@@ -167,6 +182,7 @@ export const Frontmatter = z.discriminatedUnion("kind", [
   DecisionFrontmatter,
   WorkStateFrontmatter,
   PersonFrontmatter,
+  MeetingFrontmatter,
 ]);
 export type Frontmatter = z.infer<typeof Frontmatter>;
 
@@ -179,5 +195,15 @@ export interface Note {
   path: string;
 }
 
-/** Current on-disk schema version, pinned in `.commonwealth/schema-version`. */
-export const SCHEMA_VERSION = 1;
+/**
+ * Current on-disk schema version, pinned in `.commonwealth/schema-version`.
+ *
+ * v1 → v2 adds the `meeting` note kind (and its `meeting_date`/`attendees`/`source_type`
+ * frontmatter). The bump is purely ADDITIVE: a v1 brain has no meeting notes, every existing
+ * kind parses unchanged, and the version gate is forward-tolerant — {@link loadBrainConfig}
+ * only *warns* (never throws) when a config's `schemaVersion` is NEWER than this build's, and a
+ * v1 config (1 < 2) simply loads. So a v2 build reads a v1 brain and a v1 build reads a v2 brain's
+ * pre-existing notes; only a v1 build hitting a v2 `meeting` note fails, and there it fails loud
+ * per-note (skipped in `listNotes`) rather than corrupting anything.
+ */
+export const SCHEMA_VERSION = 2;

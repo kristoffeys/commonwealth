@@ -19,8 +19,16 @@ import {
   whoIs,
 } from "./tools.js";
 
-/** Zod enum of the four note kinds, reused across tool input schemas. */
+/** Zod enum of every note kind, reused across tool input schemas (e.g. `search` filtering). */
 const kindEnum = z.enum(NOTE_KINDS);
+
+/**
+ * The kinds `remember` can actually create. `person` and `meeting` are excluded: each has a
+ * required field this tool can't supply (`person.name`, `meeting.meeting_date`) and a dedicated
+ * creation path (contributor attribution / `/commonwealth:meeting`), so advertising them here would
+ * accept-then-reject. Values are `NoteKind` members, so this stays type-safe.
+ */
+const rememberKindEnum = z.enum(["memory", "decision", "work-state"]);
 
 /** Compact one-line summary of a note for human-readable tool output. */
 function summarizeNote(note: Note): string {
@@ -266,13 +274,13 @@ export function createServer(
     {
       title: "Remember a note",
       description:
-        "Record a new atomic note in the brain (memory, decision, work-state, or person). It " +
+        "Record a new atomic note in the brain (memory, decision, or work-state). It " +
         "goes through the same curation as automatic capture — the secret gate, dedup, and the " +
         "brain's autoPromote setting — so it lands in canon (autoPromote on) or the review queue " +
         "(off), and may be declined (e.g. a secret or a near-duplicate). The contributor is " +
         "created as a person when needed and linked to the note for responsibility tracing.",
       inputSchema: {
-        kind: kindEnum.describe("Which kind of note to create"),
+        kind: rememberKindEnum.describe("Which kind of note to create"),
         title: z.string().min(1).describe("Short title / the fact in one line"),
         body: z.string().describe("Markdown body of the note"),
         tags: z.array(z.string()).optional().describe("Topical tags"),
