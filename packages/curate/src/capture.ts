@@ -1,4 +1,5 @@
 import {
+  acquireSyncLock,
   appendReceipts,
   attributeNoteInputs,
   dropFor,
@@ -61,6 +62,14 @@ export interface CaptureResult extends CurateResult {
    * autoPromote off the intent rides the staged note's `supersedes` frontmatter for review instead.
    */
   superseded: ConsolidationLink[];
+  /**
+   * Supersessions that were NOT applied because another writer held the cross-process sync lock
+   * (#281). The new notes are in canon and carry their forward `supersedes` link; only the target's
+   * `status`/`superseded_by` was left alone. Skipping is deliberate — see {@link captureCandidates}
+   * step (3) — and each entry also gets a persisted `supersession-deferred` receipt, because this
+   * result object dies with the detached SessionEnd worker that produced it.
+   */
+  supersessionsDeferred: ConsolidationLink[];
   /** New notes flagged as CONTRADICTING a canon note (kept, never auto-rejected; ADR-0030 / #214). */
   contradictions: ConsolidationLink[];
   /** Count of candidates the durability judge filtered as trivia (logged, never staged). */
@@ -113,8 +122,10 @@ function withRunIntake(input: NewNoteInput, intake: IntakeTier | undefined): New
  *    fully in force), then, unless the brain turned `autoPromote` off, each freshly-staged note is
  *    approved straight into canon (ADR-0014).
  * 3. For a `supersedes` verdict whose new note actually reached canon, the TARGET canon note is
- *    marked superseded (`status` + `superseded_by`) — supersede-not-delete. With autoPromote off
- *    the target is left untouched (the new note isn't canon yet); the `supersedes` frontmatter link
+ *    marked superseded (`status` + `superseded_by`) — supersede-not-delete. That mutation is a
+ *    read-modify-write of a pre-existing file, so it runs under the cross-process sync lock, and a
+ *    contended lock DEFERS it with a receipt rather than racing it (#281). With autoPromote off the
+ *    target is left untouched (the new note isn't canon yet); the `supersedes` frontmatter link
  *    surfaces the pending consolidation for the curator (#198).
  *
  * Every candidate that reaches the gate is stamped with the run's ingestion trust tier
@@ -220,7 +231,11 @@ export async function captureCandidates(
     if (stagedIds.has(id)) contradictions.push({ id, targetId });
   }
   const superseded: ConsolidationLink[] = [];
+  const supersessionsDeferred: ConsolidationLink[] = [];
   if (autoPromote) {
+    // Resolve the targets first, off the lock: a run with nothing to consolidate — the overwhelming
+    // majority — must not reach for the lock at all, let alone contend with a sync for it.
+    const pending: { link: ConsolidationLink; path: string }[] = [];
     for (const [id, targetId] of supersedesById) {
       if (!stagedIds.has(id)) continue;
       // The target is pre-existing canon (a superseder's target came from the neighbor set), so it
@@ -229,8 +244,41 @@ export async function captureCandidates(
       // Only supersede-able kinds carry status/superseded_by; supersedeNote no-ops otherwise. A
       // missing/unknown target is left alone — never drop or merge against a note we can't find.
       if (!target) continue;
-      await supersedeNote(brainDir, target.path, id);
-      superseded.push({ id, targetId });
+      pending.push({ link: { id, targetId }, path: target.path });
+    }
+    if (pending.length > 0) {
+      // SINGLE-WRITER (#281). Everything above this line is atomic-by-construction: a new note is
+      // its own collision-proof file, so concurrent captures union-merge (ADR-0003). Supersession
+      // is the exception — `supersedeNote` is a read-modify-write of a note that ALREADY EXISTS, so
+      // two processes racing it are plain last-write-wins with no conflict and no sibling file. It
+      // therefore takes the same cross-process lock every other caller of that mutation holds
+      // (`consolidate`, `graduate`, `adopt`, the sync engine).
+      //
+      // Contention SKIPS rather than waits, following `consolidateCanon`: the fact itself is
+      // already safely in canon and carries its forward `supersedes` link, so the only thing at
+      // stake is the backward link on the older note — not worth blocking a SessionEnd worker
+      // behind an arbitrarily long `git push`. But a skip is REPORTED, never silent (CLAUDE.md
+      // principle 4): it rides `supersessionsDeferred` for in-process callers and a persisted
+      // receipt at (4) for everyone after this process exits.
+      const release = await acquireSyncLock(brainDir);
+      if (release) {
+        try {
+          for (const { link, path: targetPath } of pending) {
+            await supersedeNote(brainDir, targetPath, link.id);
+            superseded.push(link);
+          }
+        } finally {
+          // In a `finally` so a mid-loop throw can't wedge the brain's lock for every later writer.
+          await release();
+        }
+      } else {
+        supersessionsDeferred.push(...pending.map((p) => p.link));
+        console.error(
+          `[commonwealth-curate] another writer holds the sync lock; deferred ${pending.length} ` +
+            `supersession(s) — the new note(s) are in canon, the older note(s) stay active ` +
+            `(${pending.map((p) => p.link.targetId).join(", ")}).`,
+        );
+      }
     }
   }
 
@@ -259,6 +307,26 @@ export async function captureCandidates(
       secretOpts,
     ),
   );
+  // A deferred supersession (#281) is the one receipt that is not a dropped candidate — the note
+  // landed, the LINK did not. It shares the channel because it shares the audience and the
+  // invariant: `doctor`/`status` are the only surfaces that outlive this worker, and a supersession
+  // that vanished with the worker would be exactly the silent loss this fix exists to prevent.
+  for (const link of supersessionsDeferred) {
+    const note = result.staged.find((n) => n.frontmatter.id === link.id);
+    receipts.push(
+      receiptFor(
+        brainDir,
+        {
+          title: note?.frontmatter.title ?? link.id,
+          kind: note?.frontmatter.kind ?? "memory",
+          reason: "supersede-lock-contended",
+          drop: dropFor("supersession-deferred", { targetId: link.targetId }),
+        },
+        now,
+        secretOpts,
+      ),
+    );
+  }
   await appendReceipts(brainDir, receipts);
 
   return {
@@ -266,6 +334,7 @@ export async function captureCandidates(
     rejected,
     promoted,
     superseded,
+    supersessionsDeferred,
     contradictions,
     triviaFiltered,
     clamped,

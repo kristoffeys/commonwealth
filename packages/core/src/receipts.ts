@@ -33,6 +33,12 @@ import { hasSecrets, type ScanOptions } from "./secrets.js";
  * Note what is deliberately absent: the SCOPE gate. An out-of-scope cwd (ADR-0024) declines the
  * whole session before any candidate is extracted, so it is a session-level outcome already carried
  * by the capture log's `skipped` entry — not a candidate drop, and not a receipt.
+ *
+ * `supersession-deferred` is the one member that is NOT a candidate drop: the fact landed in canon,
+ * and what was dropped is the CONSOLIDATION LINK back to the note it replaced (#281). It lives here
+ * anyway because the alternative was a second reporting channel for the same audience — and because
+ * the invariant it protects is identical: something the capture path chose not to do, reported
+ * rather than silent.
  */
 export type DropCategory =
   /** The secret scanner matched somewhere in the candidate (#16/#99). */
@@ -51,6 +57,12 @@ export type DropCategory =
   | "trivia"
   /** The candidate failed note validation and was dropped on its own (#88). */
   | "invalid"
+  /**
+   * The note reached canon, but the supersession of the older note it replaces was NOT applied
+   * because another writer held the brain's sync lock (#281). The fact is safe; only the link is
+   * missing.
+   */
+  | "supersession-deferred"
   /** A pluggable curator (ADR-0007) declined with a reason this version has no category for. */
   | "unknown";
 
@@ -75,6 +87,8 @@ export interface DropClassification {
 export interface DropContext {
   /** Id of the note a duplicate candidate restates. */
   duplicateOf?: string;
+  /** Id of the older canon note a `supersession-deferred` receipt failed to mark superseded. */
+  targetId?: string;
   /** Extra machine detail (a validation error, an unrecognized curator reason). */
   detail?: string;
 }
@@ -89,6 +103,7 @@ export const DROP_LABELS: Record<DropCategory, string> = {
   "duplicate-llm": "duplicate (classifier)",
   trivia: "trivia",
   invalid: "invalid",
+  "supersession-deferred": "supersession deferred",
   unknown: "unclassified",
 };
 
@@ -164,6 +179,14 @@ export function dropFor(category: DropCategory, ctx: DropContext = {}): DropClas
         cause: `The candidate failed note validation and was dropped on its own${detail}.`,
         nextAction:
           "This is a bug in the extractor or the schema — report it at https://github.com/kristoffeys/commonwealth/issues with the reason above.",
+      };
+    case "supersession-deferred":
+      return {
+        category,
+        recoverable: true,
+        cause: `The new note reached canon, but ${ctx.targetId ?? "the note it replaces"} was left active: another writer held the brain's sync lock, so the supersession was skipped rather than raced (#281).`,
+        nextAction:
+          "Nothing was lost — the new note is in canon and carries the forward `supersedes` link. Mark the older note superseded by hand, or let `commonwealth consolidate` reconcile the pair if they are near-duplicates.",
       };
     case "unknown":
       return {
