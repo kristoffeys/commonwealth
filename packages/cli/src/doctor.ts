@@ -4,12 +4,19 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  DROP_LABELS,
+  RECEIPT_REPORT_WINDOW_DAYS,
   defaultRegistryPath,
+  formatDropSummary,
   isCwdInsideBrain,
   isDerivedMarkdownFile,
+  isFeatureEnabled,
+  readReceipts,
   resolveBrain,
   resolveBrainDir,
   resolveBrainMapping,
+  summarizeDrops,
+  type CaptureReceipt,
 } from "@cmnwlth/core";
 import {
   type CaptureLogEntry,
@@ -128,6 +135,13 @@ export interface DoctorEnv {
   lastCaptures?: () => Promise<CaptureLogEntry[]>;
   /** Optional host-specific Claude/Codex diagnostics (#226); absent preserves the legacy report. */
   hostIntegrations?: () => Promise<DoctorCheck[]>;
+  /**
+   * Persisted capture receipts for a brain (ADR-0037, #266), oldest first — one per candidate the
+   * curation gate DROPPED. Optional: when absent (older API consumers), the drop links are simply
+   * not emitted. This is what turns "capture ran and saved nothing" from a shrug into a named,
+   * countable, actionable answer.
+   */
+  receipts?: (brainDir: string) => Promise<CaptureReceipt[]>;
   /** Whether `pid` is a live process (`kill -0`). */
   pidAlive: (pid: number) => boolean;
   /** Git state of the brain relative to its upstream. */
@@ -353,6 +367,7 @@ export function defaultDoctorEnv(cwd: string): DoctorEnv {
     // Read the last 20 capture attempts so the streak detector has room without scanning the whole
     // rolling log.
     lastCaptures: async () => (await readCaptureLog()).slice(-20),
+    receipts: (brainDir) => readReceipts(brainDir),
     pidAlive: (pid) => {
       try {
         process.kill(pid, 0); // signal 0 = existence check
@@ -498,6 +513,103 @@ function captureOutcomeCheck(entries: CaptureLogEntry[]): DoctorCheck {
     detail,
     fix,
   };
+}
+
+/**
+ * The links built from persisted capture receipts (ADR-0037, #266). Two checks, because they answer
+ * two different questions and each deserves exactly one fix line:
+ *
+ * - **Decisions** — what #266 asks for: say `autoAdr` vetoed decision candidates, say how many, say
+ *   how to change it. Crucially it is cross-referenced against the LIVE flag, because a receipt is a
+ *   record of something that already happened and cannot assert how the brain is configured now. If
+ *   `autoAdr` has since been turned on, the same receipts read as history (`ok`, "it is on now"),
+ *   not as a standing warning — otherwise following the fix would leave the warning in place
+ *   forever, which is its own kind of lying.
+ * - **Drops** — the aggregate over everything else. Duplicates and trivia are the gate working, so
+ *   they report `ok`; a recoverable class (a pasted credential, a one-line body) warns with its
+ *   next action, because those are candidates the user almost certainly meant to keep.
+ *
+ * Both read only the trailing {@link RECEIPT_REPORT_WINDOW_DAYS}-day window, so every finding here
+ * ages out on its own — a fixed problem stops being reported without anyone clearing a log. An
+ * empty window is `skip`, never a failure: receipts are derived and disposable, so a fresh clone or
+ * a wiped `index/` legitimately has none.
+ */
+function dropChecks(
+  receipts: CaptureReceipt[],
+  autoAdrEnabled: boolean,
+  now: number,
+): DoctorCheck[] {
+  const since = now - RECEIPT_REPORT_WINDOW_DAYS * 86_400_000;
+  const summary = summarizeDrops(receipts, { since });
+  const window = `last ${RECEIPT_REPORT_WINDOW_DAYS}d`;
+  if (summary.total === 0) {
+    return [
+      {
+        id: "capture-drops",
+        label: "Drops",
+        status: "skip",
+        detail: `No capture candidates were dropped in the ${window}.`,
+      },
+    ];
+  }
+
+  const checks: DoctorCheck[] = [];
+  const when = formatCaptureAge(summary.newestTs ?? undefined);
+
+  const autoAdr = summary.byCategory.find((e) => e.category === "autoadr-vetoed");
+  if (autoAdr && !autoAdrEnabled) {
+    checks.push({
+      id: "autoadr-drops",
+      label: "Decisions",
+      status: "warn",
+      detail: `${autoAdr.count} decision candidate(s) were VETOED in the ${window} because this brain has \`autoAdr\` off (newest ${when}). Nothing was saved for them.`,
+      ...(autoAdr.nextAction ? { fix: autoAdr.nextAction } : {}),
+    });
+  } else if (autoAdr) {
+    checks.push({
+      id: "autoadr-drops",
+      label: "Decisions",
+      status: "ok",
+      detail: `${autoAdr.count} decision candidate(s) were vetoed in the ${window} while \`autoAdr\` was off (newest ${when}); it is ON now, so decisions are being captured again.`,
+    });
+  }
+
+  // Everything except the autoAdr class, which has its own link above. Emitted unconditionally so
+  // a consumer keying on `capture-drops` always finds it.
+  const rest = summary.byCategory.filter((e) => e.category !== "autoadr-vetoed");
+  const total = rest.reduce((n, e) => n + e.count, 0);
+  if (total === 0) {
+    checks.push({
+      id: "capture-drops",
+      label: "Drops",
+      status: "skip",
+      detail: `No other capture candidates were dropped in the ${window}.`,
+    });
+    return checks;
+  }
+
+  const breakdown = formatDropSummary({ ...summary, byCategory: rest });
+  const actionable = rest.filter((e) => e.recoverable);
+  if (actionable.length === 0) {
+    checks.push({
+      id: "capture-drops",
+      label: "Drops",
+      status: "ok",
+      detail: `${total} candidate(s) dropped by curation in the ${window} (newest ${when}): ${breakdown}. All are correct outcomes — nothing to do.`,
+    });
+    return checks;
+  }
+
+  const lead = actionable[0]!;
+  const named = actionable.map((e) => `${e.count} ${DROP_LABELS[e.category]}`).join(", ");
+  checks.push({
+    id: "capture-drops",
+    label: "Drops",
+    status: "warn",
+    detail: `${total} candidate(s) dropped by curation in the ${window} (newest ${when}): ${breakdown}. ${named} would have been captured if something changed.`,
+    ...(lead.nextAction ? { fix: lead.nextAction } : {}),
+  });
+  return checks;
 }
 
 /**
@@ -791,6 +903,16 @@ export async function diagnose(
         ? "No notes awaiting review."
         : `${staged} note(s) awaiting review${staged >= 25 ? " — consider `commonwealth promote --all`." : "."}`,
   });
+
+  // 6b) Dropped candidates (ADR-0037, #266): the receipts persisted by the capture worker. Without
+  //     this, a gate veto — `autoAdr` off, a pasted credential, a body under the relevance floor —
+  //     left no trace once the detached worker exited, and "capture ran, brain stayed empty" had no
+  //     answer anywhere. A veto is a normal outcome; a SILENT veto is the bug (CLAUDE.md #4).
+  if (env.receipts) {
+    // The live flag, not the receipts, is the authority on how the brain is configured NOW.
+    const autoAdrOn = await isFeatureEnabled(brain, "autoAdr").catch(() => true);
+    checks.push(...dropChecks(await env.receipts(brain), autoAdrOn, Date.now()));
+  }
 
   // 7) Index freshness — the derived FTS index is disposable and rebuilds on demand, so a stale
   //    or missing index is a warn, never a failure.

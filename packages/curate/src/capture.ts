@@ -1,9 +1,13 @@
 import {
+  appendReceipts,
   attributeNoteInputs,
+  dropFor,
   ensureContributorPerson,
   isFeatureEnabled,
   listNotes,
+  receiptFor,
   supersedeNote,
+  type CaptureReceipt,
   type ContributorIdentity,
   type IntakeTier,
   type NewNoteInput,
@@ -150,6 +154,10 @@ export async function captureCandidates(
         candidate: bare,
         reason: plan.reason,
         ...(plan.duplicateOf ? { duplicateOf: plan.duplicateOf } : {}),
+        drop:
+          plan.reason === "llm-trivia"
+            ? dropFor("trivia")
+            : dropFor("duplicate-llm", plan.duplicateOf ? { duplicateOf: plan.duplicateOf } : {}),
       });
       continue;
     }
@@ -224,9 +232,31 @@ export async function captureCandidates(
     }
   }
 
+  const rejected = [...preRejected, ...result.rejected];
+
+  // (4) Persist a receipt per drop (ADR-0037, #266). This runs in the detached SessionEnd worker,
+  // AFTER everything that can affect canon — so a receipt-write failure can never cost a note — and
+  // it is the only reason a user can still be told "2 decision candidates were vetoed by autoAdr"
+  // once this process is gone. Derived + gitignored + never synced; see `@cmnwlth/core/receipts`.
+  const now = Date.now();
+  const receipts: CaptureReceipt[] = rejected.map((r) =>
+    receiptFor(
+      brainDir,
+      {
+        title: r.candidate.title,
+        kind: r.candidate.kind,
+        reason: r.reason,
+        ...(r.duplicateOf !== undefined ? { duplicateOf: r.duplicateOf } : {}),
+        drop: r.drop,
+      },
+      now,
+    ),
+  );
+  await appendReceipts(brainDir, receipts);
+
   return {
     ...result,
-    rejected: [...preRejected, ...result.rejected],
+    rejected,
     promoted,
     superseded,
     contradictions,
