@@ -89,7 +89,8 @@ mocking `shortId()`, which no test does) and for the sync lock under true OS-lev
 | Derived-index emit / rebuild | `emit.test.ts` | ✅ Full | — |
 | Org-brain graduation policy | `graduate-policy.test.ts` | ✅ Full | — |
 | `doctor`-style health checks | `health.test.ts` | ✅ Full | — |
-| Derived SQLite index + hybrid (FTS5 + vector) search | `index-db.test.ts`, `hybrid-search.test.ts` | ✅ Full | — |
+| Vault-hygiene lint (dead links, metadata gaps, stale derived views, #258) | `hygiene.test.ts` | ✅ Full | Read-only (asserted on mtimes, not just content). `bodyWikilinks` code-stripping is table-driven over the fence forms real notes use — indented, blockquoted, `~~~`, nested backtick runs. |
+| Derived SQLite index + hybrid (FTS5 + vector) search | `index-db.test.ts`, `hybrid-search.test.ts` | ✅ Full | Includes `planDerived` (write-free content plan) and the derived-file prune contract: `regenerateDerived` prunes ghost MOCs / legacy `INDEX.md` by default, and `{ prune: false }` (used by the `--fix` self-heals) deletes nothing — a hand-written `.md` at a brain/project root would otherwise be classified as derived and removed. |
 | MOC / map generation | `map.test.ts` | ✅ Full | — |
 | Registry (brain path resolution), org-brain registry | `registry.test.ts`, `registry-orgbrain.test.ts` | ✅ Full | — |
 | Project resolution | `projects.test.ts` | ✅ Full | — |
@@ -155,10 +156,11 @@ Additional:
 | `demo` (scripted recall walkthrough) | `demo.test.ts` | ✅ Full | — |
 | Dependency checks | `deps.test.ts` | ✅ Full | — |
 | History discovery / missed-capture analysis | `discover.test.ts` | ✅ Full | — |
-| `doctor` | `doctor.test.ts` | ✅ Full | — |
+| `doctor` (incl. vault-hygiene links: dead links, metadata gaps, stale derived views, orphans, #258) | `doctor.test.ts` | ✅ Full | — |
 | `emit` (derived-file regeneration CLI) | `emit.test.ts` | ✅ Full | — |
 | Host integration (writing Claude Code / Codex config) | `host-integration.test.ts` | ✅ Full | — |
 | `init` | `init.test.ts` | ✅ Full | — |
+| `lint` (vault-hygiene lint, #258) | `lint.test.ts` | ✅ Full | Includes the `--fix` guarantee: it regenerates drifted derived views and never deletes a hand-written markdown file at a brain/project root. |
 | Interactive onboarding wizard | `onboard.test.ts`, `wizard.test.ts` | ✅ Full | — |
 | Org-brain commands | `org-brain.test.ts` | ✅ Full | — |
 | Prompt templating | `prompt.test.ts` | ✅ Full | — |

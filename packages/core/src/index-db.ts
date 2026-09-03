@@ -1249,10 +1249,11 @@ function mocMarkdown(displayName: string, projectId: string, notes: Note[]): str
 }
 
 /**
- * Regenerate derived, never-hand-merged artifacts from the note set: the `COMMONWEALTH.md` hub
- * (grouped by project, ADR-0015) and one per-project **MOC** named after the project at its folder
- * root (`<project-segment>/<Name>.md`, P1) — replacing the old per-kind `INDEX.md` files. Idempotent —
- * output is a pure function of the files (ADR-0003), so running twice yields byte-identical files.
+ * Compute the derived, never-hand-merged artifact set for a brain WITHOUT writing anything: a map
+ * of repo-relative path → the exact content {@link regenerateDerived} would write. The single
+ * source of truth for "what should the derived files contain", shared by the writer and by the
+ * read-only staleness lint (#258) — a hygiene pass must be able to tell a teammate their hub is
+ * stale without mutating the working copy to find out.
  *
  * Notes are grouped by the physical folder they live under, keyed off the RESOLVED PROJECT
  * (`sourceSegment(resolveNoteProject(note))`, ADR-0035) — the same key the layout uses — so all repos
@@ -1260,19 +1261,14 @@ function mocMarkdown(displayName: string, projectId: string, notes: Note[]): str
  * folder), so {@link listNotes} never mistakes it for a note — no skip rule needed. Unattributed notes
  * (no `source` and no `project`) carry no MOC; they are surfaced in `COMMONWEALTH.md` only.
  */
-export async function regenerateDerived(brainDir: string): Promise<void> {
+export async function planDerived(brainDir: string): Promise<Map<string, string>> {
   const notes = await listNotes(brainDir);
   // The alias map is a derivation INPUT (ADR-0031), loaded like brain config — linking sources
   // reorganizes the hub/MOCs with zero note edits, and the output stays a pure function of the inputs.
   const aliasMap = await loadProjectAliasMap(brainDir);
 
-  const written = new Set<string>();
-  await fs.writeFile(
-    path.join(brainDir, "COMMONWEALTH.md"),
-    commonwealthMarkdown(notes, aliasMap),
-    "utf8",
-  );
-  written.add("COMMONWEALTH.md");
+  const planned = new Map<string, string>();
+  planned.set("COMMONWEALTH.md", commonwealthMarkdown(notes, aliasMap));
 
   // One MOC per project FOLDER — the physical `<segment>/` a note's file now lives under, which is
   // keyed off the RESOLVED PROJECT (ADR-0035), not the raw source. Grouping by the same
@@ -1289,17 +1285,49 @@ export async function regenerateDerived(brainDir: string): Promise<void> {
     bucket.notes.push(n);
   }
   for (const [folder, { project, notes: group }] of byFolder) {
-    const abs = path.join(brainDir, folder);
-    await fs.mkdir(abs, { recursive: true });
     const name = projectDisplayName(project, aliasMap);
-    await fs.writeFile(path.join(abs, `${name}.md`), mocMarkdown(name, project, group), "utf8");
-    written.add(`${folder}/${name}.md`);
+    planned.set(`${folder}/${name}.md`, mocMarkdown(name, project, group));
+  }
+  return planned;
+}
+
+/**
+ * Regenerate derived, never-hand-merged artifacts from the note set: the `COMMONWEALTH.md` hub
+ * (grouped by project, ADR-0015) and one per-project **MOC** named after the project at its folder
+ * root (`<project-segment>/<Name>.md`, P1) — replacing the old per-kind `INDEX.md` files. Idempotent —
+ * output is a pure function of the files (ADR-0003), so running twice yields byte-identical files.
+ *
+ * The content itself comes from {@link planDerived}; this writes it and, by default, prunes what is
+ * no longer planned.
+ *
+ * `opts.prune: false` writes the planned set and prunes NOTHING. The prune is not a safe operation
+ * to run from an arbitrary command: {@link isDerivedMarkdownFile} classifies *any* non-`README` `.md`
+ * at a brain or project-folder root as derived, so a hand-written `PLAYBOOK.md` sitting there is
+ * deleted along with the genuine ghosts (a MOC left by a renamed project, a legacy per-kind
+ * `INDEX.md`). That is acceptable in the sync/capture cycle, which owns the derived set end to end
+ * and runs constantly — it is NOT acceptable in a diagnostic self-heal (`doctor --fix`,
+ * `lint --fix`, #258), which promises to regenerate drifted views without losing information. Those
+ * callers pass `prune: false`; the next sync still collects any real ghost.
+ */
+export async function regenerateDerived(
+  brainDir: string,
+  opts: { prune?: boolean } = {},
+): Promise<void> {
+  const planned = await planDerived(brainDir);
+  for (const [rel, content] of planned) {
+    const segments = rel.split("/");
+    const abs = path.join(brainDir, ...segments);
+    // Create the project folder a new MOC needs, but never the brain root itself: an absent
+    // `brainDir` must still fail loud (ENOENT) rather than have a typo'd path quietly materialize
+    // as a new directory holding a hub.
+    if (segments.length > 1) await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, content, "utf8");
   }
 
-  // Prune orphans so the derived set is EXACTLY `written`: a MOC left behind by a removed/renamed
-  // project, and legacy per-kind `INDEX.md` files from before per-project MOCs (P1) — deleting the
-  // latter auto-migrates any older brain on its next regenerate. Idempotent (ADR-0003).
-  await pruneStaleDerived(brainDir, written);
+  // Prune orphans so the derived set is EXACTLY what was planned: a MOC left behind by a
+  // removed/renamed project, and legacy per-kind `INDEX.md` files from before per-project MOCs (P1) —
+  // deleting the latter auto-migrates any older brain on its next regenerate. Idempotent (ADR-0003).
+  if (opts.prune !== false) await pruneStaleDerived(brainDir, new Set(planned.keys()));
 }
 
 /** Delete tracked derived artifacts NOT in `keep`, plus any legacy `INDEX.md`; leaves notes alone. */

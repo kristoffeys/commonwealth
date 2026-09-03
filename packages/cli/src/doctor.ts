@@ -11,12 +11,15 @@ import {
   isCwdInsideBrain,
   isDerivedMarkdownFile,
   isFeatureEnabled,
+  lintBrain,
   readReceipts,
+  regenerateDerived,
   resolveBrain,
   resolveBrainDir,
   resolveBrainMapping,
   summarizeDrops,
   type CaptureReceipt,
+  type HygieneReport,
 } from "@cmnwlth/core";
 import {
   type CaptureLogEntry,
@@ -42,10 +45,15 @@ import { defaultHostIntegrationEnv, diagnoseHostIntegrations } from "./host-inte
  * (uncommitted note files / unpushed commits) that lifecycle sync should have flushed but hasn't
  * (offline, or a push that keeps failing) — surfaced as a warning with age.
  *
- * Read-only by default; the single self-heal (`--fix`) is capped strictly to restarting a stale
- * daemon (for daemon-profile users), so `doctor` can never mutate canon or wiring. Every check maps
+ * Read-only by default. `--fix` is capped at two self-heals that only ever START or WRITE, never
+ * delete: restarting a stale daemon (for daemon-profile users), and REGENERATING drifted derived
+ * views (#258) — safe precisely because derived files are a pure function of the notes and are
+ * rebuilt, never hand-merged (ADR-0003). The rebuild deliberately runs with the derived-file PRUNE
+ * DISABLED (`regenerateDerived(dir, { prune: false })`): that sweep classifies any non-`README`
+ * markdown at a brain/project root as derived, so running it from a diagnostic would delete a
+ * teammate's hand-written file. Canon note bodies and the wiring are never mutated. Every check maps
  * to an already-readable surface — the daemon PID file, `git` ahead/behind, the staging queue, the
- * derived index mtime, the scope config — so this adds no new state.
+ * derived index mtime, the note link graph, the scope config — so this adds no new state.
  */
 
 /** Outcome of a single diagnostic link. `skip` = couldn't determine (e.g. no `claude` on PATH). */
@@ -142,6 +150,21 @@ export interface DoctorEnv {
    * countable, actionable answer.
    */
   receipts?: (brainDir: string) => Promise<CaptureReceipt[]>;
+  /**
+   * Vault-hygiene lint for a brain (#258): dead supersede targets / wikilinks, notes whose id or
+   * folder desynced from their file, and derived views that drifted from the notes. Optional — when
+   * absent (older API consumers), the hygiene links are simply not emitted. This is the dimension
+   * `doctor` was blind to: the install chain can be perfectly wired while the link graph a teammate
+   * actually reads dead-ends.
+   */
+  hygiene?: (brainDir: string) => Promise<HygieneReport>;
+  /**
+   * Regenerate a brain's derived views (`COMMONWEALTH.md` + the per-project MOCs) — the repair for a
+   * stale-derived finding, run only under `--fix`. Safe as a self-heal precisely because derived
+   * files are REGENERATED from the notes, never hand-merged (ADR-0003), so it cannot lose a fact and
+   * never touches a canon note body.
+   */
+  rebuildDerived?: (brainDir: string) => Promise<void>;
   /** Whether `pid` is a live process (`kill -0`). */
   pidAlive: (pid: number) => boolean;
   /** Git state of the brain relative to its upstream. */
@@ -368,6 +391,15 @@ export function defaultDoctorEnv(cwd: string): DoctorEnv {
     // rolling log.
     lastCaptures: async () => (await readCaptureLog()).slice(-20),
     receipts: (brainDir) => readReceipts(brainDir),
+    // Default options: the orphan COUNT is always computed, but not one finding per orphan — listing
+    // them is `commonwealth lint --orphans`' job, and a 400-note brain shouldn't build 400 findings
+    // to render a single doctor line.
+    hygiene: (brainDir) => lintBrain(brainDir),
+    // `prune: false` — a self-heal must not delete. The prune sweep treats every non-`README`
+    // markdown file at a brain/project root as derived, so it would take a hand-written PLAYBOOK.md
+    // with it; regenerating the drifted views is the whole job here, and the next sync collects any
+    // genuine ghost MOC.
+    rebuildDerived: (brainDir) => regenerateDerived(brainDir, { prune: false }),
     pidAlive: (pid) => {
       try {
         process.kill(pid, 0); // signal 0 = existence check
@@ -611,6 +643,135 @@ function dropChecks(
     detail: `${total} candidate(s) dropped by curation in the ${window} (newest ${when}): ${breakdown}. ${named} would have been captured if something changed.`,
     ...(lead.nextAction ? { fix: lead.nextAction } : {}),
   });
+  return checks;
+}
+
+/** Cap on offenders named inline in a one-line doctor detail; `commonwealth lint` prints them all. */
+const HYGIENE_SAMPLE = 3;
+
+/** `a`, `b` and 4 more — a bounded sample so a doctor line never becomes a wall of ids. */
+function sample(items: string[]): string {
+  const shown = items.slice(0, HYGIENE_SAMPLE).join(", ");
+  const rest = items.length - HYGIENE_SAMPLE;
+  return rest > 0 ? `${shown} and ${rest} more` : shown;
+}
+
+/**
+ * Turn a {@link HygieneReport} into doctor links (#258). Four, because they have four different
+ * owners and four different fixes: a broken supersede chain is a canon edit, a metadata desync is a
+ * file rename, a stale derived view is a regeneration, and an orphan is a judgement call. Folding
+ * them into one line would hide which of those a brain actually needs.
+ *
+ * Severity mirrors {@link lintBrain}: only its `error` rules fail (they make a note unreachable or
+ * strand a reader mid-chain); everything else warns or informs, so `doctor`'s exit code stays a gate
+ * on real breakage rather than on housekeeping. Each detail names at most {@link HYGIENE_SAMPLE}
+ * offenders inline and points at `commonwealth lint` for the rest — a doctor line is a verdict, not
+ * a report.
+ */
+function hygieneChecks(h: HygieneReport): DoctorCheck[] {
+  const checks: DoctorCheck[] = [];
+  const of = (...rules: string[]) => h.findings.filter((f) => rules.includes(f.rule));
+
+  // a) Link graph. Only a supersede reference that resolves to NOTHING fails — that is the link a
+  //    reader is told to follow to find the current truth, and it strands them. A half-recorded
+  //    supersede (`supersede-kind`) and dead prose links resolve to something or are optional, so
+  //    they ride along as warnings rather than turning doctor's exit code into housekeeping.
+  const deadChain = of("dead-supersede");
+  const deadSoft = of("supersede-kind", "dead-link", "dead-author-ref");
+  if (deadChain.length > 0) {
+    checks.push({
+      id: "links",
+      label: "Links",
+      status: "fail",
+      detail: `${deadChain.length} supersede reference(s) dead-end (${sample(
+        deadChain.map((f) => f.where),
+      )})${deadSoft.length > 0 ? `; ${deadSoft.length} other dead link(s)` : ""}.`,
+      fix: "commonwealth lint   (lists each one; fix the `superseded_by`/`supersedes` id or restore the target note)",
+    });
+  } else if (deadSoft.length > 0) {
+    checks.push({
+      id: "links",
+      label: "Links",
+      status: "warn",
+      detail: `${deadSoft.length} soft link issue(s) — relates/wikilink targets that resolve to nothing, or a supersede pointing at a kind that carries no chain (${sample(
+        deadSoft.map((f) => f.where),
+      )}). No supersede chain dead-ends.`,
+      fix: "commonwealth lint   (lists each dead link and the field it sits in)",
+    });
+  } else {
+    checks.push({
+      id: "links",
+      label: "Links",
+      status: "ok",
+      detail: `Link graph resolves across ${h.noteCount} note(s).`,
+    });
+  }
+
+  // b) Metadata — a note that does not parse, or whose id/folder desynced from its file, is on disk
+  //    but effectively out of canon (invisible to search, unreachable by wikilink).
+  const broken = of("schema", "id-path");
+  const misfiled = of("kind-dir");
+  if (broken.length > 0) {
+    checks.push({
+      id: "metadata",
+      label: "Metadata",
+      status: "fail",
+      detail: `${broken.length} note file(s) are not in canon — unparseable frontmatter or an id that does not match the filename (${sample(
+        broken.map((f) => f.where),
+      )}).`,
+      fix: "commonwealth lint   (names each file and what is wrong)",
+    });
+  } else if (misfiled.length > 0) {
+    checks.push({
+      id: "metadata",
+      label: "Metadata",
+      status: "warn",
+      detail: `${misfiled.length} note(s) sit in a folder that is not their kind's (${sample(
+        misfiled.map((f) => f.where),
+      )}) — reads still work, the layout lies.`,
+      fix: "commonwealth lint   (names each misfiled note and its expected folder)",
+    });
+  } else {
+    checks.push({
+      id: "metadata",
+      label: "Metadata",
+      status: "ok",
+      detail: `All ${h.fileCount} note file(s) are schema-valid and correctly filed.`,
+    });
+  }
+
+  // c) Derived views — regenerable, so drift is a warning plus a rebuild, never a hand-merge (ADR-0003).
+  checks.push(
+    h.staleDerived.length === 0
+      ? {
+          id: "derived",
+          label: "Derived",
+          status: "ok",
+          detail: "COMMONWEALTH.md / project MOCs match the notes.",
+        }
+      : {
+          id: "derived",
+          label: "Derived",
+          status: "warn",
+          detail: `${h.staleDerived.length} derived view(s) drifted from the notes (${sample(
+            h.staleDerived,
+          )}).`,
+          fix: "commonwealth doctor --fix   (regenerates them; notes are never touched)",
+        },
+  );
+
+  // d) Orphans — informational by design: a standalone fact nothing links to is normal, not a defect.
+  //    Reads the always-computed count, not `orphan` findings (doctor doesn't ask for the list).
+  checks.push({
+    id: "orphans",
+    label: "Orphans",
+    status: "ok",
+    detail:
+      h.orphanCount === 0
+        ? "Every note has at least one inbound link."
+        : `${h.orphanCount} of ${h.noteCount} note(s) have no inbound link — reachable through the derived views and search only (often fine).`,
+  });
+
   return checks;
 }
 
@@ -919,6 +1080,27 @@ export async function diagnose(
   // 7) Index freshness — the derived FTS index is disposable and rebuilds on demand, so a stale
   //    or missing index is a warn, never a failure.
   checks.push(await checkIndex(brain));
+
+  // 7b) Vault hygiene (#258) — the link graph and the derived markdown views. Every other link here
+  //     asks "is the plumbing wired?"; these ask "does what a teammate reads still hold together?".
+  //     A perfectly-wired install can still serve a supersede chain that dead-ends or a hub that
+  //     describes notes nobody has any more, and nothing reported it.
+  //     Skipped when the brain directory is missing (the `brain` check above already failed on it):
+  //     there is no link graph to report on, and linting a path that isn't there is noise stacked on
+  //     the real error.
+  if (env.hygiene && brainExists) {
+    let hygiene = await env.hygiene(brain);
+    // The only canon-adjacent self-heal, and a write-only one: derived views are REGENERATED from
+    // the notes (ADR-0003), with the prune sweep disabled, so the repair adds and overwrites derived
+    // content but deletes nothing and never rewrites a note body. Re-lint afterwards so `--fix`
+    // re-reports the repaired state rather than the state it found.
+    if (opts.fix && hygiene.staleDerived.length > 0 && env.rebuildDerived) {
+      await env.rebuildDerived(brain);
+      hygiene = await env.hygiene(brain);
+      healed = true;
+    }
+    checks.push(...hygieneChecks(hygiene));
+  }
 
   // 8) Scope — is the cwd in capture scope (ADR-0024 §3)? The single resolution pass answers it:
   //    `brain` = in scope; `denied` = an explicit deny rule (out of scope); `none` = nothing

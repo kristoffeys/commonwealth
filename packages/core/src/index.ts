@@ -15,6 +15,7 @@ export * from "./clone.js";
 export * from "./source.js";
 export * from "./projects.js";
 export * from "./health.js";
+export * from "./hygiene.js";
 export * from "./capture-coverage.js";
 export * from "./map.js";
 export * from "./status.js";
