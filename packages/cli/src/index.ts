@@ -29,6 +29,7 @@ import { defaultAskEnv, formatAsk, runAsk } from "./ask.js";
 import { defaultSynthesisEnv, formatAnswer, synthesizeAnswer } from "./synthesize.js";
 import { defaultDemoEnv, runDemo } from "./demo.js";
 import { defaultDoctorEnv, diagnose, formatDoctorText } from "./doctor.js";
+import { defaultLintEnv, formatLint, runLint } from "./lint.js";
 import { defaultEmitEnv, formatEmitResult, runEmit } from "./emit.js";
 import { defaultVerifyRestoreEnv, formatVerifyRestore, runVerifyRestore } from "./verify.js";
 import {
@@ -74,6 +75,8 @@ export { findGitRepos } from "./discover.js";
 export type { FindGitReposOptions } from "./discover.js";
 export { diagnose, defaultDoctorEnv, formatDoctorText } from "./doctor.js";
 export type { DoctorReport, DoctorCheck, DoctorEnv, CheckStatus } from "./doctor.js";
+export { runLint, defaultLintEnv, formatLint } from "./lint.js";
+export type { LintRunReport, LintOptions, LintEnv } from "./lint.js";
 export { runVerifyRestore, defaultVerifyRestoreEnv, formatVerifyRestore } from "./verify.js";
 export type { VerifyRestoreReport, VerifyRestoreEnv } from "./verify.js";
 export { runEmit, defaultEmitEnv, formatEmitResult, upsertSentinelBlock } from "./emit.js";
@@ -167,7 +170,9 @@ function printUsage(): void {
       "  commonwealth reseed    [<repo>...] [--all]     mine repo(s) into the mapped brain and capture",
       "  commonwealth config    <list | get <k> | set <k> <v>>   read/set the brain's shared config",
       "  commonwealth status                            review queue + sync-daemon state",
-      "  commonwealth doctor    [--fix] [--json]        diagnose the install/sync chain; --fix restarts a dead daemon",
+      "  commonwealth doctor    [--fix] [--json]        diagnose the install/sync chain + vault hygiene;",
+      "                                                 --fix restarts a dead daemon and rebuilds derived views",
+      "  commonwealth lint      [--fix] [--json] [--orphans]   vault hygiene: dead links, metadata gaps, stale derived views",
       "  commonwealth verify-restore [--from-remote] [--json]   clone + prove full disaster recovery (CI gate)",
       "  commonwealth emit      [--commit]              write brain context for Cursor/Copilot/Codex into this repo",
       "  commonwealth health    [--fail-under-capture <ratio>]   freshness/trust + capture-coverage rollup (CI gate)",
@@ -302,6 +307,8 @@ export async function run(argv: string[]): Promise<number> {
     }
     case "doctor":
       return cmdDoctor(rest);
+    case "lint":
+      return cmdLint(rest);
     case "verify-restore":
       return cmdVerifyRestore(rest);
     case "emit":
@@ -385,10 +392,12 @@ async function cmdUpdate(rest: string[]): Promise<number> {
 }
 
 /**
- * `commonwealth doctor [--fix] [--json]` — walk the install/sync chain and print pass/fail with
- * the exact one-line fix per failed link. `--json` emits the structured {@link DoctorReport} on
- * stdout (for agents/CI); `--fix` restarts a dead sync daemon (the only self-heal). Exit 0 when no
- * link failed, 1 otherwise — so CI can gate on it.
+ * `commonwealth doctor [--fix] [--json]` — walk the install/sync chain and the brain's vault
+ * hygiene (#258), printing pass/fail with the exact one-line fix per failed link. `--json` emits the
+ * structured {@link DoctorReport} on stdout (for agents/CI); `--fix` restarts a dead sync daemon and
+ * regenerates drifted derived views (the two self-heals — neither touches a note). Exit 0 when no
+ * link failed, 1 otherwise — so CI can gate on it. `commonwealth lint` is the per-file detail view
+ * behind the hygiene links.
  */
 async function cmdDoctor(rest: string[]): Promise<number> {
   const json = rest.includes("--json");
@@ -397,6 +406,28 @@ async function cmdDoctor(rest: string[]): Promise<number> {
   if (json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   else process.stderr.write(formatDoctorText(report));
   return report.ok ? 0 : 1;
+}
+
+/**
+ * `commonwealth lint [--fix] [--json] [--orphans]` — vault-hygiene lint (#258): dead supersede
+ * targets and wikilinks, notes whose id or folder desynced from their file, and derived views that
+ * drifted from the notes, reported per file. `--fix` regenerates the drifted derived views only
+ * (ADR-0003) and never edits a note; `--orphans` also lists notes nothing links to. Exit 0 when no
+ * error-severity finding remains, 1 otherwise — so CI can gate on link-graph rot.
+ */
+async function cmdLint(rest: string[]): Promise<number> {
+  const json = rest.includes("--json");
+  const opts = { fix: rest.includes("--fix"), orphans: rest.includes("--orphans") };
+  let run;
+  try {
+    run = await runLint(opts, defaultLintEnv(process.cwd()));
+  } catch (err) {
+    process.stderr.write(`${(err as Error).message}\n`);
+    return 1;
+  }
+  if (json) process.stdout.write(`${JSON.stringify(run, null, 2)}\n`);
+  else process.stderr.write(formatLint(run));
+  return run.ok ? 0 : 1;
 }
 
 /**

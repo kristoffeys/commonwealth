@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { dropFor, type CaptureReceipt } from "@cmnwlth/core";
+import { dropFor, type CaptureReceipt, type HygieneReport } from "@cmnwlth/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { diagnose, formatDoctorText, type DoctorEnv } from "../src/doctor.js";
 
@@ -639,5 +639,272 @@ describe("commonwealth doctor — self-capture check (#268)", () => {
     await fs.mkdir(project, { recursive: true });
     const report = await diagnose(envAt(project));
     expect(find(report, "self-capture")).toBeUndefined();
+  });
+});
+
+/**
+ * `commonwealth doctor` — vault-hygiene links (#258). `env.hygiene`/`env.rebuildDerived` are
+ * optional, so backward compat is asserted first; the rest exercises `hygieneChecks()`'s
+ * severity mapping against injected `HygieneReport` stubs — no real lint runs here.
+ */
+describe("commonwealth doctor — hygiene links (#258)", () => {
+  let tmp: string;
+  let brain: string;
+  let cwd: string;
+
+  beforeEach(async () => {
+    tmp = await fs.mkdtemp(path.join(os.tmpdir(), "cw-doctor-hygiene-"));
+    brain = path.join(tmp, "brain");
+    cwd = path.join(tmp, "project");
+    await fs.mkdir(path.join(brain, "acme", "memory"), { recursive: true });
+    await fs.mkdir(cwd, { recursive: true });
+    await fs.writeFile(path.join(brain, "acme", "memory", "n1.md"), "---\nid: x\n---\nbody\n");
+    await fs.mkdir(path.join(brain, "index"), { recursive: true });
+    await fs.writeFile(path.join(brain, "index", "commonwealth.db"), "db");
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  const cleanReport: HygieneReport = {
+    dir: brain,
+    fileCount: 1,
+    noteCount: 1,
+    findings: [],
+    staleDerived: [],
+    orphanCount: 0,
+    counts: { error: 0, warn: 0, info: 0 },
+    ok: true,
+  };
+
+  function envBase(overrides: Partial<DoctorEnv> = {}): DoctorEnv {
+    return {
+      cwd,
+      resolveBrain: () => Promise.resolve(brain),
+      resolveScope: () => Promise.resolve("brain"),
+      configParse: () => Promise.resolve(null),
+      pluginInstalled: () => true,
+      curateRuntime: () =>
+        Promise.resolve({
+          kind: "vendored",
+          command: "/usr/bin/node /plugin/vendor/curate/index.js",
+          ok: true,
+          code: 0,
+          version: "0.1.12",
+        }),
+      pidAlive: () => true,
+      gitState: () => ({ kind: "tracked", behind: 0 }),
+      startDaemon: () => Promise.resolve(true),
+      syncDebt: () => Promise.resolve({ uncommittedNotes: 0, unpushed: 0, oldestMs: null }),
+      ...overrides,
+    };
+  }
+
+  const find = (r: Awaited<ReturnType<typeof diagnose>>, id: string) =>
+    r.checks.find((c) => c.id === id);
+
+  it("emits no links/metadata/derived/orphans checks when env carries no hygiene surface", async () => {
+    const report = await diagnose(envBase());
+    for (const id of ["links", "metadata", "derived", "orphans"]) {
+      expect(find(report, id)).toBeUndefined();
+    }
+  });
+
+  it("emits no hygiene checks when the resolved brain directory does not exist, even with hygiene injected", async () => {
+    const missing = path.join(tmp, "does-not-exist");
+    const report = await diagnose(
+      envBase({
+        resolveBrain: () => Promise.resolve(missing),
+        hygiene: () => Promise.resolve(cleanReport),
+      }),
+    );
+    for (const id of ["links", "metadata", "derived", "orphans"]) {
+      expect(find(report, id)).toBeUndefined();
+    }
+    expect(find(report, "brain")?.status).toBe("fail");
+  });
+
+  it("fails `links` on a dead-supersede error, naming the offending path; ok stays false", async () => {
+    const report = await diagnose(
+      envBase({
+        hygiene: () =>
+          Promise.resolve({
+            ...cleanReport,
+            findings: [
+              {
+                rule: "dead-supersede",
+                severity: "error",
+                where: "acme/memory/bad.md",
+                message: "superseded_by: `ghost` — no note with that id",
+              },
+            ],
+            counts: { error: 1, warn: 0, info: 0 },
+            ok: false,
+          }),
+      }),
+    );
+    const links = find(report, "links")!;
+    expect(links.status).toBe("fail");
+    expect(links.detail).toContain("acme/memory/bad.md");
+    expect(report.ok).toBe(false);
+  });
+
+  it("warns `links` on a supersede-kind/dead-link warn only; ok stays true", async () => {
+    const report = await diagnose(
+      envBase({
+        hygiene: () =>
+          Promise.resolve({
+            ...cleanReport,
+            findings: [
+              {
+                rule: "dead-link",
+                severity: "warn",
+                where: "acme/memory/n1.md",
+                message: "relates: `ghost` resolves to no note in this brain",
+              },
+            ],
+            counts: { error: 0, warn: 1, info: 0 },
+          }),
+      }),
+    );
+    const links = find(report, "links")!;
+    expect(links.status).toBe("warn");
+    expect(report.ok).toBe(true);
+  });
+
+  it("fails `metadata` on schema/id-path findings; warns on kind-dir only; ok with neither", async () => {
+    const failReport = await diagnose(
+      envBase({
+        hygiene: () =>
+          Promise.resolve({
+            ...cleanReport,
+            findings: [
+              {
+                rule: "schema",
+                severity: "error",
+                where: "acme/memory/broken.md",
+                message: "does not parse",
+              },
+            ],
+            counts: { error: 1, warn: 0, info: 0 },
+            ok: false,
+          }),
+      }),
+    );
+    expect(find(failReport, "metadata")!.status).toBe("fail");
+
+    const warnReport = await diagnose(
+      envBase({
+        hygiene: () =>
+          Promise.resolve({
+            ...cleanReport,
+            findings: [
+              {
+                rule: "kind-dir",
+                severity: "warn",
+                where: "acme/memory/misfiled.md",
+                message: "is kind decision but sits in memory/",
+              },
+            ],
+            counts: { error: 0, warn: 1, info: 0 },
+          }),
+      }),
+    );
+    expect(find(warnReport, "metadata")!.status).toBe("warn");
+
+    const okReport = await diagnose(envBase({ hygiene: () => Promise.resolve(cleanReport) }));
+    expect(find(okReport, "metadata")!.status).toBe("ok");
+  });
+
+  it("warns `derived` with a --fix hint when staleDerived is non-empty; ok when empty", async () => {
+    const staleReport = await diagnose(
+      envBase({
+        hygiene: () =>
+          Promise.resolve({
+            ...cleanReport,
+            staleDerived: ["COMMONWEALTH.md"],
+          }),
+      }),
+    );
+    const derived = find(staleReport, "derived")!;
+    expect(derived.status).toBe("warn");
+    expect(derived.fix).toContain("--fix");
+
+    const okReport = await diagnose(envBase({ hygiene: () => Promise.resolve(cleanReport) }));
+    expect(find(okReport, "derived")!.status).toBe("ok");
+  });
+
+  it("`orphans` reads orphanCount (not findings) and is always status ok", async () => {
+    const report = await diagnose(
+      envBase({
+        hygiene: () => Promise.resolve({ ...cleanReport, orphanCount: 3 }),
+      }),
+    );
+    const orphans = find(report, "orphans")!;
+    expect(orphans.status).toBe("ok");
+    expect(orphans.detail).toContain("3");
+  });
+
+  it("--fix with stale derived rebuilds once, re-lints, reports derived ok and healed: true", async () => {
+    let rebuildCalls = 0;
+    let lintCalls = 0;
+    const report = await diagnose(
+      envBase({
+        hygiene: () => {
+          lintCalls += 1;
+          return Promise.resolve(
+            lintCalls === 1 ? { ...cleanReport, staleDerived: ["COMMONWEALTH.md"] } : cleanReport,
+          );
+        },
+        rebuildDerived: () => {
+          rebuildCalls += 1;
+          return Promise.resolve();
+        },
+      }),
+      { fix: true },
+    );
+    expect(rebuildCalls).toBe(1);
+    expect(find(report, "derived")!.status).toBe("ok");
+    expect(report.healed).toBe(true);
+  });
+
+  it("--fix with nothing stale never calls rebuildDerived", async () => {
+    let rebuildCalls = 0;
+    await diagnose(
+      envBase({
+        hygiene: () => Promise.resolve(cleanReport),
+        rebuildDerived: () => {
+          rebuildCalls += 1;
+          return Promise.resolve();
+        },
+      }),
+      { fix: true },
+    );
+    expect(rebuildCalls).toBe(0);
+  });
+
+  it("caps offenders named inline: 6 offenders show 3 plus 'and 3 more'", async () => {
+    const findings = Array.from({ length: 6 }, (_, i) => ({
+      rule: "dead-link" as const,
+      severity: "warn" as const,
+      where: `acme/memory/n${i}.md`,
+      message: "relates: `ghost` resolves to no note in this brain",
+    }));
+    const report = await diagnose(
+      envBase({
+        hygiene: () =>
+          Promise.resolve({
+            ...cleanReport,
+            findings,
+            counts: { error: 0, warn: 6, info: 0 },
+          }),
+      }),
+    );
+    const links = find(report, "links")!;
+    expect(links.detail).toContain("and 3 more");
+    for (let i = 3; i < 6; i++) {
+      expect(links.detail).not.toContain(`acme/memory/n${i}.md`);
+    }
   });
 });

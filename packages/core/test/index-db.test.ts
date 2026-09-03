@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   __resetReconcileCacheForTests,
   buildIndex,
+  planDerived,
   regenerateDerived,
   search,
 } from "../src/index-db";
@@ -84,6 +85,83 @@ describe("search", () => {
     // search must detect the missing table, rebuild, and return results instead of throwing.
     const hits = await search(dir, "JWT");
     expect(hits.map((h) => h.title)).toContain("Auth design");
+  });
+});
+
+describe("planDerived", () => {
+  it("returns exactly the content regenerateDerived writes, and writes nothing itself", async () => {
+    await seed();
+    await writeNote(dir, { kind: "memory", title: "Sourced fact", body: "x", source: "acme/app" });
+
+    const beforeEntries = await fs.readdir(dir);
+    const planned = await planDerived(dir);
+    // No new files/dirs appeared from planning.
+    expect(await fs.readdir(dir)).toEqual(beforeEntries);
+
+    await regenerateDerived(dir);
+    for (const [rel, content] of planned) {
+      const actual = await fs.readFile(path.join(dir, ...rel.split("/")), "utf8");
+      expect(actual).toBe(content);
+    }
+    // regenerateDerived wrote exactly the planned set (plus nothing else regenerable).
+    const commonwealth = await fs.readFile(path.join(dir, "COMMONWEALTH.md"), "utf8");
+    expect(planned.get("COMMONWEALTH.md")).toBe(commonwealth);
+  });
+});
+
+describe("regenerateDerived — the derived-file prune", () => {
+  /**
+   * Seed a brain whose derived set has drifted, and plant the four things the prune sweep has an
+   * opinion about: two HAND-WRITTEN markdown files (which `isDerivedMarkdownFile` misclassifies as
+   * derived because they sit at a brain/project-folder root and are not `README.md`), a ghost MOC
+   * left behind by a project that no longer has notes, and a legacy per-kind `INDEX.md`.
+   */
+  async function seedPrunable() {
+    await writeNote(dir, { kind: "memory", title: "Sourced fact", body: "x", source: "acme/app" });
+    await fs.writeFile(path.join(dir, "PLAYBOOK.md"), "Hand-written team playbook.\n");
+    await fs.mkdir(path.join(dir, "acme-app"), { recursive: true });
+    await fs.writeFile(path.join(dir, "acme-app", "NOTES.md"), "Hand-written project notes.\n");
+    await fs.mkdir(path.join(dir, "ghost-project"), { recursive: true });
+    await fs.writeFile(path.join(dir, "ghost-project", "Ghost.md"), "stale MOC\n");
+    await fs.mkdir(path.join(dir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(dir, "memory", "INDEX.md"), "legacy per-kind index\n");
+  }
+
+  const exists = (...rel: string[]) =>
+    fs
+      .access(path.join(dir, ...rel))
+      .then(() => true)
+      .catch(() => false);
+
+  it("deletes nothing with `prune: false`, while still writing the planned views", async () => {
+    await seedPrunable();
+    await regenerateDerived(dir, { prune: false });
+
+    // The whole point: a self-heal (`doctor --fix` / `lint --fix`) must not remove a teammate's file.
+    expect(await exists("PLAYBOOK.md")).toBe(true);
+    expect(await fs.readFile(path.join(dir, "PLAYBOOK.md"), "utf8")).toBe(
+      "Hand-written team playbook.\n",
+    );
+    expect(await exists("acme-app", "NOTES.md")).toBe(true);
+    expect(await fs.readFile(path.join(dir, "acme-app", "NOTES.md"), "utf8")).toBe(
+      "Hand-written project notes.\n",
+    );
+    // Genuine ghosts survive too — not deleting is the entire contract; the next sync collects them.
+    expect(await exists("ghost-project", "Ghost.md")).toBe(true);
+    expect(await exists("memory", "INDEX.md")).toBe(true);
+
+    // Still did its actual job: every planned view is on disk with exactly the planned content.
+    for (const [rel, content] of await planDerived(dir)) {
+      expect(await fs.readFile(path.join(dir, ...rel.split("/")), "utf8")).toBe(content);
+    }
+  });
+
+  it("prunes ghosts by default, so the pre-existing sync/capture behavior is unchanged", async () => {
+    await seedPrunable();
+    await regenerateDerived(dir);
+
+    expect(await exists("ghost-project", "Ghost.md")).toBe(false);
+    expect(await exists("memory", "INDEX.md")).toBe(false);
   });
 });
 

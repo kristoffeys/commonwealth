@@ -150,7 +150,8 @@ commonwealth statusline [install]         # ambient status line for Claude Code 
 commonwealth graduate [--suggest]         # propose facts recurring across ≥2 brains to the org-brain
 commonwealth consolidate [--dry-run]      # supersede near-duplicate canon notes onto one survivor
 commonwealth consolidate|graduate --force # run the full pass even when nothing has changed since the last one
-commonwealth doctor [--fix]               # diagnose the setup, the last capture, and why candidates were dropped
+commonwealth doctor [--fix]               # diagnose the setup, the last capture, why candidates were dropped, and vault hygiene
+commonwealth lint [--fix]                 # vault hygiene: dead links, metadata gaps, stale derived views (--fix rebuilds them)
 commonwealth update --agent both          # update the CLI + refresh both host integrations
 commonwealth --version                    # print the installed CLI version
 ```
@@ -225,6 +226,26 @@ it, and what. `commonwealth status` shows the rollup; `commonwealth doctor` name
 
 Receipts live in the brain's gitignored `index/` — derived, disposable, never committed or synced.
 A fresh clone starts with none.
+
+#### Vault hygiene
+
+A brain can be perfectly wired and still rot: a `superseded_by` pointing at a note somebody moved, a
+`[[wikilink]]` to a note nobody wrote, a `COMMONWEALTH.md` that no longer describes canon.
+`commonwealth lint` walks the link graph and the derived views and names each one, per file:
+
+```
+commonwealth lint                            # read-only: dead links, metadata gaps, stale views
+commonwealth lint --orphans                  # also list notes nothing links to
+commonwealth lint --fix                      # regenerate the drifted derived views (deletes nothing)
+```
+
+`commonwealth doctor` carries the same four checks as one line each. Exit code 1 is reserved for the
+defects that put a note out of reach — it doesn't parse, its id doesn't match its filename, or a
+supersede chain dead-ends — so it is a CI gate, not a nag; dead prose links and misfiled notes warn.
+`--fix` only ever **writes** derived files, never deletes one, and never touches a note — safe
+because derived files are a pure function of the notes
+([ADR-0003](docs/adr/0003-concurrency-model.md)). Fixing a broken supersede id is a canon edit and
+stays yours.
 
 #### Review as a pull request
 
