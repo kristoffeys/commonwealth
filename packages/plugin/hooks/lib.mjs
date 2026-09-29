@@ -23,6 +23,9 @@
 //                                                         curation. Fail-open: returns candidates
 //                                                         UNCHANGED on flag-off/no-runtime/error.)
 //   capture(brain, cwd, candidates)    -> { captured, ... }(stage candidates via the review queue)
+//   maybeConsolidate(brain)            -> { ran, pending?, clusters?, superseded?, skipped? }
+//                                                           (ADR-0046 periodic gate; `ran: false`
+//                                                           when not due / on any failure)
 //   refreshStatus(brain, cwd)          -> void             (refresh the statusline cache; #197)
 //   readCaptureMark(key)               -> number | null    (last prompt-capture ts for a session)
 //   writeCaptureMark(key, ts)          -> void             (record a prompt-capture ts; #194)
@@ -520,6 +523,20 @@ export async function sessionEnd(input, deps) {
     }
   }
 
+  // Periodic consolidation pass (ADR-0046, #319): gated by time (24h) and session count (5) since
+  // the last check, mirroring `autoDream`. Runs in this already-detached worker, off the per-turn
+  // hot path, every qualifying SessionEnd — not just capturing ones — so the session count advances
+  // even on a zero-capture session. Fail-open: any error here must never break the session or mask
+  // the capture receipt above; absent dep (older wiring / unit tests) skips entirely.
+  if (typeof deps.maybeConsolidate === "function") {
+    try {
+      const consolidation = await deps.maybeConsolidate(brain);
+      if (consolidation?.ran) result = { ...result, consolidation };
+    } catch {
+      // Best-effort maintenance pass — never surface a failure here as a session-breaking error.
+    }
+  }
+
   // Refresh the ambient status cache AFTER capture so the statusline reflects this session's notes
   // (#197). We're in the detached worker here, off the per-turn statusline hot path, so the index
   // work is free to run. Best-effort — the dep swallows its own errors; a hook must never break.
@@ -692,6 +709,59 @@ export function parseVerdictSummary(stdout) {
   return found;
 }
 
+/** Prefix of the machine-readable consolidation summary line `consolidate --auto` emits (ADR-0046).
+ *  Keep in sync with `CONSOLIDATE_SUMMARY_PREFIX` in packages/curate/src/index.ts. */
+const CONSOLIDATE_SUMMARY_PREFIX = "##commonwealth:consolidate ";
+
+/**
+ * Parse the periodic-consolidation summary (ADR-0046) `consolidate --auto` prints to stdout, or
+ * `null` when absent/unparseable. `ran: false` means the gate wasn't due yet this session; `ran:
+ * true` means an attempt happened (possibly a no-op lock skip). Pure function; never throws.
+ *
+ * @param {string} stdout  Raw stdout from `commonwealth-curate consolidate --auto`.
+ * @returns {{ran: boolean, pending: boolean, clusters: number, superseded: number, skipped: string | null} | null}
+ */
+export function parseConsolidationSummary(stdout) {
+  if (typeof stdout !== "string") return null;
+  for (const raw of stdout.split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith(CONSOLIDATE_SUMMARY_PREFIX)) continue;
+    try {
+      const parsed = JSON.parse(line.slice(CONSOLIDATE_SUMMARY_PREFIX.length));
+      if (!parsed || typeof parsed !== "object") continue;
+      return {
+        ran: parsed.ran === true,
+        pending: parsed.pending === true,
+        clusters: Number(parsed.clusters) || 0,
+        superseded: Number(parsed.superseded) || 0,
+        skipped: typeof parsed.skipped === "string" ? parsed.skipped : null,
+      };
+    } catch {
+      // Malformed line — treat as absent.
+    }
+  }
+  return null;
+}
+
+/**
+ * Render the periodic-consolidation clause for a SessionEnd receipt (ADR-0046), or "" when the
+ * pass wasn't due, was a no-op, or lock-contended (those are deliberately quiet — see the ADR:
+ * a busy brain shouldn't nag every qualifying session). Pure function.
+ *
+ * @param {{ran: boolean, pending: boolean, clusters: number, superseded: number, skipped: string | null} | null | undefined} c
+ * @returns {string}
+ */
+function renderConsolidationNote(c) {
+  if (!c || !c.ran || c.skipped) return "";
+  if (c.pending && c.clusters > 0) {
+    return `\n🧹 Consolidation found ${c.clusters} duplicate cluster(s) pending review (autoPromote is off) — run \`commonwealth consolidate\` to apply.`;
+  }
+  if (c.superseded > 0) {
+    return `\n🧹 Consolidation merged ${c.superseded} near-duplicate note(s) into canon.`;
+  }
+  return "";
+}
+
 /**
  * Render the parenthetical curation clause for a capture receipt (ADR-0030), e.g.
  * " (1 superseded an older note, 1 flagged as a contradiction, 2 filtered as trivia)", or "" when
@@ -825,10 +895,15 @@ export function endReceiptMessage(result, boundary) {
   const syncNote = result.syncDeferred
     ? "\n⏳ Sync deferred — notes are saved locally and will flush to your team at the next session."
     : "";
+  // The periodic consolidation pass (ADR-0046), when it ran this session — appended regardless of
+  // whether THIS session captured anything, since consolidation reconciles pre-existing canon.
+  const consolidationNote = renderConsolidationNote(result.consolidation);
   // Prefer the legible, titled receipt when we have structured notes (#204), naming what the LLM
   // curation pass did (ADR-0030) via the verdict summary the capture command reported.
   if (Array.isArray(result.notes) && result.notes.length > 0) {
-    return renderCaptureReceipt(result.notes, boundary, result.verdicts) + syncNote;
+    return (
+      renderCaptureReceipt(result.notes, boundary, result.verdicts) + syncNote + consolidationNote
+    );
   }
   if (typeof result.captured === "number") {
     if (result.captured === 0) {
@@ -836,12 +911,12 @@ export function endReceiptMessage(result, boundary) {
       // rather than the misleading "found no durable knowledge" (nothing was extracted).
       const clause = verdictClause(result.verdicts);
       if (clause) {
-        return `🧠 Commonwealth: reviewed ${source} and captured nothing${clause}.`;
+        return `🧠 Commonwealth: reviewed ${source} and captured nothing${clause}.${consolidationNote}`;
       }
-      return `🧠 Commonwealth: reviewed ${source} but found no durable knowledge worth capturing.`;
+      return `🧠 Commonwealth: reviewed ${source} but found no durable knowledge worth capturing.${consolidationNote}`;
     }
     const n = result.captured;
-    return `🧠 Commonwealth: captured ${n} note(s) from ${source}. Run \`commonwealth status\` to review.${syncNote}`;
+    return `🧠 Commonwealth: captured ${n} note(s) from ${source}. Run \`commonwealth status\` to review.${syncNote}${consolidationNote}`;
   }
   return null;
 }
@@ -1488,6 +1563,27 @@ export function realDeps(overrides = {}) {
   }
 
   /**
+   * Periodic consolidation pass (ADR-0046, #319): shells to `consolidate --auto`, which itself owns
+   * the time+session gate, the single-writer sync lock, and the `autoPromote` dry-run-vs-apply
+   * choice (see `maybeConsolidate` in `packages/curate/src/consolidate.ts`). This wrapper's only
+   * job is running that command and parsing its summary line — ANY failure (non-zero exit,
+   * unparseable output) degrades to `{ ran: false }`, matching "the gate simply didn't fire this
+   * session" rather than surfacing an error.
+   */
+  async function maybeConsolidate(brain) {
+    try {
+      const res = await runCurate(["consolidate", "--auto"], {
+        env: { COMMONWEALTH_BRAIN_DIR: brain },
+      });
+      if (res.code !== 0) return { ran: false };
+      const summary = parseConsolidationSummary(res.stdout);
+      return summary ?? { ran: false };
+    } catch {
+      return { ran: false };
+    }
+  }
+
+  /**
    * LLM curation pass (ADR-0030), fail-open by construction. Two steps, both off the per-turn hot
    * path (this runs in the detached SessionEnd/PreCompact worker):
    *   1. `curate neighbors` — DETERMINISTIC, offline: attaches each candidate's nearest-canon
@@ -1807,6 +1903,7 @@ export function realDeps(overrides = {}) {
     getContextQuery,
     capture,
     classifyCandidates,
+    maybeConsolidate,
     refreshStatus,
     extractCandidates: extractor.extract,
     recordCapture,

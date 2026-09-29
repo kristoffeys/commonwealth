@@ -1,6 +1,9 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import {
   acquireSyncLock,
   confirmCheckpoint,
+  isFeatureEnabled,
   listNotes,
   quietTick,
   recordCheckpoint,
@@ -198,5 +201,160 @@ export async function consolidateCanon(
     return { clusters, superseded };
   } finally {
     await release();
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Periodic gate (ADR-0046, #319): decide WHEN a background SessionEnd worker should even attempt
+// a consolidation pass, mirroring `autoDream`'s "at most once per 24h AND ≥5 sessions since the
+// last one" gating. This is deliberately separate from `consolidateCanon`'s own #273 quiet-tick
+// checkpoint: the checkpoint's `ranAt` only advances when a full pass actually runs over a CHANGED
+// tree, so a brain that's been quiet for weeks would never re-arm a 24h/5-session gate built on
+// that file (see ADR-0046's alternatives). This file answers "did we bother to CHECK recently
+// enough", independent of whether checking found anything to do.
+
+/** Default cooldown: at most one consolidation attempt per 24h (matches `autoDream`). */
+export const DEFAULT_GATE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+/** Default minimum sessions since the last check before another attempt is due. */
+export const DEFAULT_GATE_MIN_SESSIONS = 5;
+
+/** Where the gate's derived, disposable state lives — same `index/` area as checkpoints/receipts. */
+function gatePath(brainDir: string): string {
+  return path.join(brainDir, "index", "consolidate-gate.json");
+}
+
+interface GateState {
+  sessionsSinceCheck: number;
+  lastCheckedAt: string | null;
+}
+
+const EMPTY_GATE_STATE: GateState = { sessionsSinceCheck: 0, lastCheckedAt: null };
+
+async function readGateState(brainDir: string): Promise<GateState> {
+  try {
+    const parsed: unknown = JSON.parse(await fs.readFile(gatePath(brainDir), "utf8"));
+    if (!parsed || typeof parsed !== "object") return { ...EMPTY_GATE_STATE };
+    const s = parsed as Partial<GateState>;
+    return {
+      sessionsSinceCheck: typeof s.sessionsSinceCheck === "number" ? s.sessionsSinceCheck : 0,
+      lastCheckedAt: typeof s.lastCheckedAt === "string" ? s.lastCheckedAt : null,
+    };
+  } catch {
+    // Absent/unreadable/malformed ⇒ a fresh gate. Failing toward "not due yet" (0 sessions) rather
+    // than toward "always due" — a corrupted gate file costs a few extra sessions of delay, never
+    // a canon mutation nobody asked for.
+    return { ...EMPTY_GATE_STATE };
+  }
+}
+
+async function writeGateState(brainDir: string, state: GateState): Promise<void> {
+  try {
+    const file = gatePath(brainDir);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify(state), "utf8");
+    await fs.rename(tmp, file);
+  } catch {
+    // Best-effort — see the module-level note: losing gate state costs one mistimed run, never a
+    // broken session and never a note.
+  }
+}
+
+/**
+ * Record that a session ended in `brainDir` (regardless of whether it captured anything), for the
+ * periodic-consolidation gate's session-count leg. Call this once per qualifying SessionEnd, BEFORE
+ * checking {@link isConsolidationDue}, so the session that tips the count over the threshold is
+ * itself the one that triggers the pass — matching `autoDream`'s "≥5 sessions since" phrasing.
+ * Best-effort; never throws.
+ */
+export async function noteConsolidationSession(brainDir: string): Promise<void> {
+  const state = await readGateState(brainDir);
+  await writeGateState(brainDir, {
+    ...state,
+    sessionsSinceCheck: state.sessionsSinceCheck + 1,
+  });
+}
+
+/** Gate options (`autoDream`-matching defaults; not brain-config-tunable in v1 — see ADR-0046). */
+export interface ConsolidationGateOptions {
+  cooldownMs?: number;
+  minSessions?: number;
+  now?: number;
+}
+
+/**
+ * Whether a periodic consolidation attempt is due right now: at least `minSessions` sessions have
+ * ended since the last check AND at least `cooldownMs` has elapsed since the last check (or there
+ * has never been one). Pure given the gate state; does not mutate it — see
+ * {@link recordConsolidationCheck} for advancing the gate after an attempt.
+ */
+export async function isConsolidationDue(
+  brainDir: string,
+  opts: ConsolidationGateOptions = {},
+): Promise<boolean> {
+  const cooldownMs = opts.cooldownMs ?? DEFAULT_GATE_COOLDOWN_MS;
+  const minSessions = opts.minSessions ?? DEFAULT_GATE_MIN_SESSIONS;
+  const now = opts.now ?? Date.now();
+  const state = await readGateState(brainDir);
+  if (state.sessionsSinceCheck < minSessions) return false;
+  if (state.lastCheckedAt === null) return true;
+  const last = Date.parse(state.lastCheckedAt);
+  if (Number.isNaN(last)) return true; // malformed timestamp ⇒ fail toward doing the check
+  return now - last >= cooldownMs;
+}
+
+/**
+ * Advance the gate after a consolidation attempt: reset the session counter and stamp the check
+ * time, whether or not the attempt found anything to do (a quiet brain must not re-scan every
+ * qualifying session forever — see the module docstring). Best-effort; never throws.
+ */
+export async function recordConsolidationCheck(brainDir: string, now = Date.now()): Promise<void> {
+  await writeGateState(brainDir, {
+    sessionsSinceCheck: 0,
+    lastCheckedAt: new Date(now).toISOString(),
+  });
+}
+
+/** Outcome of one {@link maybeConsolidate} call. */
+export interface PeriodicConsolidateOutcome {
+  /** Whether the gate allowed an attempt this call (false ⇒ still cooling down / too few sessions). */
+  ran: boolean;
+  /**
+   * Set when `ran` and `autoPromote` was off: `consolidateCanon` ran in dry-run mode, so any
+   * clusters it found were reported, not applied. The caller (SessionEnd) is expected to surface
+   * this via a receipt pointing at `commonwealth consolidate` for a human to apply.
+   */
+  pending?: boolean;
+  /** The underlying pass result, present whenever `ran` is true. */
+  result?: ConsolidationResult;
+}
+
+/**
+ * The SessionEnd entry point (ADR-0046, #319): record this session against the gate, and — only
+ * when the gate says it's due — run `consolidateCanon`, respecting the brain's `autoPromote` flag
+ * (apply for real when on; dry-run/report when off). Never throws: a gate-state or consolidation
+ * failure must never break a session, so every failure mode here collapses to `{ ran: false }`.
+ */
+export async function maybeConsolidate(
+  brainDir: string,
+  opts: ConsolidationGateOptions & { threshold?: number } = {},
+): Promise<PeriodicConsolidateOutcome> {
+  try {
+    if (!(await isFeatureEnabled(brainDir, "autoConsolidate"))) return { ran: false };
+    await noteConsolidationSession(brainDir);
+    if (!(await isConsolidationDue(brainDir, opts))) return { ran: false };
+
+    const autoPromote = await isFeatureEnabled(brainDir, "autoPromote");
+    // The gate advances on every ATTEMPT, success or not — see the module docstring — so record it
+    // before running the pass, not after, in case the pass throws.
+    await recordConsolidationCheck(brainDir, opts.now ?? Date.now());
+
+    const result = await consolidateCanon(brainDir, {
+      threshold: opts.threshold,
+      dryRun: !autoPromote,
+    });
+    return { ran: true, pending: !autoPromote && result.clusters > 0, result };
+  } catch {
+    return { ran: false };
   }
 }
