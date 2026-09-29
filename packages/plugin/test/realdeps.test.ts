@@ -657,26 +657,28 @@ describe("realDeps().capture (real curate binary over stdin)", () => {
 });
 
 describe("realDeps().getExistingNotes (real curate binary, #317)", () => {
-  it("returns the compact { id, title, kind } shape for notes matching the project directory name", async () => {
+  it("splits a kebab-case project directory into words so it actually matches (#317)", async () => {
     const brain = path.join(tmp, "brain");
     await initBrain(brain);
     process.env.COMMONWEALTH_AUTHOR = "Hook Author";
     process.env.COMMONWEALTH_AUTHOR_EMAIL = "hook@example.com";
     const deps = realDeps({ curateEntry });
 
-    // The project dir's basename ("widget-app") is the cheap relevance query — plant a note that
-    // lexically matches it.
+    // "team-second-brain" as ONE quoted phrase (the pre-fix behavior) never matches a title whose
+    // words appear in a different order/adjacency — this is the realistic case the naive
+    // `path.basename(cwd)` query was silently dead for. Splitting the dir name into words lets the
+    // core query engine's OR fallback (#209) find it via "second"/"brain".
     await deps.capture(brain, brain, [
-      { kind: "memory", title: "widget-app uses feature flags", body: "LaunchDarkly, team-wide." },
+      { kind: "memory", title: "Second brain onboarding notes", body: "Read this first." },
     ]);
 
-    const project = path.join(tmp, "widget-app");
+    const project = path.join(tmp, "team-second-brain");
     await fs.mkdir(project, { recursive: true });
     const notes = await deps.getExistingNotes(brain, project);
 
     expect(Array.isArray(notes)).toBe(true);
     expect(notes.length).toBeGreaterThan(0);
-    expect(notes[0]).toMatchObject({ title: "widget-app uses feature flags", kind: "memory" });
+    expect(notes[0]).toMatchObject({ title: "Second brain onboarding notes", kind: "memory" });
     expect(typeof notes[0].id).toBe("string");
   });
 

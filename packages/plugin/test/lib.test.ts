@@ -16,6 +16,7 @@ import {
   parseCaptureLines,
   promptCaptureIntervalMs,
   resolveSyncRuntime,
+  sessionDateFromTranscript,
   sessionEnd,
   sessionStart,
   shouldCaptureNow,
@@ -194,6 +195,36 @@ describe("prompt-capture throttle (#194)", () => {
     expect(promptCaptureIntervalMs({ COMMONWEALTH_PROMPT_CAPTURE_MS: "0" })).toBe(0);
     // Garbage → fall back to the default rather than NaN.
     expect(promptCaptureIntervalMs({ COMMONWEALTH_PROMPT_CAPTURE_MS: "nope" })).toBeGreaterThan(0);
+  });
+});
+
+describe("sessionDateFromTranscript (#318 — the session's date, not the worker's late-flush run time)", () => {
+  let tmp: string;
+
+  beforeEach(async () => {
+    tmp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "cw-sessiondate-")));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  it("derives the date from the transcript's mtime, not from now", async () => {
+    const transcriptPath = path.join(tmp, "session.jsonl");
+    await fs.writeFile(transcriptPath, "{}\n");
+    // A worker that flushes late still sees this same in-the-past date, because it's read off the
+    // transcript's last write, not off `Date.now()` at the worker's own run time.
+    const past = new Date("2026-01-15T12:00:00.000Z");
+    await fs.utimes(transcriptPath, past, past);
+
+    const date = await sessionDateFromTranscript(transcriptPath);
+
+    expect(date).toBe("2026-01-15");
+  });
+
+  it("falls back to now when the transcript is missing/unreadable", async () => {
+    const date = await sessionDateFromTranscript(path.join(tmp, "does-not-exist.jsonl"));
+    expect(date).toBe(new Date().toISOString().slice(0, 10));
   });
 });
 

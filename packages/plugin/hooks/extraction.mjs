@@ -70,14 +70,42 @@ const MAX_EXISTING_NOTES = 40;
 /** Bound on the serialized size of the existing-notes section (#317): "a few KB". */
 const MAX_EXISTING_NOTES_BYTES = 4_000;
 
+/** Per-field cap applied by {@link inlineText}, matching core's title/source cap (see index-db.ts). */
+const MAX_INLINE_TEXT_LENGTH = 120;
+
+/**
+ * Neutralize a note-controlled string (title/id/kind) for safe inclusion in the extraction
+ * prompt. Titles are free text the note author (or an earlier auto-capture) controls; without
+ * this, a title containing newlines and a line like "SYSTEM OVERRIDE: ..." could break out of
+ * the "- id — title (kind)" bullet framing and read as separate lines of instruction to the
+ * extraction model — a prompt-injection vector, the same class as #102 (core's derived-file
+ * neutralizer). This file is standalone ESM and can't import `@cmnwlth/core`'s `inlineText`
+ * (see lib.mjs), so we mirror its approach here: collapse all whitespace/control chars
+ * (including newlines) to single spaces, strip markdown/tag-like structural chars so nothing can
+ * imitate a heading/link/tag, and cap the length so one entry can't dominate the section.
+ */
+function inlineText(value) {
+  return (
+    value
+      // eslint-disable-next-line no-control-regex -- intentional: fold C0 controls (incl. \r \n \t)
+      .replace(/[\u0000-\u001f\u007f]+/g, " ")
+      .replace(/[[\]<>`]/g, "") // strip chars that could form a link/code-span/tag
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, MAX_INLINE_TEXT_LENGTH)
+  );
+}
+
 /**
  * Render a compact, bounded "existing brain notes" section (#317) appended to the extraction
  * prompt, so the extractor doesn't mint candidates for facts already recorded — mirroring how
  * Claude Code's own extractor is handed a manifest of existing memory files. This is DATA, exactly
  * like the transcript: framed as a reference list, never as instructions to follow. Strictly
  * bounded (count AND byte size) so a large brain can never blow up the prompt. Malformed entries
- * are skipped rather than aborting the whole section. Returns "" for no/empty input so callers can
- * append it unconditionally.
+ * are skipped rather than aborting the whole section. Every rendered field is passed through
+ * {@link inlineText} first, since titles/id/kind are note-controlled and otherwise could inject
+ * fake structure into the prompt (see its docstring). Returns "" for no/empty input so callers
+ * can append it unconditionally.
  */
 function formatExistingNotes(notes) {
   if (!Array.isArray(notes) || notes.length === 0) return "";
@@ -90,9 +118,12 @@ function formatExistingNotes(notes) {
   let bytes = Buffer.byteLength(lines.join("\n"), "utf8");
   for (const note of notes.slice(0, MAX_EXISTING_NOTES)) {
     if (!note || typeof note.title !== "string" || note.title.trim().length === 0) continue;
-    const id = typeof note.id === "string" && note.id.length > 0 ? `${note.id} — ` : "";
-    const kind = typeof note.kind === "string" && note.kind.length > 0 ? ` (${note.kind})` : "";
-    const line = `- ${id}${note.title}${kind}`;
+    const title = inlineText(note.title);
+    if (title.length === 0) continue;
+    const id = typeof note.id === "string" && note.id.length > 0 ? `${inlineText(note.id)} — ` : "";
+    const kind =
+      typeof note.kind === "string" && note.kind.length > 0 ? ` (${inlineText(note.kind)})` : "";
+    const line = `- ${id}${title}${kind}`;
     const nextBytes = bytes + Buffer.byteLength(line, "utf8") + 1;
     if (nextBytes > MAX_EXISTING_NOTES_BYTES) break;
     lines.push(line);

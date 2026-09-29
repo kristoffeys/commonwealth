@@ -15,7 +15,8 @@
 //                                                            resolveBrainDir + isInScope.)
 //   getContext(brain, cwd)             -> string           (session-wide markdown; "" for none)
 //   getContextQuery(brain, cwd, query) -> string           (prompt-scoped markdown; "" for no match)
-//   getExistingNotes(brain, cwd)       -> Array<{ id, title, kind }>  (#317: compact, bounded nearest
+//   getExistingNotes(brain, cwd, transcriptPath)
+//                                      -> Array<{ id, title, kind }>  (#317: compact, bounded nearest
 //                                                            notes for the extraction prompt.
 //                                                            Fail-open: [] on any lookup/timeout
 //                                                            error. Absent dep skips the lookup.)
@@ -396,6 +397,29 @@ export function shouldCaptureNow({ lastMark, now, intervalMs }) {
 }
 
 /**
+ * The session date (#318) fed to the extractor for resolving relative dates ("yesterday"). Using
+ * `new Date()` (the worker's own run time) is wrong when a worker flushes late — a queued
+ * SessionEnd worker can run hours after the session it's summarizing. The transcript file's mtime
+ * (its last write) is a host-neutral proxy for when the session actually happened, so we derive
+ * the date from that instead, falling back to now if the file is missing/unreadable. UTC to match
+ * core's `today()`.
+ *
+ * @param {string | undefined} transcriptPath
+ * @returns {Promise<string>} an ISO `YYYY-MM-DD` date
+ */
+export async function sessionDateFromTranscript(transcriptPath) {
+  if (typeof transcriptPath === "string" && transcriptPath.length > 0) {
+    try {
+      const stat = await fs.stat(transcriptPath);
+      return stat.mtime.toISOString().slice(0, 10);
+    } catch {
+      // fall through to now
+    }
+  }
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
  * SessionEnd: resolve the brain, honor the scope gate, extract candidate notes from the
  * session transcript, and stage them via the review queue (capture). Out-of-scope or
  * brain-less sessions do NOTHING (they never extract candidates or capture). A session with
@@ -461,11 +485,13 @@ export async function sessionEnd(input, deps) {
   // absent dep (older wiring / unit tests) skips the lookup entirely, so extraction runs exactly as
   // before either way.
   const existingNotes =
-    typeof deps.getExistingNotes === "function" ? await deps.getExistingNotes(brain, cwd) : [];
+    typeof deps.getExistingNotes === "function"
+      ? await deps.getExistingNotes(brain, cwd, input.transcript_path)
+      : [];
   const extracted = await deps.extractCandidates({
     transcriptPath: input.transcript_path,
     cwd,
-    sessionDate: new Date().toISOString().slice(0, 10),
+    sessionDate: await sessionDateFromTranscript(input.transcript_path),
     existingNotes,
   });
   // Extraction failures are operational failures, not a legitimate zero-candidate result. Stop
@@ -1474,15 +1500,86 @@ export function realDeps(overrides = {}) {
   }
 
   /**
+   * Split a directory basename into its component words (#317). Core's FTS query tokenizer
+   * (`toMatchTokens`) splits only on whitespace, so a kebab/snake-case project dir like
+   * `team-second-brain` would otherwise ride into the query as one unmatchable phrase — no note
+   * title contains that literal string. Splitting here (rather than in core, which other callers
+   * depend on) turns it into real search words.
+   */
+  function dirNameQueryWords(cwd) {
+    return path
+      .basename(cwd)
+      .split(/[^a-zA-Z0-9]+/)
+      .filter((w) => w.length > 0);
+  }
+
+  const MAX_TRANSCRIPT_QUERY_MESSAGES = 3;
+  const MAX_TRANSCRIPT_QUERY_WORDS = 30;
+  const MIN_TRANSCRIPT_QUERY_WORD_LENGTH = 3;
+  // ponytail: reads the whole transcript (bounded by extraction.mjs's own 2MB cap on the same
+  // file) just to keep the tail; a streaming tail-read would avoid the full buffer for huge
+  // sessions if this ever shows up in profiling.
+  const TRANSCRIPT_QUERY_TAIL_CHARS = 65_536;
+
+  /**
+   * Pull a handful of extra query terms (#317) from the transcript's most recent user messages,
+   * so the existing-notes lookup also reflects what the session was actually about, not just the
+   * project directory name. Self-contained here (rather than reusing extraction.mjs's transcript
+   * reader) since #322 is concurrently reworking that reader in parallel. Fail-open by
+   * construction: any read/parse error returns [].
+   */
+  async function recentUserPromptTerms(transcriptPath) {
+    if (typeof transcriptPath !== "string" || transcriptPath.length === 0) return [];
+    try {
+      const raw = await fs.readFile(transcriptPath, "utf8");
+      const tail =
+        raw.length > TRANSCRIPT_QUERY_TAIL_CHARS ? raw.slice(-TRANSCRIPT_QUERY_TAIL_CHARS) : raw;
+      const messages = [];
+      for (const line of tail.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let record;
+        try {
+          record = JSON.parse(trimmed);
+        } catch {
+          continue; // a truncated leading line from the tail cut, or genuinely malformed — skip
+        }
+        const message = record?.message ?? record;
+        if (message?.role !== "user") continue;
+        const content = message.content;
+        if (typeof content === "string") {
+          messages.push(content);
+        } else if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block && block.type === "text" && typeof block.text === "string") {
+              messages.push(block.text);
+            }
+          }
+        }
+      }
+      return messages
+        .slice(-MAX_TRANSCRIPT_QUERY_MESSAGES)
+        .join(" ")
+        .split(/[^a-zA-Z0-9]+/)
+        .filter((w) => w.length >= MIN_TRANSCRIPT_QUERY_WORD_LENGTH)
+        .slice(0, MAX_TRANSCRIPT_QUERY_WORDS);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * Compact "existing notes" hint for the extraction prompt (#317): reuses the same lexical search
    * `context --query` already runs for prompt-scoped injection (#194), just with the `--json` shape
-   * and a wider cap, keyed off the project's directory name (cheap relevance — no transcript read
-   * needed, so this never touches the transcript/cursor logic another change is landing in
-   * parallel). Fail-open by construction: ANY non-zero exit, timeout, or unparseable stdout returns
-   * `[]`, which is byte-identical to "no notes were relevant" — extraction proceeds unchanged.
+   * and a wider cap, keyed off the project's directory name plus a few words pulled straight from
+   * the transcript. Fail-open by construction: ANY non-zero exit, timeout, or unparseable stdout
+   * returns `[]`, which is byte-identical to "no notes were relevant" — extraction proceeds
+   * unchanged.
    */
-  async function getExistingNotes(brain, cwd) {
-    const query = path.basename(cwd);
+  async function getExistingNotes(brain, cwd, transcriptPath) {
+    const terms = [...dirNameQueryWords(cwd), ...(await recentUserPromptTerms(transcriptPath))];
+    const query = terms.join(" ");
+    if (query.length === 0) return [];
     try {
       const res = await runCurate(
         ["context", "--cwd", cwd, "--query", query, "--limit", "40", "--json"],
