@@ -16,6 +16,7 @@ import {
   parseCaptureLines,
   parseConsolidationSummary,
   promptCaptureIntervalMs,
+  realDeps,
   resolveSyncRuntime,
   sessionEnd,
   sessionStart,
@@ -647,6 +648,28 @@ describe("parseConsolidationSummary (ADR-0046, #319)", () => {
   });
 });
 
+describe("realDeps().maybeConsolidate timeout (#320 review)", () => {
+  it("bounds the consolidate child at a timeout and fails open when it hangs", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-consolidate-hang-"));
+    // A fake `consolidate --auto` that never exits on its own — simulates a wedged child (e.g. a
+    // stuck git op inside the sync lock). Node keeps the event loop alive on its own, so absent a
+    // timeout this would hang forever.
+    const entry = path.join(tmp, "hang.mjs");
+    await fs.writeFile(entry, "setInterval(() => {}, 1000);\n", "utf8");
+    try {
+      const deps = realDeps({ curateEntry: entry, consolidateTimeoutMs: 200 });
+      const start = Date.now();
+      const outcome = await deps.maybeConsolidate("/brains/acme", "sess-1");
+      // Fails open, never throws, never reports a bogus "ran" outcome.
+      expect(outcome).toEqual({ ran: false });
+      // Bounded by the override, not the real 120s default.
+      expect(Date.now() - start).toBeLessThan(10_000);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  }, 15_000);
+});
+
 describe("sessionEnd periodic consolidation wiring (ADR-0046, #319)", () => {
   it("calls deps.maybeConsolidate and attaches its outcome to the result when it ran", async () => {
     const maybeConsolidate = vi.fn(async () => ({
@@ -661,7 +684,8 @@ describe("sessionEnd periodic consolidation wiring (ADR-0046, #319)", () => {
       { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
       deps,
     );
-    expect(maybeConsolidate).toHaveBeenCalledWith("/brains/acme");
+    // No `session_id` on the input, so `guardSessionKey` falls back to `cwd`.
+    expect(maybeConsolidate).toHaveBeenCalledWith("/brains/acme", "/work/acme/app");
     expect(result.consolidation).toEqual({
       ran: true,
       pending: false,
@@ -669,6 +693,18 @@ describe("sessionEnd periodic consolidation wiring (ADR-0046, #319)", () => {
       superseded: 1,
       skipped: null,
     });
+  });
+
+  it("passes the hook's session_id through to deps.maybeConsolidate when present", async () => {
+    const maybeConsolidate = vi.fn(async () => ({ ran: false }));
+    const deps = makeDeps({ maybeConsolidate });
+    await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl", session_id: "sess-123" },
+      deps,
+    );
+    // Same session id used by PreCompact and SessionEnd for one session collides onto one marker
+    // (#320 review fix) instead of counting the session twice.
+    expect(maybeConsolidate).toHaveBeenCalledWith("/brains/acme", "sess-123");
   });
 
   it("omits `consolidation` from the result when the gate wasn't due", async () => {

@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
@@ -223,12 +224,32 @@ function gatePath(brainDir: string): string {
   return path.join(brainDir, "index", "consolidate-gate.json");
 }
 
+/**
+ * Where per-session markers live for the session-count leg of the gate (#320 review fix). One file
+ * per session id, NOT a shared counter: a shared `sessionsSinceCheck` number needs an unlocked
+ * read-modify-write from every SessionEnd/PreCompact worker, and those genuinely race (five
+ * concurrent sessions ending together all read the same starting count and each write back
+ * `+1`, so four increments are lost). A directory of markers turns "increment a number" into
+ * "create a file that didn't exist" — each session's write only ever touches ITS OWN path, so
+ * there is nothing to lose. Counting is then just `readdir().length`, and keying by session id
+ * also makes PreCompact + SessionEnd firing for the SAME session collide on the same file instead
+ * of counting twice.
+ */
+function gateSessionsDir(brainDir: string): string {
+  return path.join(brainDir, "index", "consolidate-sessions");
+}
+
+/** Marker path for one session id — hashed so any session id (a cwd, a UUID, ...) is a safe filename. */
+function sessionMarkerPath(brainDir: string, sessionId: string): string {
+  const hash = createHash("sha1").update(sessionId).digest("hex");
+  return path.join(gateSessionsDir(brainDir), `${hash}.marker`);
+}
+
 interface GateState {
-  sessionsSinceCheck: number;
   lastCheckedAt: string | null;
 }
 
-const EMPTY_GATE_STATE: GateState = { sessionsSinceCheck: 0, lastCheckedAt: null };
+const EMPTY_GATE_STATE: GateState = { lastCheckedAt: null };
 
 async function readGateState(brainDir: string): Promise<GateState> {
   try {
@@ -236,13 +257,12 @@ async function readGateState(brainDir: string): Promise<GateState> {
     if (!parsed || typeof parsed !== "object") return { ...EMPTY_GATE_STATE };
     const s = parsed as Partial<GateState>;
     return {
-      sessionsSinceCheck: typeof s.sessionsSinceCheck === "number" ? s.sessionsSinceCheck : 0,
       lastCheckedAt: typeof s.lastCheckedAt === "string" ? s.lastCheckedAt : null,
     };
   } catch {
-    // Absent/unreadable/malformed ⇒ a fresh gate. Failing toward "not due yet" (0 sessions) rather
-    // than toward "always due" — a corrupted gate file costs a few extra sessions of delay, never
-    // a canon mutation nobody asked for.
+    // Absent/unreadable/malformed ⇒ a fresh gate. Failing toward "not due yet" rather than toward
+    // "always due" — a corrupted gate file costs a few extra sessions of delay, never a canon
+    // mutation nobody asked for.
     return { ...EMPTY_GATE_STATE };
   }
 }
@@ -260,19 +280,38 @@ async function writeGateState(brainDir: string, state: GateState): Promise<void>
   }
 }
 
+/** How many distinct sessions have been noted since the last check (see {@link gateSessionsDir}). */
+async function countSessionMarkers(brainDir: string): Promise<number> {
+  try {
+    const entries = await fs.readdir(gateSessionsDir(brainDir));
+    return entries.filter((f) => f.endsWith(".marker")).length;
+  } catch {
+    // No directory yet ⇒ no sessions noted yet.
+    return 0;
+  }
+}
+
 /**
  * Record that a session ended in `brainDir` (regardless of whether it captured anything), for the
  * periodic-consolidation gate's session-count leg. Call this once per qualifying SessionEnd, BEFORE
  * checking {@link isConsolidationDue}, so the session that tips the count over the threshold is
  * itself the one that triggers the pass — matching `autoDream`'s "≥5 sessions since" phrasing.
- * Best-effort; never throws.
+ *
+ * `sessionId` identifies the calling session (the hook's `session_id`, falling back to `cwd` —
+ * mirrors `guardSessionKey` in `packages/plugin/hooks/lib.mjs`). Each id gets its own marker file
+ * (create-exclusive), so concurrent calls for DIFFERENT sessions never race, and the SAME session
+ * id calling twice (PreCompact then SessionEnd for one session) collides on `EEXIST` and counts
+ * once. Best-effort; never throws.
  */
-export async function noteConsolidationSession(brainDir: string): Promise<void> {
-  const state = await readGateState(brainDir);
-  await writeGateState(brainDir, {
-    ...state,
-    sessionsSinceCheck: state.sessionsSinceCheck + 1,
-  });
+export async function noteConsolidationSession(brainDir: string, sessionId: string): Promise<void> {
+  try {
+    await fs.mkdir(gateSessionsDir(brainDir), { recursive: true });
+    await fs.writeFile(sessionMarkerPath(brainDir, sessionId), "", { flag: "wx" });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "EEXIST") return; // same session, already noted
+    // Best-effort — see the module-level note: losing a marker costs one undercounted session,
+    // never a canon mutation nobody asked for.
+  }
 }
 
 /** Gate options (`autoDream`-matching defaults; not brain-config-tunable in v1 — see ADR-0046). */
@@ -296,7 +335,8 @@ export async function isConsolidationDue(
   const minSessions = opts.minSessions ?? DEFAULT_GATE_MIN_SESSIONS;
   const now = opts.now ?? Date.now();
   const state = await readGateState(brainDir);
-  if (state.sessionsSinceCheck < minSessions) return false;
+  const sessionsSinceCheck = await countSessionMarkers(brainDir);
+  if (sessionsSinceCheck < minSessions) return false;
   if (state.lastCheckedAt === null) return true;
   const last = Date.parse(state.lastCheckedAt);
   if (Number.isNaN(last)) return true; // malformed timestamp ⇒ fail toward doing the check
@@ -304,15 +344,20 @@ export async function isConsolidationDue(
 }
 
 /**
- * Advance the gate after a consolidation attempt: reset the session counter and stamp the check
+ * Advance the gate after a consolidation attempt: prune the session markers and stamp the check
  * time, whether or not the attempt found anything to do (a quiet brain must not re-scan every
- * qualifying session forever — see the module docstring). Best-effort; never throws.
+ * qualifying session forever — see the module docstring). Pruning (rather than leaving markers to
+ * accumulate forever) keeps `index/consolidate-sessions/` bounded to at most one attempt's worth of
+ * sessions. Best-effort; never throws.
  */
 export async function recordConsolidationCheck(brainDir: string, now = Date.now()): Promise<void> {
-  await writeGateState(brainDir, {
-    sessionsSinceCheck: 0,
-    lastCheckedAt: new Date(now).toISOString(),
-  });
+  await writeGateState(brainDir, { lastCheckedAt: new Date(now).toISOString() });
+  try {
+    await fs.rm(gateSessionsDir(brainDir), { recursive: true, force: true });
+  } catch {
+    // Best-effort — see the module-level note: leftover markers cost a few extra sessions before
+    // the gate re-arms, never a canon mutation nobody asked for.
+  }
 }
 
 /** Outcome of one {@link maybeConsolidate} call. */
@@ -337,11 +382,15 @@ export interface PeriodicConsolidateOutcome {
  */
 export async function maybeConsolidate(
   brainDir: string,
-  opts: ConsolidationGateOptions & { threshold?: number } = {},
+  opts: ConsolidationGateOptions & { threshold?: number; sessionId?: string } = {},
 ): Promise<PeriodicConsolidateOutcome> {
   try {
     if (!(await isFeatureEnabled(brainDir, "autoConsolidate"))) return { ran: false };
-    await noteConsolidationSession(brainDir);
+    // `sessionId` identifies the calling session for the marker-file dedup (see
+    // `noteConsolidationSession`) — a random id when the caller has none (e.g. a bare CLI
+    // invocation), which just means "this attempt counts as its own session," matching the old
+    // counter's behavior for that case.
+    await noteConsolidationSession(brainDir, opts.sessionId ?? randomUUID());
     if (!(await isConsolidationDue(brainDir, opts))) return { ran: false };
 
     const autoPromote = await isFeatureEnabled(brainDir, "autoPromote");

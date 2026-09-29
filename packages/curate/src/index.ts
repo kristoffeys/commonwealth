@@ -1319,7 +1319,11 @@ async function cmdConsolidate(dir: string, args: string[]): Promise<void> {
   });
 
   if (values.auto === true) {
-    const outcome = await maybeConsolidate(dir);
+    // `$COMMONWEALTH_SESSION_ID` (set by the plugin hook's `maybeConsolidate` wrapper) identifies the
+    // calling session for the gate's marker-file dedup — absent when invoked directly (e.g. a bare
+    // `commonwealth consolidate --auto`), in which case `maybeConsolidate` falls back to a fresh id.
+    const sessionId = process.env.COMMONWEALTH_SESSION_ID;
+    const outcome = await maybeConsolidate(dir, sessionId ? { sessionId } : {});
     console.log(
       CONSOLIDATE_SUMMARY_PREFIX +
         JSON.stringify({

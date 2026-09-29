@@ -56,20 +56,30 @@ shipped in ADR-0017.
    latency-budgeted (5s hard cap, ADR-0032) and consolidation's cost, even quiet-tick-shortened, has
    no place in that budget.
 
-2. **Gate: time AND session count, tracked in derived per-brain state.** A small file,
-   `index/consolidate-gate.json` (same `index/` area as checkpoints and receipts — derived,
-   disposable, gitignored, never synced), holds `{ sessionsSinceCheck, lastCheckedAt }`. Every
-   qualifying SessionEnd increments `sessionsSinceCheck`; the pass is due only when
-   `sessionsSinceCheck >= 5` **and** (`lastCheckedAt` is absent, or `now - lastCheckedAt >= 24h`).
-   Both defaults match `autoDream`'s numbers; both are options on `maybeConsolidate`, not new config
-   flags — nobody has asked to tune them yet, and a brain-level flag for a rate limit nobody has
-   complained about would be premature.
+2. **Gate: time AND session count, tracked in derived per-brain state.** The time leg lives in a
+   small file, `index/consolidate-gate.json` (same `index/` area as checkpoints and receipts —
+   derived, disposable, gitignored, never synced), holding `{ lastCheckedAt }`. The session-count
+   leg lives as one marker file per session id under `index/consolidate-sessions/` rather than a
+   counter in that same JSON: a shared `sessionsSinceCheck` number needs an unlocked
+   read-modify-write from every SessionEnd/PreCompact worker that calls
+   `noteConsolidationSession`, and concurrent workers race on it (multiple sessions ending together
+   all read the same count and each write back `+1`, so all but one increment is lost — caught in
+   #320 review with 5 concurrent calls landing at `sessionsSinceCheck: 1`). A directory of markers,
+   one atomic create-exclusive write per session id, turns "increment a shared number" into "create
+   a file that didn't exist" — nothing to lose no matter how many sessions end at once — and the
+   count is `readdir().length`. Keying the marker by session id (the hook's `session_id`, else
+   `cwd` — the same `guardSessionKey` fallback the contradiction guard uses) is also what makes
+   PreCompact and SessionEnd firing for the SAME session collide onto one file instead of counting
+   it twice. The pass is due only when the marker count `>= 5` **and** (`lastCheckedAt` is absent,
+   or `now - lastCheckedAt >= 24h`). Both defaults match `autoDream`'s numbers; both are options on
+   `maybeConsolidate`, not new config flags — nobody has asked to tune them yet, and a brain-level
+   flag for a rate limit nobody has complained about would be premature.
 
-   The gate advances (`sessionsSinceCheck` resets to 0, `lastCheckedAt` refreshes) on every
-   **attempt**, whether or not `consolidateCanon` finds anything to do — this mirrors
-   `consolidateCanon`'s OWN quiet-tick checkpoint semantics (`confirmCheckpoint` advances on a
-   no-op tick too, #273): the gate answers "did we check recently enough", not "did we find
-   something", so a quiet brain doesn't re-scan every qualifying session forever.
+   The gate advances (session markers pruned, `lastCheckedAt` refreshes) on every **attempt**,
+   whether or not `consolidateCanon` finds anything to do — this mirrors `consolidateCanon`'s OWN
+   quiet-tick checkpoint semantics (`confirmCheckpoint` advances on a no-op tick too, #273): the
+   gate answers "did we check recently enough", not "did we find something", so a quiet brain
+   doesn't re-scan every qualifying session forever.
 
 3. **Single-writer, reused verbatim.** `maybeConsolidate` calls `consolidateCanon`, which already
    takes the cross-process sync lock and returns `{ skipped: "another writer holds the sync lock" }`
@@ -108,7 +118,12 @@ shipped in ADR-0017.
    read/write failures collapse to "not due" (skip, don't guess), and any `consolidateCanon` failure
    is caught and dropped exactly like every other best-effort step in that worker (`refreshStatus`,
    `recordCapture`). A broken gate file costs one extra/one fewer scheduled run, never a broken
-   session and never a note.
+   session and never a note. The plugin's shell-out wrapper (`packages/plugin/hooks/lib.mjs`)
+   bounds the `consolidate --auto` child at `CONSOLIDATE_TIMEOUT_MS` (120s, matching extraction's
+   own cap) and hard-kills it past that (#320 review) — same fail-open collapse to `{ ran: false }`.
+   A killed child never wedges the sync lock shut for the next writer: `consolidateCanon` only holds
+   `acquireSyncLock` for its own `try`/`finally`, and that lock's stale-owner reclaim
+   (`packages/core/src/lock.ts`) frees a dead-owner lock on the next acquire attempt regardless.
 
 ## Consequences
 

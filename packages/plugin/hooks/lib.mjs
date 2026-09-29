@@ -23,9 +23,11 @@
 //                                                         curation. Fail-open: returns candidates
 //                                                         UNCHANGED on flag-off/no-runtime/error.)
 //   capture(brain, cwd, candidates)    -> { captured, ... }(stage candidates via the review queue)
-//   maybeConsolidate(brain)            -> { ran, pending?, clusters?, superseded?, skipped? }
+//   maybeConsolidate(brain, sessionId?) -> { ran, pending?, clusters?, superseded?, skipped? }
 //                                                           (ADR-0046 periodic gate; `ran: false`
-//                                                           when not due / on any failure)
+//                                                           when not due / on any failure /
+//                                                           timeout. `sessionId` dedups the gate's
+//                                                           marker-file session count.)
 //   refreshStatus(brain, cwd)          -> void             (refresh the statusline cache; #197)
 //   readCaptureMark(key)               -> number | null    (last prompt-capture ts for a session)
 //   writeCaptureMark(key, ts)          -> void             (record a prompt-capture ts; #194)
@@ -48,6 +50,14 @@ import {
  * latency — but never let a hung/wedged child block SessionEnd forever; kill it past this.
  */
 const EXTRACTION_TIMEOUT_MS = 120_000;
+
+/**
+ * Hard cap on the periodic `consolidate --auto` child (ADR-0046, #319). Runs in the already-detached
+ * SessionEnd worker like extraction, so it can afford the same budget — but a wedged consolidation
+ * child (e.g. a stuck git op inside `consolidateCanon`'s sync lock) must not hang the worker forever;
+ * kill it past this and fail open (`{ ran: false }`, see `maybeConsolidate` below).
+ */
+const CONSOLIDATE_TIMEOUT_MS = 120_000;
 
 /**
  * Hard cap on the per-turn `context --query` child (#194). UserPromptSubmit runs synchronously on
@@ -530,7 +540,12 @@ export async function sessionEnd(input, deps) {
   // the capture receipt above; absent dep (older wiring / unit tests) skips entirely.
   if (typeof deps.maybeConsolidate === "function") {
     try {
-      const consolidation = await deps.maybeConsolidate(brain);
+      // Same session key as the contradiction guard (`guardSessionKey`): the session id when
+      // present, else cwd. Passed through so the periodic gate's marker-file dedup (#320 review
+      // fix) collides PreCompact + SessionEnd for the SAME session onto one marker instead of
+      // counting the session twice — see `noteConsolidationSession` in
+      // `packages/curate/src/consolidate.ts`.
+      const consolidation = await deps.maybeConsolidate(brain, guardSessionKey(input));
       if (consolidation?.ran) result = { ...result, consolidation };
     } catch {
       // Best-effort maintenance pass — never surface a failure here as a session-breaking error.
@@ -1567,13 +1582,27 @@ export function realDeps(overrides = {}) {
    * the time+session gate, the single-writer sync lock, and the `autoPromote` dry-run-vs-apply
    * choice (see `maybeConsolidate` in `packages/curate/src/consolidate.ts`). This wrapper's only
    * job is running that command and parsing its summary line — ANY failure (non-zero exit,
-   * unparseable output) degrades to `{ ran: false }`, matching "the gate simply didn't fire this
-   * session" rather than surfacing an error.
+   * unparseable output, or a `CONSOLIDATE_TIMEOUT_MS` timeout) degrades to `{ ran: false }`,
+   * matching "the gate simply didn't fire this session" rather than surfacing an error. On timeout,
+   * `run`'s child is killed — it never holds the sync lock across the kill, because
+   * `consolidateCanon` only holds `acquireSyncLock` for the lifetime of its own `try`/`finally` and
+   * releases it (or, if the whole process is killed mid-pass, `acquireSyncLock`'s stale-lock reclaim
+   * in `packages/core/src/lock.ts` frees it for the next writer) — so a killed run never wedges
+   * consolidation shut.
+   *
+   * @param {string} brain
+   * @param {string} [sessionId]  This session's dedup key for the gate's marker-file count (see
+   *   `guardSessionKey`); forwarded as `$COMMONWEALTH_SESSION_ID` so PreCompact + SessionEnd for the
+   *   SAME session count once, not twice.
    */
-  async function maybeConsolidate(brain) {
+  async function maybeConsolidate(brain, sessionId) {
     try {
       const res = await runCurate(["consolidate", "--auto"], {
-        env: { COMMONWEALTH_BRAIN_DIR: brain },
+        env: {
+          COMMONWEALTH_BRAIN_DIR: brain,
+          ...(sessionId ? { COMMONWEALTH_SESSION_ID: sessionId } : {}),
+        },
+        timeoutMs: overrides.consolidateTimeoutMs ?? CONSOLIDATE_TIMEOUT_MS,
       });
       if (res.code !== 0) return { ran: false };
       const summary = parseConsolidationSummary(res.stdout);
