@@ -32,6 +32,10 @@ describe("defaultBrainConfig", () => {
     expect(defaultBrainConfig("x").features.llmCurator).toBe(true);
   });
 
+  it("defaults autoConsolidate on (supersede-not-delete + lock-gated makes it safe; ADR-0046)", () => {
+    expect(defaultBrainConfig("x").features.autoConsolidate).toBe(true);
+  });
+
   it("defaults contradictionGuard OFF (opt-in; changes tool hot-path behavior; ADR-0033)", () => {
     expect(defaultBrainConfig("x").features.contradictionGuard).toBe(false);
   });
