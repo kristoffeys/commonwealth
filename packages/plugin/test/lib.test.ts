@@ -207,6 +207,10 @@ describe("sessionEnd", () => {
     expect(deps.extractCandidates).toHaveBeenCalledWith({
       transcriptPath: "/tmp/t.jsonl",
       cwd: "/work/acme/app",
+      // #318: today's date, so the extractor can resolve relative dates to absolute ones.
+      sessionDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      // #317: no `getExistingNotes` dep supplied → the lookup is skipped, exactly like before.
+      existingNotes: [],
     });
     expect(deps.capture).toHaveBeenCalledWith("/brains/acme", "/work/acme/app", [
       { kind: "memory", title: "T", body: "B" },

@@ -15,7 +15,11 @@
 //                                                            resolveBrainDir + isInScope.)
 //   getContext(brain, cwd)             -> string           (session-wide markdown; "" for none)
 //   getContextQuery(brain, cwd, query) -> string           (prompt-scoped markdown; "" for no match)
-//   extractCandidates({ transcriptPath, cwd })
+//   getExistingNotes(brain, cwd)       -> Array<{ id, title, kind }>  (#317: compact, bounded nearest
+//                                                            notes for the extraction prompt.
+//                                                            Fail-open: [] on any lookup/timeout
+//                                                            error. Absent dep skips the lookup.)
+//   extractCandidates({ transcriptPath, cwd, sessionDate, existingNotes })
 //                                      -> { ok: true, candidates: NewNoteInput[] }
 //                                       | { ok: false, host, error, ... }
 //   classifyCandidates(brain, cwd, candidates)
@@ -451,9 +455,18 @@ export async function sessionEnd(input, deps) {
     return await finishEnd(deps, cwd, { skipped: true, reason: "self-capture" }, boundary, brain);
   }
 
+  // Existing-notes hint (#317): a compact, bounded list of the brain notes most relevant to this
+  // session, so the extractor doesn't mint candidates for facts already recorded. Fail-open by
+  // construction — `getExistingNotes` swallows its own lookup/timeout failures and returns []; an
+  // absent dep (older wiring / unit tests) skips the lookup entirely, so extraction runs exactly as
+  // before either way.
+  const existingNotes =
+    typeof deps.getExistingNotes === "function" ? await deps.getExistingNotes(brain, cwd) : [];
   const extracted = await deps.extractCandidates({
     transcriptPath: input.transcript_path,
     cwd,
+    sessionDate: new Date().toISOString().slice(0, 10),
+    existingNotes,
   });
   // Extraction failures are operational failures, not a legitimate zero-candidate result. Stop
   // before curate so a missing/auth-failed/timed-out host CLI can never be reported as "nothing
@@ -1460,6 +1473,29 @@ export function realDeps(overrides = {}) {
     return res.stdout.trimEnd();
   }
 
+  /**
+   * Compact "existing notes" hint for the extraction prompt (#317): reuses the same lexical search
+   * `context --query` already runs for prompt-scoped injection (#194), just with the `--json` shape
+   * and a wider cap, keyed off the project's directory name (cheap relevance — no transcript read
+   * needed, so this never touches the transcript/cursor logic another change is landing in
+   * parallel). Fail-open by construction: ANY non-zero exit, timeout, or unparseable stdout returns
+   * `[]`, which is byte-identical to "no notes were relevant" — extraction proceeds unchanged.
+   */
+  async function getExistingNotes(brain, cwd) {
+    const query = path.basename(cwd);
+    try {
+      const res = await runCurate(
+        ["context", "--cwd", cwd, "--query", query, "--limit", "40", "--json"],
+        { env: { COMMONWEALTH_BRAIN_DIR: brain }, timeoutMs: CONTEXT_QUERY_TIMEOUT_MS },
+      );
+      if (res.code !== 0) return [];
+      const parsed = JSON.parse(res.stdout.trim() || "[]");
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
   async function capture(brain, cwd, candidates) {
     // Pipe candidates on plain stdin: curate's `capture` reads stdin when `--from` is
     // absent. (`--from -` would be treated as a literal file path and fail.)
@@ -1805,6 +1841,7 @@ export function realDeps(overrides = {}) {
     resolveBrain: realResolveBrain,
     getContext,
     getContextQuery,
+    getExistingNotes,
     capture,
     classifyCandidates,
     refreshStatus,
