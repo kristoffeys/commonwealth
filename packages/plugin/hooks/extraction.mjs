@@ -341,7 +341,11 @@ export function selectIncrementalRange(host, raw, cursor) {
   const uuid = cursor && typeof cursor.uuid === "string" ? cursor.uuid : null;
   const idx = uuid ? all.findIndex((line) => claudeLineUuid(line) === uuid) : -1;
   const cursorFound = idx !== -1;
-  const offset = cursorFound ? idx + 1 : 0;
+  // The uuid anchors identity; `line` says how far past it we actually got. A partial run can stop
+  // on uuid-less records (isMeta etc.) after the anchor, so resume at `line`, not the anchor + 1,
+  // or those records are re-sent to the model.
+  const line = cursor && typeof cursor.line === "number" ? cursor.line : -1;
+  const offset = !cursorFound ? 0 : line > idx && line <= all.length ? line : idx + 1;
   return {
     lines: cursorFound ? all.slice(offset) : all,
     cursorFound,

@@ -664,6 +664,13 @@ describe("selectIncrementalRange (#315 — incremental extraction cursor)", () =
     expect(nextCursor).toEqual({ uuid: "c", line: 3 });
   });
 
+  it("Claude: resumes at the stored line when a partial run stopped on uuid-less records past the anchor", () => {
+    const meta = JSON.stringify({ type: "system", isMeta: true, content: "no uuid here" });
+    const raw = [claudeLine("a"), meta, meta, claudeLine("d")].join("\n");
+    const { lines } = selectIncrementalRange("claude", raw, { uuid: "a", line: 3 });
+    expect(lines).toEqual([claudeLine("d")]);
+  });
+
   it("Claude: falls back to the FULL transcript when the stored uuid is no longer found (rewind/fork)", () => {
     const raw = [claudeLine("x"), claudeLine("y")].join("\n");
     const { lines, cursorFound, nextCursor } = selectIncrementalRange("claude", raw, {
