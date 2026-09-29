@@ -1520,6 +1520,17 @@ export function realDeps(overrides = {}) {
   // file) just to keep the tail; a streaming tail-read would avoid the full buffer for huge
   // sessions if this ever shows up in profiling.
   const TRANSCRIPT_QUERY_TAIL_CHARS = 65_536;
+  // Terms are OR-matched, so one common word pulls in every note; drop the filler.
+  // ponytail: tiny fixed English list; swap for BM25-weighted terms if precision still suffers.
+  const QUERY_STOPWORDS = new Set(
+    (
+      "the and for are but not you your yours this that these those with from have has had was " +
+      "were will would can could should what when where which who why how all any some just " +
+      "into onto out our ours its it's they them their then than there here also very too " +
+      "about again only over under more most much such each other same been being does did " +
+      "doing let lets please now use using make want need like get got see yes okay"
+    ).split(" "),
+  );
 
   /**
    * Pull a handful of extra query terms (#317) from the transcript's most recent user messages,
@@ -1544,25 +1555,34 @@ export function realDeps(overrides = {}) {
         } catch {
           continue; // a truncated leading line from the tail cut, or genuinely malformed — skip
         }
-        const message = record?.message ?? record;
+        if (record?.isMeta === true) continue; // hook/system-injected turn, not the user's words
+        // Claude: `{ message: { role, content } }`; Codex: `{ type: "response_item", payload }`.
+        const message =
+          record?.type === "response_item" ? record.payload : (record?.message ?? record);
         if (message?.role !== "user") continue;
         const content = message.content;
         if (typeof content === "string") {
           messages.push(content);
         } else if (Array.isArray(content)) {
           for (const block of content) {
-            if (block && block.type === "text" && typeof block.text === "string") {
+            if (
+              block &&
+              (block.type === "text" || block.type === "input_text") &&
+              typeof block.text === "string"
+            ) {
               messages.push(block.text);
             }
           }
         }
       }
-      return messages
+      const words = messages
         .slice(-MAX_TRANSCRIPT_QUERY_MESSAGES)
         .join(" ")
-        .split(/[^a-zA-Z0-9]+/)
-        .filter((w) => w.length >= MIN_TRANSCRIPT_QUERY_WORD_LENGTH)
-        .slice(0, MAX_TRANSCRIPT_QUERY_WORDS);
+        .replace(/<(system-reminder|command-[a-z]+)>[\s\S]*?<\/\1>/g, " ")
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length >= MIN_TRANSCRIPT_QUERY_WORD_LENGTH && !QUERY_STOPWORDS.has(w));
+      return [...new Set(words)].slice(0, MAX_TRANSCRIPT_QUERY_WORDS);
     } catch {
       return [];
     }

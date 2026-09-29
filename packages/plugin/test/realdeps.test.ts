@@ -702,6 +702,47 @@ describe("realDeps().getExistingNotes (real curate binary, #317)", () => {
     const garbageDeps = realDeps({ curateEntry: garbageEntry });
     await expect(garbageDeps.getExistingNotes(brain, project)).resolves.toEqual([]);
   });
+
+  it("queries with the user's own words only — no isMeta turns, no stopwords, Codex too (#321)", async () => {
+    const brain = path.join(tmp, "argv-brain");
+    await initBrain(brain);
+    const argvFile = path.join(tmp, "argv.json");
+    const spyEntry = path.join(tmp, "spy-curate.mjs");
+    await fs.writeFile(
+      spyEntry,
+      `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv));\nprocess.stdout.write("[]");\n`,
+    );
+    const deps = realDeps({ curateEntry: spyEntry });
+    const project = path.join(tmp, "proj");
+    await fs.mkdir(project, { recursive: true });
+    const queryFor = async (lines) => {
+      const transcript = path.join(tmp, "t.jsonl");
+      await fs.writeFile(transcript, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+      await deps.getExistingNotes(brain, project, transcript);
+      const argv = JSON.parse(await fs.readFile(argvFile, "utf8"));
+      return argv[argv.indexOf("--query") + 1];
+    };
+
+    const claudeQuery = await queryFor([
+      { type: "user", isMeta: true, message: { role: "user", content: "metaleakword" } },
+      { type: "user", message: { role: "user", content: "the migration for this ledger" } },
+    ]);
+    expect(claudeQuery).toContain("migration");
+    expect(claudeQuery).toContain("ledger");
+    expect(claudeQuery).not.toMatch(/metaleakword|\bthe\b|\bfor\b|\bthis\b/);
+
+    const codexQuery = await queryFor([
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "rotate webhook secrets" }],
+        },
+      },
+    ]);
+    expect(codexQuery).toContain("webhook");
+  });
 });
 
 describe("SessionEnd detached capture worker (#190 — survives `/clear` teardown)", () => {

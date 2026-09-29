@@ -628,4 +628,18 @@ describe("host-neutral transcript extraction", () => {
     const bulletCount = (prompt.match(/^- /gm) ?? []).length;
     expect(bulletCount).toBe(1);
   });
+
+  it("folds Unicode line terminators (NEL, LS, PS) too, not just ASCII newlines", async () => {
+    await fs.writeFile(transcriptPath, "{}\n");
+    const run = vi.fn(async () => ({ code: 0, stdout: "[]", stderr: "" }));
+    const extractor = createExtractor({ host: "claude", run, claudeJsonSchema: false });
+    await extractor.extract({
+      transcriptPath,
+      cwd: tmp,
+      existingNotes: [{ id: "mem-1", title: "a\u0085b\u2028c\u2029d", kind: "memory" }],
+    });
+    const prompt = run.mock.calls[0][1][5] as string;
+    expect(prompt).not.toMatch(/[\u0085\u2028\u2029]/);
+    expect(prompt).toContain("a b c d");
+  });
 });

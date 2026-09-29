@@ -88,7 +88,7 @@ function inlineText(value) {
   return (
     value
       // eslint-disable-next-line no-control-regex -- intentional: fold C0 controls (incl. \r \n \t)
-      .replace(/[\u0000-\u001f\u007f]+/g, " ")
+      .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ")
       .replace(/[[\]<>`]/g, "") // strip chars that could form a link/code-span/tag
       .replace(/\s+/g, " ")
       .trim()
