@@ -667,9 +667,11 @@ describe("realDeps().capture (real curate binary over stdin)", () => {
   it("extracts from a multi-MB transcript without E2BIG — transcript goes on stdin, not argv (#84)", async () => {
     // A transcript larger than ARG_MAX (~1MB): if it were passed as a `claude -p` argv element
     // the spawn throws E2BIG and extraction silently returns []. Piping it on stdin must work.
+    // Sized to stay under the 2MB per-chunk cap (#315) so this proves stdin delivery in ONE host
+    // call — the chunking behavior itself has its own dedicated tests in extraction.test.ts.
     const transcriptPath = path.join(tmp, "transcript.jsonl");
     const bigLine = JSON.stringify({ role: "user", content: "x".repeat(2000) }) + "\n";
-    await fs.writeFile(transcriptPath, bigLine.repeat(1600)); // ~3.3 MB, > ARG_MAX
+    await fs.writeFile(transcriptPath, bigLine.repeat(700)); // ~1.4 MB: > ARG_MAX, < the 2MB cap
 
     // Stub `claude`: read stdin, and only emit a candidate if the transcript actually arrived
     // there (proving stdin delivery). If argv were used, the spawn would have E2BIG'd instead.

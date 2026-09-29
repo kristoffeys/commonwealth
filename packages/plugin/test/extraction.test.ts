@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  codexPrefixHash,
   compactClaudeTranscript,
   compactCodexTranscript,
   createExtractor,
@@ -412,10 +413,14 @@ describe("host-neutral transcript extraction", () => {
       timeoutMs: 321,
     });
 
+    const codexLine = JSON.stringify({
+      type: "response_item",
+      payload: { type: "message", role: "user", content: "hello there codex" },
+    });
     await expect(extractor.extract({ transcriptPath, cwd: projectCwd })).resolves.toEqual({
       ok: true,
       candidates: [],
-      cursor: { uuid: null, line: 1 },
+      cursor: { uuid: null, line: 1, hash: codexPrefixHash([codexLine]) },
     });
     await expect(fs.stat(isolatedCwd)).rejects.toMatchObject({ code: "ENOENT" });
     expect(run).toHaveBeenCalledOnce();
@@ -552,6 +557,42 @@ describe("host-neutral transcript extraction", () => {
     expect(input).not.toContain("old");
   });
 
+  it("a range bigger than the cap is chunked head-first — every chunk reaches the model, and the cursor only covers what was actually sent (#315 data loss)", async () => {
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({
+          uuid: "u0",
+          type: "user",
+          message: { role: "user", content: "FIRST-OLD-FACT should be captured" },
+        }),
+        JSON.stringify({
+          uuid: "u1",
+          type: "user",
+          message: { role: "user", content: "x".repeat(3_000_000) },
+        }),
+        JSON.stringify({
+          uuid: "u2",
+          type: "user",
+          message: { role: "user", content: "LAST-NEW-FACT should be captured too" },
+        }),
+      ].join("\n"),
+    );
+    const run = vi.fn(async () => ({ code: 0, stdout: "[]", stderr: "" }));
+    const extractor = createExtractor({ host: "claude", run, claudeJsonSchema: false });
+    const result = await extractor.extract({ transcriptPath, cwd: tmp });
+
+    // The old bug: `nextCursor` was computed from the FULL range before the tailCap truncated it,
+    // so it silently advanced past the truncated-away head even though the model never saw it.
+    const inputs = run.mock.calls.map((call) => call[2].input as string);
+    for (const input of inputs) expect(Buffer.byteLength(input)).toBeLessThanOrEqual(2_000_000);
+    expect(inputs.some((input) => input.includes("FIRST-OLD-FACT"))).toBe(true);
+    expect(inputs.some((input) => input.includes("LAST-NEW-FACT"))).toBe(true);
+    // Every chunk was actually sent (3 chunks, under MAX_CHUNKS_PER_RUN), so the cursor legitimately
+    // covers the whole range.
+    expect(result).toMatchObject({ ok: true, cursor: { uuid: "u2", line: 3 } });
+  });
+
   it("extract() only sends the range AFTER the cursor to the host model (#315)", async () => {
     await fs.writeFile(
       transcriptPath,
@@ -636,10 +677,17 @@ describe("selectIncrementalRange (#315 — incremental extraction cursor)", () =
 
   it("Codex: slices by non-blank LINE COUNT (no stable per-line identity)", () => {
     const raw = [codexLine("one"), codexLine("two"), codexLine("three")].join("\n");
-    const { lines, cursorFound, nextCursor } = selectIncrementalRange("codex", raw, { line: 2 });
+    const { lines, cursorFound, nextCursor } = selectIncrementalRange("codex", raw, {
+      line: 2,
+      hash: codexPrefixHash([codexLine("one"), codexLine("two")]),
+    });
     expect(lines).toEqual([codexLine("three")]);
     expect(cursorFound).toBe(true);
-    expect(nextCursor).toEqual({ uuid: null, line: 3 });
+    expect(nextCursor).toEqual({
+      uuid: null,
+      line: 3,
+      hash: codexPrefixHash([codexLine("one"), codexLine("two"), codexLine("three")]),
+    });
   });
 
   it("Codex: falls back to the full transcript when the stored line count exceeds the current transcript", () => {
@@ -647,7 +695,37 @@ describe("selectIncrementalRange (#315 — incremental extraction cursor)", () =
     const { lines, cursorFound, nextCursor } = selectIncrementalRange("codex", raw, { line: 5 });
     expect(lines).toHaveLength(1);
     expect(cursorFound).toBe(false);
-    expect(nextCursor).toEqual({ uuid: null, line: 1 });
+    expect(nextCursor).toEqual({ uuid: null, line: 1, hash: codexPrefixHash([codexLine("one")]) });
+  });
+
+  it("Codex: falls back to the full transcript when the stored hash doesn't match this transcript's own prefix (#collision — unrelated/rotated transcript)", () => {
+    // An unrelated codex session/transcript reuses the same cursor key (e.g. missing session_id
+    // falling back to a shared cwd) and happens to have at least as many non-blank lines as the
+    // stored cursor — a bare line count alone can't tell these apart, so it must fall back to a
+    // full extraction rather than silently skip this transcript's own first lines.
+    const raw = [
+      codexLine("unrelated-one"),
+      codexLine("unrelated-two"),
+      codexLine("unrelated-three"),
+    ].join("\n");
+    const { lines, cursorFound, nextCursor } = selectIncrementalRange("codex", raw, {
+      line: 2,
+      hash: codexPrefixHash([
+        codexLine("totally-different-one"),
+        codexLine("totally-different-two"),
+      ]),
+    });
+    expect(lines).toHaveLength(3);
+    expect(cursorFound).toBe(false);
+    expect(nextCursor).toEqual({
+      uuid: null,
+      line: 3,
+      hash: codexPrefixHash([
+        codexLine("unrelated-one"),
+        codexLine("unrelated-two"),
+        codexLine("unrelated-three"),
+      ]),
+    });
   });
 });
 

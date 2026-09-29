@@ -453,7 +453,11 @@ export async function sessionEnd(input, deps) {
 
   // Incremental extraction cursor (#315): read the last-processed position for this session (else
   // full transcript) so a session that PreCompacts then ends never re-extracts the same messages.
-  const cursorKey = guardSessionKey(input);
+  // Host-prefixed (matching `codexCaptureMarkKey`'s convention): `guardSessionKey` alone is
+  // session_id-or-cwd, and Claude/Codex can share both when session_id is absent — without the
+  // prefix, one host's cursor would silently gate the other's transcript, skipping content the
+  // other host never actually processed.
+  const cursorKey = `${captureWorkerHost(input)}:${guardSessionKey(input)}`;
   const storedCursor =
     typeof deps.readCursor === "function" ? await deps.readCursor(cursorKey) : null;
   const extracted = await deps.extractCandidates({

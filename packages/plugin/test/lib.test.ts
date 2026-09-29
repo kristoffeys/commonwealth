@@ -633,7 +633,9 @@ describe("sessionEnd incremental cursor (#315) and pre-model skip gates (#316)",
   it("reads the stored cursor and threads it into extractCandidates", async () => {
     const deps = makeDeps({ readCursor: vi.fn(async () => ({ uuid: "u1", line: 3 })) });
     await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" }, deps);
-    expect(deps.readCursor).toHaveBeenCalledWith("/work/acme/app");
+    // Host-prefixed (#collision fix): a legacy hook payload with no `commonwealth_host` defaults to
+    // "claude", matching `captureWorkerHost`'s own default.
+    expect(deps.readCursor).toHaveBeenCalledWith("claude:/work/acme/app");
     expect(deps.extractCandidates).toHaveBeenCalledWith({
       transcriptPath: "/tmp/t.jsonl",
       cwd: "/work/acme/app",
@@ -648,7 +650,23 @@ describe("sessionEnd incremental cursor (#315) and pre-model skip gates (#316)",
       { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl", session_id: "sess-9" },
       deps,
     );
-    expect(readCursor).toHaveBeenCalledWith("sess-9");
+    expect(readCursor).toHaveBeenCalledWith("claude:sess-9");
+  });
+
+  it("prefixes the cursor key with the host so Claude and Codex sharing a cwd (no session_id) never collide (#collision fix)", async () => {
+    const readCursor = vi.fn(async () => null);
+    const deps = makeDeps({ readCursor });
+    await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/claude.jsonl" }, deps);
+    await sessionEnd(
+      {
+        cwd: "/work/acme/app",
+        transcript_path: "/tmp/codex.jsonl",
+        commonwealth_host: "codex",
+      },
+      deps,
+    );
+    expect(readCursor).toHaveBeenNthCalledWith(1, "claude:/work/acme/app");
+    expect(readCursor).toHaveBeenNthCalledWith(2, "codex:/work/acme/app");
   });
 
   it("advances the cursor after a successful capture", async () => {
@@ -662,7 +680,7 @@ describe("sessionEnd incremental cursor (#315) and pre-model skip gates (#316)",
       writeCursor,
     });
     await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" }, deps);
-    expect(writeCursor).toHaveBeenCalledWith("/work/acme/app", { uuid: "u2", line: 4 });
+    expect(writeCursor).toHaveBeenCalledWith("claude:/work/acme/app", { uuid: "u2", line: 4 });
   });
 
   it("does NOT advance the cursor when the curate runtime fails (failure must not skip content)", async () => {
@@ -732,7 +750,7 @@ describe("sessionEnd incremental cursor (#315) and pre-model skip gates (#316)",
     );
     expect(result).toEqual({ skipped: true, reason: "no-user-prose" });
     expect(deps.capture).not.toHaveBeenCalled();
-    expect(writeCursor).toHaveBeenCalledWith("/work/acme/app", { uuid: "u3", line: 5 });
+    expect(writeCursor).toHaveBeenCalledWith("claude:/work/acme/app", { uuid: "u3", line: 5 });
     expect(recordCapture).toHaveBeenCalledOnce();
     const { result: logged } = recordCapture.mock.calls[0][0] as {
       result: Record<string, unknown>;
@@ -758,7 +776,7 @@ describe("sessionEnd incremental cursor (#315) and pre-model skip gates (#316)",
       deps,
     );
     expect(result).toEqual({ skipped: true, reason: "already-remembered" });
-    expect(writeCursor).toHaveBeenCalledWith("/work/acme/app", { uuid: "u4", line: 6 });
+    expect(writeCursor).toHaveBeenCalledWith("claude:/work/acme/app", { uuid: "u4", line: 6 });
   });
 });
 
