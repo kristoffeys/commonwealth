@@ -261,6 +261,193 @@ export function parseExtractionOutput(stdout, { strict = false } = {}) {
   return normalized;
 }
 
+/** Parse one JSONL line, or `null` on any parse failure. */
+function parseLine(line) {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+}
+
+/** Non-blank lines only — blank lines carry no cursor/gate information for either host. */
+function nonEmptyLines(raw) {
+  return typeof raw === "string" ? raw.split("\n").filter((line) => line.trim().length > 0) : [];
+}
+
+/** A Claude Code rollout line's message `uuid`, or `null`. */
+function claudeLineUuid(line) {
+  const record = parseLine(line);
+  return typeof record?.uuid === "string" ? record.uuid : null;
+}
+
+/** The last (most recent) message `uuid` in `lines`, scanning from the tail. */
+function lastClaudeUuid(lines) {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const uuid = claudeLineUuid(lines[i]);
+    if (uuid) return uuid;
+  }
+  return null;
+}
+
+/**
+ * Select the transcript lines after a persisted cursor (#315), and the cursor to persist once this
+ * range is fully handled. Claude's cursor is the last processed message `uuid` — Claude Code's own
+ * extractor convention — because Codex explicitly does not treat its rollout schema as a stable
+ * per-line identity; Codex's cursor is instead a non-blank LINE COUNT. Both also carry `line` (the
+ * current total non-blank line count), which is the host-neutral, always-monotonic value the
+ * caller persists and compares — a rewound/forked transcript (the stored uuid is no longer found,
+ * or the stored line count exceeds the current transcript) falls back to the FULL transcript rather
+ * than silently skipping content that was never actually processed.
+ *
+ * `cursor` is the previously persisted `{ uuid, line }` (or `null`/anything else for "no cursor
+ * yet" — the very first extraction for this session).
+ *
+ * @returns {{ lines: string[], cursorFound: boolean, nextCursor: { uuid: string | null, line: number } }}
+ */
+export function selectIncrementalRange(host, raw, cursor) {
+  const all = nonEmptyLines(raw);
+
+  if (host === "codex") {
+    const line = cursor && typeof cursor.line === "number" ? cursor.line : null;
+    const cursorFound = line !== null && line >= 0 && line <= all.length;
+    return {
+      lines: cursorFound ? all.slice(line) : all,
+      cursorFound,
+      nextCursor: { uuid: null, line: all.length },
+    };
+  }
+
+  const uuid = cursor && typeof cursor.uuid === "string" ? cursor.uuid : null;
+  const idx = uuid ? all.findIndex((line) => claudeLineUuid(line) === uuid) : -1;
+  const cursorFound = idx !== -1;
+  return {
+    lines: cursorFound ? all.slice(idx + 1) : all,
+    cursorFound,
+    nextCursor: { uuid: lastClaudeUuid(all), line: all.length },
+  };
+}
+
+/** Strip hook-injected `<system-reminder>` blocks Claude Code splices into real user turns (#316):
+ * these are never user-authored prose, however they land inside an otherwise ordinary user message. */
+function stripSystemReminders(text) {
+  return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, " ");
+}
+
+function wordCount(text) {
+  return text.trim().length === 0 ? 0 : text.trim().split(/\s+/).length;
+}
+
+/** Total user-authored prose word count in `records` — never tool_result blocks or meta/hook
+ * messages, per gate (a) of #316. */
+function userProseWordCount(host, records) {
+  let text = "";
+  for (const record of records) {
+    if (host === "codex") {
+      if (record?.type !== "response_item" || !record.payload) continue;
+      const item = record.payload;
+      if (item.type === "message" && item.role === "user")
+        text += " " + textFromContent(item.content);
+      continue;
+    }
+    // Claude: `isMeta` records (compact-boundary markers, injected command output, etc.) are never
+    // authored by the human.
+    if (record?.isMeta === true) continue;
+    const message = record?.message ?? record;
+    if ((message?.role ?? record?.type) !== "user") continue;
+    const content = message?.content;
+    if (typeof content === "string") {
+      text += " " + content;
+      continue;
+    }
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      // Only real prose blocks — a tool_result returned to the model as a "user" turn is excluded.
+      if (block?.type === "text" && typeof block.text === "string") text += " " + block.text;
+    }
+  }
+  return wordCount(stripSystemReminders(text));
+}
+
+/** True when `name` is a Commonwealth MCP tool (`…__remember` / `…__decide`, any server prefix). */
+function isRememberOrDecideTool(name) {
+  return typeof name === "string" && (name.endsWith("__remember") || name.endsWith("__decide"));
+}
+
+/** True when a tool_result payload reports failure, via either host's error signal. */
+function toolResultFailed(item) {
+  if (item?.is_error === true) return true;
+  const parsed = parseLine(toolResultText(item));
+  return !!(parsed && typeof parsed === "object" && parsed.isError === true);
+}
+
+/** Gate (b) of #316: a successful `remember`/`decide` MCP call already recorded this range's
+ * knowledge, matching each tool_use to its own tool_result by id so an unrelated/failed call never
+ * suppresses a genuinely new extraction. */
+function hasSuccessfulRememberOrDecide(host, records) {
+  const pending = new Set();
+  for (const record of records) {
+    if (host === "codex") {
+      if (record?.type !== "response_item" || !record.payload) continue;
+      const item = record.payload;
+      if (
+        ["function_call", "custom_tool_call", "tool_call", "mcp_tool_call"].includes(item.type) &&
+        isRememberOrDecideTool(item.name ?? item.tool_name) &&
+        typeof item.call_id === "string"
+      ) {
+        pending.add(item.call_id);
+      } else if (
+        ["function_call_output", "custom_tool_call_output", "tool_result"].includes(item.type) &&
+        typeof item.call_id === "string" &&
+        pending.has(item.call_id)
+      ) {
+        if (!toolResultFailed(item)) return true;
+        pending.delete(item.call_id);
+      }
+      continue;
+    }
+    const message = record?.message ?? record;
+    const content = message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (!block || typeof block !== "object") continue;
+      if (
+        block.type === "tool_use" &&
+        isRememberOrDecideTool(block.name) &&
+        typeof block.id === "string"
+      ) {
+        pending.add(block.id);
+      } else if (
+        block.type === "tool_result" &&
+        typeof block.tool_use_id === "string" &&
+        pending.has(block.tool_use_id)
+      ) {
+        if (!toolResultFailed(block)) return true;
+        pending.delete(block.tool_use_id);
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Pre-model skip gates (#316), evaluated on the incremental range (see {@link selectIncrementalRange}
+ * — never the whole transcript): skip when there is no user-authored prose of at least 3 words, or
+ * when the range already recorded its knowledge via a successful Commonwealth `remember`/`decide`
+ * MCP call. Returns the specific skip reason (for the capture log) or `null` to proceed to the host
+ * model. Pure — never touches the network.
+ */
+export function skipReasonForRange(host, lines) {
+  const records = [];
+  for (const line of lines) {
+    const record = parseLine(line);
+    if (record) records.push(record);
+  }
+  if (userProseWordCount(host, records) < 3) return "no-user-prose";
+  if (hasSuccessfulRememberOrDecide(host, records)) return "already-remembered";
+  return null;
+}
+
 function tailCap(payload) {
   const bytes = Buffer.from(payload, "utf8");
   if (bytes.byteLength <= MAX_TRANSCRIPT_BYTES) return payload;
@@ -567,7 +754,7 @@ export function createExtractor({
   const runtime = host === "codex" ? codexBin : claudeBin;
 
   return {
-    async extract({ transcriptPath, cwd } = {}) {
+    async extract({ transcriptPath, cwd, cursor } = {}) {
       if (!["claude", "codex"].includes(host)) {
         return failure("extractor-unavailable", host, runtime, null, `unsupported host: ${host}`);
       }
@@ -588,6 +775,21 @@ export function createExtractor({
         );
       }
 
+      // Incremental range (#315): only the lines after the persisted cursor, falling back to the
+      // full transcript on a missing/rewound/forked cursor. `nextCursor` is always returned on an
+      // `ok` result (skipped or not) so the caller can persist it once this range is fully handled —
+      // never on failure, so a failed run retries the same range rather than silently losing it.
+      const { lines, nextCursor } = selectIncrementalRange(host, raw, cursor);
+
+      // Pre-model skip gates (#316): no user prose / already recorded via `remember`/`decide`. Skips
+      // never call the host model — there is nothing new to learn from this range — but still report
+      // a distinct reason and the cursor to advance.
+      const skipReason = skipReasonForRange(host, lines);
+      if (skipReason)
+        return { ok: true, candidates: [], skipped: true, skipReason, cursor: nextCursor };
+
+      const rangeRaw = lines.join("\n");
+
       // Resolve the Claude structured-output mode (probe once when not forced); Codex is always
       // schema-backed.
       const useSchema =
@@ -597,8 +799,9 @@ export function createExtractor({
             ? claudeJsonSchema
             : await claudeSupportsJsonSchema(run, runtime);
 
-      const compact = host === "codex" ? compactCodexTranscript(raw) : compactClaudeTranscript(raw);
-      const input = tailCap(compact || raw);
+      const compact =
+        host === "codex" ? compactCodexTranscript(rangeRaw) : compactClaudeTranscript(rangeRaw);
+      const input = tailCap(compact || rangeRaw);
       const invoked = await invokeHostModel({
         host,
         run,
@@ -618,7 +821,7 @@ export function createExtractor({
       const strict = host === "codex" || useSchema;
       const candidates = parseExtractionOutput(invoked.stdout, { strict });
       if (candidates === null) return failure("malformed-output", host, runtime, invoked.result);
-      return { ok: true, candidates };
+      return { ok: true, candidates, cursor: nextCursor };
     },
   };
 }
