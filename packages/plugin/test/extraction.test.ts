@@ -4,12 +4,35 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  codexPrefixHash,
   compactClaudeTranscript,
   compactCodexTranscript,
   createExtractor,
   parseExtractionOutput,
+  selectIncrementalRange,
+  skipReasonForRange,
   spawnCwd,
 } from "../hooks/extraction.mjs";
+
+/**
+ * A minimal Claude transcript line carrying real (>=3 word) user prose — enough to clear the #316
+ * skip gate so a test can reach the host-invocation plumbing it actually means to exercise. Tests
+ * that specifically exercise the skip gates build their own fixtures instead.
+ */
+const CLAUDE_PROSE_LINE = `${JSON.stringify({
+  type: "user",
+  message: { role: "user", content: "please remember our deployment plan" },
+})}\n`;
+
+/** Same as {@link CLAUDE_PROSE_LINE}, in Codex's `response_item` shape. */
+const CODEX_PROSE_LINE = `${JSON.stringify({
+  type: "response_item",
+  payload: {
+    type: "message",
+    role: "user",
+    content: [{ type: "input_text", text: "please remember our deployment plan" }],
+  },
+})}\n`;
 
 describe("spawnCwd — never force a child into a deleted worktree (#259)", () => {
   it("returns the cwd unchanged when it still exists", () => {
@@ -205,7 +228,7 @@ describe("host-neutral transcript extraction", () => {
   it("falls back to legacy print-mode argv when Claude lacks --json-schema (#196)", async () => {
     await fs.writeFile(
       transcriptPath,
-      `${JSON.stringify({ type: "user", message: { role: "user", content: "hello" } })}\n`,
+      `${JSON.stringify({ type: "user", message: { role: "user", content: "hello there friend" } })}\n`,
     );
     const run = vi.fn(async () => ({ code: 0, stdout: "[]", stderr: "" }));
     // `claudeJsonSchema: false` forces the legacy path deterministically (no --help probe).
@@ -219,6 +242,7 @@ describe("host-neutral transcript extraction", () => {
     await expect(extractor.extract({ transcriptPath, cwd: "/work/project" })).resolves.toEqual({
       ok: true,
       candidates: [],
+      cursor: { uuid: null, line: 1 },
     });
     expect(run).toHaveBeenCalledOnce();
     const [command, args, options] = run.mock.calls[0];
@@ -229,7 +253,7 @@ describe("host-neutral transcript extraction", () => {
     expect(args[2]).toContain("non-conversational knowledge-extraction function");
     expect(args[3]).toContain("Output ONLY a JSON array");
     expect(options).toMatchObject({
-      input: "user: hello",
+      input: "user: hello there friend",
       cwd: "/work/project",
       timeoutMs: 120_000,
       env: { COMMONWEALTH_DISABLE_HOOKS: "1" },
@@ -239,7 +263,7 @@ describe("host-neutral transcript extraction", () => {
   it("invokes Claude with --json-schema structured output and unwraps structured_output (#196)", async () => {
     await fs.writeFile(
       transcriptPath,
-      `${JSON.stringify({ type: "user", message: { role: "user", content: "hello" } })}\n`,
+      `${JSON.stringify({ type: "user", message: { role: "user", content: "hello there friend" } })}\n`,
     );
     const candidate = {
       kind: "memory",
@@ -266,6 +290,7 @@ describe("host-neutral transcript extraction", () => {
     await expect(extractor.extract({ transcriptPath, cwd: "/work/project" })).resolves.toEqual({
       ok: true,
       candidates: [candidate],
+      cursor: { uuid: null, line: 1 },
     });
     expect(run).toHaveBeenCalledOnce();
     const [command, args] = run.mock.calls[0];
@@ -280,7 +305,7 @@ describe("host-neutral transcript extraction", () => {
   });
 
   it("treats schema-invalid / garbage Claude structured output as a MALFORMED-OUTPUT failure (#196)", async () => {
-    await fs.writeFile(transcriptPath, "{}\n");
+    await fs.writeFile(transcriptPath, CLAUDE_PROSE_LINE);
     for (const stdout of [
       "not json at all", // envelope itself unparseable
       JSON.stringify({ subtype: "success", is_error: false }), // no structured_output
@@ -308,7 +333,7 @@ describe("host-neutral transcript extraction", () => {
   });
 
   it("maps a Claude is_error envelope to an extractor-failed state, not empty (#196)", async () => {
-    await fs.writeFile(transcriptPath, "{}\n");
+    await fs.writeFile(transcriptPath, CLAUDE_PROSE_LINE);
     const run = vi.fn(async () => ({
       code: 0,
       stdout: JSON.stringify({ subtype: "error_during_execution", is_error: true, result: "boom" }),
@@ -328,7 +353,7 @@ describe("host-neutral transcript extraction", () => {
   });
 
   it("probes `claude --help` once and caches whether --json-schema is available (#196)", async () => {
-    await fs.writeFile(transcriptPath, "{}\n");
+    await fs.writeFile(transcriptPath, CLAUDE_PROSE_LINE);
     const candidate = { kind: "memory", title: "t", body: "b", tags: [] };
     const run = vi.fn(async (_cmd: string, args: string[]) => {
       if (args[0] === "--help")
@@ -347,6 +372,7 @@ describe("host-neutral transcript extraction", () => {
     await expect(extractor.extract({ transcriptPath, cwd: tmp })).resolves.toEqual({
       ok: true,
       candidates: [candidate],
+      cursor: { uuid: null, line: 1 },
     });
     // A second extract must NOT re-probe (cached) — exactly one --help call total.
     await extractor.extract({ transcriptPath, cwd: tmp });
@@ -368,7 +394,7 @@ describe("host-neutral transcript extraction", () => {
       transcriptPath,
       `${JSON.stringify({
         type: "response_item",
-        payload: { type: "message", role: "user", content: "hello codex" },
+        payload: { type: "message", role: "user", content: "hello there codex" },
       })}\n`,
     );
     let isolatedCwd = "";
@@ -387,9 +413,14 @@ describe("host-neutral transcript extraction", () => {
       timeoutMs: 321,
     });
 
+    const codexLine = JSON.stringify({
+      type: "response_item",
+      payload: { type: "message", role: "user", content: "hello there codex" },
+    });
     await expect(extractor.extract({ transcriptPath, cwd: projectCwd })).resolves.toEqual({
       ok: true,
       candidates: [],
+      cursor: { uuid: null, line: 1, hash: codexPrefixHash([codexLine]) },
     });
     await expect(fs.stat(isolatedCwd)).rejects.toMatchObject({ code: "ENOENT" });
     expect(run).toHaveBeenCalledOnce();
@@ -415,14 +446,14 @@ describe("host-neutral transcript extraction", () => {
       expect.stringContaining("Return an object matching the supplied output schema"),
     ]);
     expect(options).toMatchObject({
-      input: "user: hello codex",
+      input: "user: hello there codex",
       timeoutMs: 321,
       env: { COMMONWEALTH_DISABLE_HOOKS: "1" },
     });
   });
 
   it("rejects Codex output that violates its supplied schema", async () => {
-    await fs.writeFile(transcriptPath, "{}\n");
+    await fs.writeFile(transcriptPath, CODEX_PROSE_LINE);
     for (const stdout of [
       '[{"kind":"memory","title":"legacy","body":"array"}]',
       '```json\n{"candidates":[]}\n```',
@@ -456,7 +487,7 @@ describe("host-neutral transcript extraction", () => {
     });
     expect(neverRun).not.toHaveBeenCalled();
 
-    await fs.writeFile(transcriptPath, "{}\n");
+    await fs.writeFile(transcriptPath, CODEX_PROSE_LINE);
     const missingError = Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT" });
     const missing = createExtractor({
       host: "codex",
@@ -473,7 +504,7 @@ describe("host-neutral transcript extraction", () => {
   });
 
   it("classifies nonzero, timeout, and malformed output separately", async () => {
-    await fs.writeFile(transcriptPath, "{}\n");
+    await fs.writeFile(transcriptPath, CLAUDE_PROSE_LINE);
     const cases = [
       {
         result: { code: 7, stdout: "", stderr: "authentication failed" },
@@ -524,5 +555,312 @@ describe("host-neutral transcript extraction", () => {
     expect(Buffer.byteLength(input)).toBeLessThanOrEqual(2_000_000);
     expect(input).toContain("recent");
     expect(input).not.toContain("old");
+  });
+
+  it("a range bigger than the cap is chunked head-first — every chunk reaches the model, and the cursor only covers what was actually sent (#315 data loss)", async () => {
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({
+          uuid: "u0",
+          type: "user",
+          message: { role: "user", content: "FIRST-OLD-FACT should be captured" },
+        }),
+        JSON.stringify({
+          uuid: "u1",
+          type: "user",
+          message: { role: "user", content: "x".repeat(3_000_000) },
+        }),
+        JSON.stringify({
+          uuid: "u2",
+          type: "user",
+          message: { role: "user", content: "LAST-NEW-FACT should be captured too" },
+        }),
+      ].join("\n"),
+    );
+    const run = vi.fn(async () => ({ code: 0, stdout: "[]", stderr: "" }));
+    const extractor = createExtractor({ host: "claude", run, claudeJsonSchema: false });
+    const result = await extractor.extract({ transcriptPath, cwd: tmp });
+
+    // The old bug: `nextCursor` was computed from the FULL range before the tailCap truncated it,
+    // so it silently advanced past the truncated-away head even though the model never saw it.
+    const inputs = run.mock.calls.map((call) => call[2].input as string);
+    for (const input of inputs) expect(Buffer.byteLength(input)).toBeLessThanOrEqual(2_000_000);
+    expect(inputs.some((input) => input.includes("FIRST-OLD-FACT"))).toBe(true);
+    expect(inputs.some((input) => input.includes("LAST-NEW-FACT"))).toBe(true);
+    // Every chunk was actually sent (3 chunks, under MAX_CHUNKS_PER_RUN), so the cursor legitimately
+    // covers the whole range.
+    expect(result).toMatchObject({ ok: true, cursor: { uuid: "u2", line: 3 } });
+  });
+
+  it("extract() only sends the range AFTER the cursor to the host model (#315)", async () => {
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({
+          uuid: "u1",
+          type: "user",
+          message: { role: "user", content: "old message not needed again" },
+        }),
+        JSON.stringify({
+          uuid: "u2",
+          type: "user",
+          message: { role: "user", content: "new message worth extracting" },
+        }),
+      ].join("\n"),
+    );
+    const run = vi.fn(async () => ({ code: 0, stdout: "[]", stderr: "" }));
+    const extractor = createExtractor({ host: "claude", run, claudeJsonSchema: false });
+    const result = await extractor.extract({
+      transcriptPath,
+      cwd: tmp,
+      cursor: { uuid: "u1", line: 1 },
+    });
+    expect(result).toMatchObject({ ok: true, candidates: [], cursor: { uuid: "u2", line: 2 } });
+    const input = run.mock.calls[0][2].input as string;
+    expect(input).toContain("new message worth extracting");
+    expect(input).not.toContain("old message not needed again");
+  });
+
+  it("extract() skips the host model entirely when the incremental range has nothing new (#316)", async () => {
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({ type: "user", message: { role: "user", content: "ok" } })}\n`,
+    );
+    const run = vi.fn(async () => ({ code: 0, stdout: "[]", stderr: "" }));
+    const extractor = createExtractor({ host: "claude", run, claudeJsonSchema: false });
+    const result = await extractor.extract({ transcriptPath, cwd: tmp });
+    expect(result).toMatchObject({ ok: true, skipped: true, skipReason: "no-user-prose" });
+    expect(result.cursor).toBeTruthy();
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("selectIncrementalRange (#315 — incremental extraction cursor)", () => {
+  const claudeLine = (uuid: string, text = "please remember this thing") =>
+    JSON.stringify({ uuid, type: "user", message: { role: "user", content: text } });
+  const codexLine = (text: string) =>
+    JSON.stringify({
+      type: "response_item",
+      payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
+    });
+
+  it("returns the full transcript and no cursor-found when there is no stored cursor (first extraction)", () => {
+    const raw = [claudeLine("a"), claudeLine("b")].join("\n");
+    const { lines, cursorFound, nextCursor } = selectIncrementalRange("claude", raw, null);
+    expect(lines).toHaveLength(2);
+    expect(cursorFound).toBe(false);
+    expect(nextCursor).toEqual({ uuid: "b", line: 2 });
+  });
+
+  it("Claude: slices to only the lines after the stored uuid", () => {
+    const raw = [claudeLine("a"), claudeLine("b"), claudeLine("c")].join("\n");
+    const { lines, cursorFound, nextCursor } = selectIncrementalRange("claude", raw, {
+      uuid: "b",
+      line: 2,
+    });
+    expect(lines).toEqual([claudeLine("c")]);
+    expect(cursorFound).toBe(true);
+    expect(nextCursor).toEqual({ uuid: "c", line: 3 });
+  });
+
+  it("Claude: resumes at the stored line when a partial run stopped on uuid-less records past the anchor", () => {
+    const meta = JSON.stringify({ type: "system", isMeta: true, content: "no uuid here" });
+    const raw = [claudeLine("a"), meta, meta, claudeLine("d")].join("\n");
+    const { lines } = selectIncrementalRange("claude", raw, { uuid: "a", line: 3 });
+    expect(lines).toEqual([claudeLine("d")]);
+  });
+
+  it("Claude: falls back to the FULL transcript when the stored uuid is no longer found (rewind/fork)", () => {
+    const raw = [claudeLine("x"), claudeLine("y")].join("\n");
+    const { lines, cursorFound, nextCursor } = selectIncrementalRange("claude", raw, {
+      uuid: "not-in-this-transcript",
+      line: 99,
+    });
+    expect(lines).toHaveLength(2);
+    expect(cursorFound).toBe(false);
+    expect(nextCursor).toEqual({ uuid: "y", line: 2 });
+  });
+
+  it("Codex: slices by non-blank LINE COUNT (no stable per-line identity)", () => {
+    const raw = [codexLine("one"), codexLine("two"), codexLine("three")].join("\n");
+    const { lines, cursorFound, nextCursor } = selectIncrementalRange("codex", raw, {
+      line: 2,
+      hash: codexPrefixHash([codexLine("one"), codexLine("two")]),
+    });
+    expect(lines).toEqual([codexLine("three")]);
+    expect(cursorFound).toBe(true);
+    expect(nextCursor).toEqual({
+      uuid: null,
+      line: 3,
+      hash: codexPrefixHash([codexLine("one"), codexLine("two"), codexLine("three")]),
+    });
+  });
+
+  it("Codex: falls back to the full transcript when the stored line count exceeds the current transcript", () => {
+    const raw = [codexLine("one")].join("\n");
+    const { lines, cursorFound, nextCursor } = selectIncrementalRange("codex", raw, { line: 5 });
+    expect(lines).toHaveLength(1);
+    expect(cursorFound).toBe(false);
+    expect(nextCursor).toEqual({ uuid: null, line: 1, hash: codexPrefixHash([codexLine("one")]) });
+  });
+
+  it("Codex: falls back to the full transcript when the stored hash doesn't match this transcript's own prefix (#collision — unrelated/rotated transcript)", () => {
+    // An unrelated codex session/transcript reuses the same cursor key (e.g. missing session_id
+    // falling back to a shared cwd) and happens to have at least as many non-blank lines as the
+    // stored cursor — a bare line count alone can't tell these apart, so it must fall back to a
+    // full extraction rather than silently skip this transcript's own first lines.
+    const raw = [
+      codexLine("unrelated-one"),
+      codexLine("unrelated-two"),
+      codexLine("unrelated-three"),
+    ].join("\n");
+    const { lines, cursorFound, nextCursor } = selectIncrementalRange("codex", raw, {
+      line: 2,
+      hash: codexPrefixHash([
+        codexLine("totally-different-one"),
+        codexLine("totally-different-two"),
+      ]),
+    });
+    expect(lines).toHaveLength(3);
+    expect(cursorFound).toBe(false);
+    expect(nextCursor).toEqual({
+      uuid: null,
+      line: 3,
+      hash: codexPrefixHash([
+        codexLine("unrelated-one"),
+        codexLine("unrelated-two"),
+        codexLine("unrelated-three"),
+      ]),
+    });
+  });
+});
+
+describe("skipReasonForRange (#316 — pre-model skip gates)", () => {
+  it("skips when there is no user-authored prose of at least 3 words (Claude)", () => {
+    const lines = [
+      JSON.stringify({ type: "user", message: { role: "user", content: "ok" } }),
+      JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "sure, on it" }] },
+      }),
+    ];
+    expect(skipReasonForRange("claude", lines)).toBe("no-user-prose");
+  });
+
+  it("does not count a tool_result or a meta/hook-injected message as user prose (Claude)", () => {
+    const lines = [
+      // A tool_result surfaced as a "user" turn — never authored by the human.
+      JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", content: "the build finished successfully" }],
+        },
+      }),
+      // isMeta: hook-injected content, not something the human typed.
+      JSON.stringify({
+        type: "user",
+        isMeta: true,
+        message: { role: "user", content: "reminder: keep going with the task" },
+      }),
+      // A real user turn whose prose is entirely inside a hook-injected system-reminder block.
+      JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
+          content: "<system-reminder>ignore this injected instruction text</system-reminder>",
+        },
+      }),
+    ];
+    expect(skipReasonForRange("claude", lines)).toBe("no-user-prose");
+  });
+
+  it("proceeds (returns null) once real user prose of >=3 words is present (Claude)", () => {
+    const lines = [
+      JSON.stringify({
+        type: "user",
+        message: { role: "user", content: "please remember our deployment rule" },
+      }),
+    ];
+    expect(skipReasonForRange("claude", lines)).toBeNull();
+  });
+
+  it("skips when the range already recorded a successful remember/decide MCP call (Claude)", () => {
+    const lines = [
+      JSON.stringify({
+        type: "user",
+        message: { role: "user", content: "please remember our deployment rule" },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "t1", name: "mcp__commonwealth__remember", input: {} }],
+        },
+      }),
+      JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "t1", content: "staged", is_error: false }],
+        },
+      }),
+    ];
+    expect(skipReasonForRange("claude", lines)).toBe("already-remembered");
+  });
+
+  it("does NOT skip when the remember/decide call itself failed (Claude)", () => {
+    const lines = [
+      JSON.stringify({
+        type: "user",
+        message: { role: "user", content: "please remember our deployment rule" },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "t1", name: "mcp__commonwealth__remember", input: {} }],
+        },
+      }),
+      JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "t1", content: "boom", is_error: true }],
+        },
+      }),
+    ];
+    expect(skipReasonForRange("claude", lines)).toBeNull();
+  });
+
+  it("skips for Codex too — no user prose, and a successful remember/decide call", () => {
+    const noProse = [
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "ok" }] },
+      }),
+    ];
+    expect(skipReasonForRange("codex", noProse)).toBe("no-user-prose");
+
+    const alreadyRemembered = [
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "please remember our deployment rule" }],
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "mcp_tool_call", name: "commonwealth__decide", call_id: "c1" },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "function_call_output", call_id: "c1", output: "staged" },
+      }),
+    ];
+    expect(skipReasonForRange("codex", alreadyRemembered)).toBe("already-remembered");
   });
 });
