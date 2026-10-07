@@ -451,9 +451,19 @@ export async function sessionEnd(input, deps) {
     return await finishEnd(deps, cwd, { skipped: true, reason: "self-capture" }, boundary, brain);
   }
 
+  // Incremental extraction cursor (#315): read the last-processed position for this session (else
+  // full transcript) so a session that PreCompacts then ends never re-extracts the same messages.
+  // Host-prefixed (matching `codexCaptureMarkKey`'s convention): `guardSessionKey` alone is
+  // session_id-or-cwd, and Claude/Codex can share both when session_id is absent — without the
+  // prefix, one host's cursor would silently gate the other's transcript, skipping content the
+  // other host never actually processed.
+  const cursorKey = `${captureWorkerHost(input)}:${guardSessionKey(input)}`;
+  const storedCursor =
+    typeof deps.readCursor === "function" ? await deps.readCursor(cursorKey) : null;
   const extracted = await deps.extractCandidates({
     transcriptPath: input.transcript_path,
     cwd,
+    cursor: storedCursor,
   });
   // Extraction failures are operational failures, not a legitimate zero-candidate result. Stop
   // before curate so a missing/auth-failed/timed-out host CLI can never be reported as "nothing
@@ -485,6 +495,25 @@ export async function sessionEnd(input, deps) {
       brain,
     );
   }
+
+  // Pre-model skip gates (#316): the extractor scanned the incremental range and found nothing new
+  // to learn (no user prose / already recorded via `remember`/`decide`) WITHOUT calling the host
+  // model. This is a deliberate skip, not a failure — advance the cursor exactly like a normal
+  // extraction so the same range is never rescanned.
+  if (extracted.skipped === true) {
+    if (typeof deps.writeCursor === "function" && extracted.cursor) {
+      await deps.writeCursor(cursorKey, extracted.cursor);
+    }
+    return await finishEnd(
+      deps,
+      cwd,
+      { skipped: true, reason: extracted.skipReason ?? "skip" },
+      boundary,
+      brain,
+      0,
+    );
+  }
+
   let candidates = extracted.candidates;
   // LLM curation pass (ADR-0030): annotate each candidate with a durability/consolidation verdict
   // BEFORE curate applies it. This is fail-open by construction — `classifyCandidates` returns the
@@ -524,6 +553,13 @@ export async function sessionEnd(input, deps) {
   // (#197). We're in the detached worker here, off the per-turn statusline hot path, so the index
   // work is free to run. Best-effort — the dep swallows its own errors; a hook must never break.
   if (typeof deps.refreshStatus === "function") await deps.refreshStatus(brain, cwd);
+
+  // Advance the cursor (#315) only now that capture has actually run and did NOT fail — a
+  // `curate-runtime` failure must leave the cursor where it was so the failed range is retried
+  // next time, never silently skipped.
+  if (!result.failed && typeof deps.writeCursor === "function" && extracted.cursor) {
+    await deps.writeCursor(cursorKey, extracted.cursor);
+  }
 
   return await finishEnd(deps, cwd, result, boundary, brain, extractedCount);
 }
@@ -1801,6 +1837,57 @@ export function realDeps(overrides = {}) {
     }
   }
 
+  /**
+   * Per-session incremental-extraction cursor path (#315), stored next to the receipt/capture marks
+   * like the rest of this per-user state. One file per session key so PreCompact and SessionEnd
+   * workers for the SAME session share a cursor, while concurrent sessions never contend.
+   */
+  function cursorMarkPath(key) {
+    const safe = String(key || "default")
+      .replace(/[^A-Za-z0-9_.-]/g, "_")
+      .slice(0, 128);
+    return path.join(path.dirname(receiptPath()), `capture-cursor-${safe}.json`);
+  }
+
+  /** Read the persisted `{ uuid, line }` cursor for `key`, or null when never extracted. Never throws. */
+  async function readCursor(key) {
+    try {
+      const parsed = JSON.parse(await fs.readFile(cursorMarkPath(key), "utf8"));
+      return parsed && typeof parsed.line === "number" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Persist the cursor for `key`, atomically (temp file + rename, so a reader or a racing writer
+   * never observes a half-written file) and monotonically (PreCompact and SessionEnd workers for the
+   * same session can overlap, #315 — a slower writer must never rewind a cursor a faster one already
+   * advanced past). ponytail: this read-compare-write narrows that race but is not a true
+   * compare-and-swap; a genuinely concurrent write to the SAME line count is undefined-order, which
+   * only matters if both workers process the exact same range — add a lockfile if that ever bites.
+   * Best-effort; a write failure just means the next capture re-scans from the last saved cursor.
+   */
+  async function writeCursor(key, next) {
+    if (!next || typeof next.line !== "number") return;
+    try {
+      const p = cursorMarkPath(key);
+      await fs.mkdir(path.dirname(p), { recursive: true });
+      let existing = null;
+      try {
+        existing = JSON.parse(await fs.readFile(p, "utf8"));
+      } catch {
+        // No prior cursor — nothing to compare against.
+      }
+      if (existing && typeof existing.line === "number" && existing.line >= next.line) return;
+      const tmp = `${p}.${process.pid}.${Date.now()}.tmp`;
+      await fs.writeFile(tmp, JSON.stringify(next), "utf8");
+      await fs.rename(tmp, p);
+    } catch {
+      // Non-fatal: at worst the next capture re-scans from the last successfully persisted cursor.
+    }
+  }
+
   return {
     resolveBrain: realResolveBrain,
     getContext,
@@ -1814,6 +1901,8 @@ export function realDeps(overrides = {}) {
     takeReceipt,
     readCaptureMark,
     writeCaptureMark,
+    readCursor,
+    writeCursor,
     syncOnce,
     spawnDetachedSync,
     isDaemonRunning: daemonIsRunning,
