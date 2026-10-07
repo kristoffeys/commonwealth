@@ -7,7 +7,7 @@ import {
   regenerateDerived,
   resolveContributorIdentity,
   resolveProjectManifest,
-  resolveProjectSource,
+  captureSource,
   search,
   type AskResult,
   type Frontmatter,
@@ -137,7 +137,7 @@ export async function remember(
 ): Promise<RememberResult> {
   // Attribute the note to the project the MCP is running in (ADR-0015), so it files under
   // <project>/<kind>/ like hook-captured notes. Best-effort: unresolved → unattributed.
-  const source = (await resolveProjectSource(process.cwd())) ?? undefined;
+  const source = (await captureSource(process.cwd())) ?? undefined;
   // Declared engagement identity (ADR-0031): a `.commonwealth/project.json` manifest at/above the
   // MCP process cwd stamps `project` + a `customer:<slug>` tag; absent → identity resolves from the
   // alias map / source-as-singleton at read time.

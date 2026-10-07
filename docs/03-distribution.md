@@ -59,6 +59,10 @@ One global install therefore serves every repo, each session talking to the righ
 brain isn't cloned locally yet and its registry mapping carries a remote, the daemon clones it on
 demand on first use.
 
+A captured note is filed under its `source`: the session's git origin (`owner/repo`), else the
+folder name. A launcher that runs every session from one folder can set `COMMONWEALTH_SOURCE` to
+the repo slug the session is about; it only changes where notes are filed, not which brain is used.
+
 ## Access control = git permissions
 
 There is **no separate ACL layer**. A brain is a git repo; who can read or write it is exactly

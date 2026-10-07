@@ -28,6 +28,20 @@ export async function resolveProjectSource(cwd: string): Promise<string | null> 
 }
 
 /**
+ * The `source` to stamp on a captured note: `$COMMONWEALTH_SOURCE` when the launcher set one, else
+ * {@link resolveProjectSource} of `cwd`. A host that runs every session from one folder (the Relay
+ * app runs Claude Code in the vault, whatever project the conversation is about) knows the real
+ * project and passes its repo slug here; otherwise every note would file under the folder's name.
+ * Only capture stamping reads it; brain routing still resolves from the cwd.
+ */
+export async function captureSource(cwd: string): Promise<string | null> {
+  const declared = process.env.COMMONWEALTH_SOURCE?.trim();
+  // eslint-disable-next-line no-control-regex -- reject C0 controls + DEL, like projectIdError
+  if (declared && !/[\u0000-\u001f\u007f]/.test(declared)) return declared;
+  return resolveProjectSource(cwd);
+}
+
+/**
  * The repo's identity slug (`owner/repo` from its git `origin`) — but ONLY when there is a real
  * git origin; `null` otherwise (no repo, or a repo without an origin). Unlike
  * {@link resolveProjectSource}, this never falls back to a basename, so callers can decide between

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  captureSource,
   manifestStamp,
   resolveProjectManifest,
   resolveProjectSource,
@@ -216,5 +217,28 @@ describe("manifestStamp", () => {
 
   it("omits the tag when no customer is declared", () => {
     expect(manifestStamp({ project: "acme-eng" })).toEqual({ project: "acme-eng" });
+  });
+});
+
+describe("captureSource", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("prefers $COMMONWEALTH_SOURCE over the cwd", async () => {
+    const plain = path.join(root, "vault");
+    await fs.mkdir(plain, { recursive: true });
+    vi.stubEnv("COMMONWEALTH_SOURCE", " acme/widgets ");
+    expect(await captureSource(plain)).toBe("acme/widgets");
+  });
+
+  it("falls back to the cwd when unset, blank, or holding control characters", async () => {
+    const plain = path.join(root, "vault");
+    await fs.mkdir(plain, { recursive: true });
+    expect(await captureSource(plain)).toBe("vault");
+    vi.stubEnv("COMMONWEALTH_SOURCE", "  ");
+    expect(await captureSource(plain)).toBe("vault");
+    vi.stubEnv("COMMONWEALTH_SOURCE", "acme/\nwidgets");
+    expect(await captureSource(plain)).toBe("vault");
   });
 });

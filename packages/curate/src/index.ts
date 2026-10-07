@@ -31,7 +31,7 @@ import {
   resolveBrainDir,
   resolveContributorIdentity,
   resolveProjectManifest,
-  resolveProjectSource,
+  captureSource,
   setFeature,
   unlinkSources,
   buildIndex,
@@ -370,7 +370,7 @@ async function cmdStage(dir: string, args: string[]): Promise<void> {
   // carries its `project` and — once promoted — lands under `<project>/<kind>/` (ADR-0015/0031/0035).
   // Precedence for the stamped project: manifest `project` → alias-map link → undefined.
   const cwd = process.cwd();
-  const source = (await resolveProjectSource(cwd)) ?? undefined;
+  const source = (await captureSource(cwd)) ?? undefined;
   const manifest = await resolveProjectManifest(cwd);
   const stamp = manifest ? manifestStamp(manifest) : null;
   const aliasMap = await loadProjectAliasMap(dir);
@@ -571,7 +571,7 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
 
   // Stamp each candidate with its originating project (ADR-0015) from the session cwd, so the
   // note is filed under `<project>/<kind>/`. An explicit per-candidate source is preserved.
-  const source = (await resolveProjectSource(cwd)) ?? undefined;
+  const source = (await captureSource(cwd)) ?? undefined;
   // Declared engagement IDENTITY (ADR-0031): if a `.commonwealth/project.json` manifest is present
   // at/above the session cwd, stamp its `project` into frontmatter and its `customer` as a
   // `customer:<slug>` tag. Absent → nothing stamped (the alias map or the source-as-singleton
