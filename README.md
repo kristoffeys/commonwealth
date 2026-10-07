@@ -308,6 +308,15 @@ re-processes the same window rather than skipping it, and it lives in the dispos
 directory — deleting it just costs one full pass. `--force` runs the full pass regardless, and
 `--dry-run` always does the work.
 
+**`consolidate` also runs on its own, gated** ([ADR-0046](docs/adr/0046-periodic-consolidation-pass.md)):
+a background SessionEnd worker attempts a pass at most once every 24h **and** only after ≥5
+sessions since the last check (mirroring Claude Code's `autoDream` gating), so canon that
+accretes near-duplicates from two teammates' independent captures cleans itself up without anyone
+remembering to run the command. It respects `autoPromote`: on (default), it supersedes for real;
+off, it only reports what it *would* do (via the session receipt), leaving canon untouched until a
+human runs `commonwealth consolidate`. Set `autoConsolidate` to `false` to turn off the periodic
+trigger entirely — the on-demand command is unaffected either way.
+
 ### Route projects to brains (rules)
 
 Which brain a directory reads and writes is decided by an ordered **ruleset** ([ADR-0024](docs/adr/0024-rule-based-brain-resolution.md)). A rule matches by **git identity** or **path**, and routes to a brain, denies capture, or falls through to a default brain:
@@ -486,6 +495,13 @@ commonwealth config set semanticDedup true   # smarter dedup (see below)
   clean without human review. Runs in the plugin hook layer over the same host runtime as capture,
   so it is inert without a runtime (behaves exactly like today); any classifier failure fails open
   to the deterministic gate. Set `false` to skip the pass.
+- **`autoConsolidate`** (default **on**) — periodic canon consolidation
+  ([ADR-0046](docs/adr/0046-periodic-consolidation-pass.md)): gated by time (24h) and session count
+  (5) since the last check, `consolidate` runs automatically in the SessionEnd worker instead of
+  only on demand. Reuses the existing supersede-not-delete, single-writer, conservative dedup —
+  no new merge logic, and it respects `autoPromote` (reports a plan instead of applying it when
+  manual review is on). Set false to turn off the periodic trigger; `commonwealth consolidate`
+  keeps working either way.
 - **`contradictionGuard`** (default **off**) — an action-time contradiction guard
   ([ADR-0033](docs/adr/0033-action-time-contradiction-guard.md)): a PreToolUse hook that, before a
   Write/Edit/Bash runs, checks whether the pending change looks like it contradicts a recorded

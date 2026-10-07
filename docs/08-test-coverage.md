@@ -26,7 +26,7 @@ capability's row in this matrix in the same PR.
 | ⚠️ Manual-by-necessity | Cannot be exercised by this suite without infrastructure it doesn't have (a second physical machine, a live external host). A human must verify it; what an automated version would need is stated. |
 | ❌ Missing | Implemented with no automated test. |
 
-Verified 2026-09-02 against `pnpm test`: **104 test files, 1122 tests, all green.**
+Verified 2026-09-29 against `pnpm test`: **117 test files, 1336 tests, all green.**
 
 ## Concurrency-sensitive paths (CLAUDE.md definition-of-done)
 
@@ -107,6 +107,7 @@ Gate-level rows are in the concurrency table above. Additional capabilities:
 | Adopt (bring an external note into canon) | `adopt.test.ts` | ✅ Full | — |
 | Auto-ADR proposal on decision-shaped captures | `autoadr.test.ts` | ✅ Full | — |
 | Consolidate near-duplicate canon notes | `consolidate.test.ts` | ✅ Full | — |
+| Periodic consolidation gate (time+session, `autoConsolidate`/`autoPromote` interaction, lock skip, never-deletes; ADR-0046) | `consolidate.test.ts` | ✅ Full | Covers: not-due below the session/cooldown thresholds, due once both clear, a corrupt gate file failing toward NOT due, real supersession when `autoPromote` is on, dry-run-only (`pending`, canon untouched) when it's off, `autoConsolidate: false` skipping entirely, and lock contention reporting `skipped` rather than blocking/racing. The session-count leg is one marker file per session id under `index/consolidate-sessions/` (not a shared counter, #320 review): covers N concurrent `noteConsolidationSession` calls with distinct ids all landing (no lost updates under concurrency) and the same session id noted twice (PreCompact + SessionEnd) counting once. |
 | Context assembly for the curator | `context.test.ts` | ✅ Full | — |
 | Contradiction detection (ADR-0033) | `contradiction.test.ts` | ✅ Full | — |
 | Nearest-neighbor ranking | `neighbors.test.ts` | ✅ Full | — |
@@ -198,6 +199,7 @@ wrappers themselves are exercised as real subprocesses:
 | Codex lifecycle adapter (event mapping, recursion guard, PreCompact/Stop throttling, #225) | `hooks/codex-hook.mjs` | `test/codex-hooks.test.ts` | ✅ Full | — |
 | Detached capture worker (survives `/clear` teardown, #190) | `hooks/capture-worker.mjs` | `test/realdeps.test.ts` (`finishes its work after the launcher's process group is killed`) | ✅ Full | — |
 | Daemonless lifecycle sync end-to-end (SessionEnd commits+pushes, offline-commit flush at next SessionStart, ADR-0032) | `hooks/session-end.mjs`, `hooks/session-start.mjs` | `test/lifecycle-sync.e2e.test.ts` | ✅ Full | Real git remote, real worker process — the strongest e2e in the repo for the plugin layer. |
+| Periodic consolidation SessionEnd wiring (`maybeConsolidate` call, receipt clause, fail-open on error/absent dep/timeout; ADR-0046) | `hooks/lib.mjs` (`sessionEnd`, `maybeConsolidate` wrapper, `parseConsolidationSummary`, `endReceiptMessage`) | `test/lib.test.ts` | ✅ Full | Asserts the dep is called with the resolved brain and the session key (`guardSessionKey`: `session_id` else `cwd`, #320 review), the outcome is attached only when `ran`, a throwing dep never breaks `sessionEnd` or masks the capture result, and the receipt clause is silent on not-due/lock-skip but names counts on an applied or pending-review outcome. The real `maybeConsolidate` wrapper bounds its `consolidate --auto` child at `CONSOLIDATE_TIMEOUT_MS` and fails open (`{ ran: false }`) on a hung child — covered directly against `realDeps()` with a script that never exits. |
 | Packaged/standalone runtime (marketplace payload has no monorepo or vendor leakage, every host hook loads and runs from the copied install) | `packages/plugin/vendor/**` (generated) | `test/standalone-smoke.test.ts`, `test/vendor-smoke.test.ts` | ✅ Full | — |
 | `hooks.json` / `codex-hooks.json` / `.claude-plugin/plugin.json` / `.codex-plugin/plugin.json` wiring | manifests | `test/manifest.test.ts` | ✅ Full | Checks the manifests are internally consistent (versions agree, referenced scripts exist) — not that Claude Code itself reads them correctly (see MCP live-handshake row above; the same caveat applies to plugin manifest consumption). |
 | `pre-compact.mjs` / `user-prompt-submit.mjs` throttling and `DISABLE_HOOKS` no-op | `hooks/pre-compact.mjs`, `hooks/user-prompt-submit.mjs` | `test/realdeps.test.ts` | ✅ Full | — |

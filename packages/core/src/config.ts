@@ -170,6 +170,19 @@ export const FEATURE_FLAGS: ReadonlyArray<{
       "see contradictionGuard.mode to escalate to an ask prompt, and .threshold to tune the floor.",
     default: false,
   },
+  {
+    name: "autoConsolidate",
+    description:
+      "Periodic consolidation of canon (ADR-0046): gated by time (24h) and session count (5) " +
+      "since the last check, `consolidate` runs automatically in the SessionEnd lifecycle worker " +
+      "instead of only on demand. Reuses the existing supersede-not-delete, single-writer, " +
+      "conservative dedup ADR-0017 shipped — no new merge logic. Default ON: safe because a " +
+      "duplicate is only ever superseded (never deleted) and a lock-held run simply skips. When " +
+      "`autoPromote` is off, a due run reports the plan (dry-run) instead of applying it, same as " +
+      "every other auto-capture path respecting that flag. Set false to turn off the periodic " +
+      "trigger entirely (the on-demand `commonwealth consolidate` command is unaffected).",
+    default: true,
+  },
 ];
 
 /** Default embeddings config (ADR-0021): local provider, inert until `semanticDedup` is on. */

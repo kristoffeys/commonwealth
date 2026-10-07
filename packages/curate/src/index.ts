@@ -40,7 +40,7 @@ import { adoptProject, type AdoptResult } from "./adopt.js";
 import { relayoutBrain, type RelayoutResult } from "./relayout.js";
 import { renameProject, type RenameResult } from "./rename.js";
 import { captureCandidates } from "./capture.js";
-import { consolidateCanon } from "./consolidate.js";
+import { consolidateCanon, maybeConsolidate } from "./consolidate.js";
 import { graduateToOrgBrain } from "./graduate.js";
 import { formatContext } from "./context.js";
 import { curate } from "./curate.js";
@@ -69,6 +69,13 @@ import packageJson from "../package.json";
  * Keep in sync with `parseVerdictSummary` in packages/plugin/hooks/lib.mjs.
  */
 const VERDICT_SUMMARY_PREFIX = "##commonwealth:verdicts ";
+
+/**
+ * Sentinel line `consolidate --auto` appends to stdout to carry the periodic-gate outcome (ADR-0046)
+ * back to the plugin hook, which uses it to render the SessionEnd receipt. Keep in sync with
+ * `parseConsolidationSummary` in packages/plugin/hooks/lib.mjs.
+ */
+const CONSOLIDATE_SUMMARY_PREFIX = "##commonwealth:consolidate ";
 
 /**
  * Resolve the brain directory for a `cwd`, or `null` when none is configured (#69). Order:
@@ -1287,10 +1294,17 @@ async function cmdStatusCache(dir: string): Promise<void> {
 }
 
 /**
- * `consolidate [--dry-run] [--force]` — cross-user canon consolidation (#29): supersede
+ * `consolidate [--dry-run] [--force] [--auto]` — cross-user canon consolidation (#29): supersede
  * near-duplicate memory/decision notes onto a single survivor (supersede-not-delete),
  * single-writer. `--force` overrides the quiet-tick guard (#273), which otherwise makes a run over
  * unchanged canon a cheap no-op.
+ *
+ * `--auto` (ADR-0046, #319) is the periodic-trigger entry point the plugin's SessionEnd worker
+ * calls: it runs `maybeConsolidate` instead of `consolidateCanon` directly, so the pass only
+ * actually attempts anything when the time+session gate says it's due, and respects `autoPromote`
+ * (dry-run/report instead of applying when the brain has manual review on). Prints a
+ * `##commonwealth:consolidate {...}` summary line the hook parses; `--dry-run`/`--force` are
+ * ignored with `--auto` (the gate and `autoPromote` decide dry-run-vs-apply instead).
  */
 async function cmdConsolidate(dir: string, args: string[]): Promise<void> {
   const { values } = parseArgs({
@@ -1298,10 +1312,31 @@ async function cmdConsolidate(dir: string, args: string[]): Promise<void> {
     options: {
       "dry-run": { type: "boolean" },
       force: { type: "boolean" },
+      auto: { type: "boolean" },
       dir: { type: "string" },
     },
     allowPositionals: false,
   });
+
+  if (values.auto === true) {
+    // `$COMMONWEALTH_SESSION_ID` (set by the plugin hook's `maybeConsolidate` wrapper) identifies the
+    // calling session for the gate's marker-file dedup — absent when invoked directly (e.g. a bare
+    // `commonwealth consolidate --auto`), in which case `maybeConsolidate` falls back to a fresh id.
+    const sessionId = process.env.COMMONWEALTH_SESSION_ID;
+    const outcome = await maybeConsolidate(dir, sessionId ? { sessionId } : {});
+    console.log(
+      CONSOLIDATE_SUMMARY_PREFIX +
+        JSON.stringify({
+          ran: outcome.ran,
+          pending: outcome.pending === true,
+          clusters: outcome.result?.clusters ?? 0,
+          superseded: outcome.result?.superseded.length ?? 0,
+          skipped: outcome.result?.skipped ?? null,
+        }),
+    );
+    return;
+  }
+
   const result = await consolidateCanon(dir, {
     dryRun: values["dry-run"] === true,
     force: values.force === true,

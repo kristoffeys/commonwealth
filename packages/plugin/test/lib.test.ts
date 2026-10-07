@@ -14,7 +14,9 @@ import {
   launchCaptureWorker,
   parseCandidateArray,
   parseCaptureLines,
+  parseConsolidationSummary,
   promptCaptureIntervalMs,
+  realDeps,
   resolveSyncRuntime,
   sessionEnd,
   sessionStart,
@@ -575,6 +577,166 @@ describe("endReceiptMessage (#96)", () => {
   it("returns null for junk input", () => {
     expect(endReceiptMessage(null)).toBe(null);
     expect(endReceiptMessage({})).toBe(null);
+  });
+
+  describe("periodic consolidation clause (ADR-0046, #319)", () => {
+    it("says nothing when the gate wasn't due this session", () => {
+      const msg = endReceiptMessage({ captured: 0, consolidation: { ran: false } });
+      expect(msg).not.toContain("Consolidation");
+    });
+
+    it("says nothing when the pass ran but the lock was held (quiet, not nagging)", () => {
+      const msg = endReceiptMessage({
+        captured: 0,
+        consolidation: { ran: true, skipped: "another writer holds the sync lock" },
+      });
+      expect(msg).not.toContain("Consolidation");
+    });
+
+    it("reports applied supersessions when autoPromote is on", () => {
+      const msg = endReceiptMessage({
+        captured: 0,
+        consolidation: { ran: true, pending: false, clusters: 1, superseded: 2, skipped: null },
+      });
+      expect(msg).toContain("Consolidation merged 2 near-duplicate note(s) into canon");
+    });
+
+    it("reports a pending-review plan (never applied) when autoPromote is off", () => {
+      const msg = endReceiptMessage({
+        captured: 0,
+        consolidation: { ran: true, pending: true, clusters: 2, superseded: 0, skipped: null },
+      });
+      expect(msg).toContain("2 duplicate cluster(s) pending review");
+      expect(msg).toContain("commonwealth consolidate");
+    });
+
+    it("appends the clause regardless of whether THIS session captured anything", () => {
+      const msg = endReceiptMessage({
+        captured: 3,
+        consolidation: { ran: true, pending: false, clusters: 1, superseded: 1, skipped: null },
+      });
+      expect(msg).toContain("3 note(s)");
+      expect(msg).toContain("Consolidation merged 1 near-duplicate note(s)");
+    });
+  });
+});
+
+describe("parseConsolidationSummary (ADR-0046, #319)", () => {
+  it("parses a valid summary line", () => {
+    const stdout =
+      "##commonwealth:consolidate " +
+      JSON.stringify({ ran: true, pending: false, clusters: 1, superseded: 1, skipped: null });
+    expect(parseConsolidationSummary(stdout)).toEqual({
+      ran: true,
+      pending: false,
+      clusters: 1,
+      superseded: 1,
+      skipped: null,
+    });
+  });
+
+  it("returns null when the line is absent", () => {
+    expect(parseConsolidationSummary("some other output\n")).toBe(null);
+  });
+
+  it("returns null (never throws) on malformed JSON", () => {
+    expect(parseConsolidationSummary("##commonwealth:consolidate {not json")).toBe(null);
+  });
+
+  it("returns null for non-string input", () => {
+    expect(parseConsolidationSummary(undefined)).toBe(null);
+  });
+});
+
+describe("realDeps().maybeConsolidate timeout (#320 review)", () => {
+  it("bounds the consolidate child at a timeout and fails open when it hangs", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-consolidate-hang-"));
+    // A fake `consolidate --auto` that never exits on its own — simulates a wedged child (e.g. a
+    // stuck git op inside the sync lock). Node keeps the event loop alive on its own, so absent a
+    // timeout this would hang forever.
+    const entry = path.join(tmp, "hang.mjs");
+    await fs.writeFile(entry, "setInterval(() => {}, 1000);\n", "utf8");
+    try {
+      const deps = realDeps({ curateEntry: entry, consolidateTimeoutMs: 200 });
+      const start = Date.now();
+      const outcome = await deps.maybeConsolidate("/brains/acme", "sess-1");
+      // Fails open, never throws, never reports a bogus "ran" outcome.
+      expect(outcome).toEqual({ ran: false });
+      // Bounded by the override, not the real 120s default.
+      expect(Date.now() - start).toBeLessThan(10_000);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  }, 15_000);
+});
+
+describe("sessionEnd periodic consolidation wiring (ADR-0046, #319)", () => {
+  it("calls deps.maybeConsolidate and attaches its outcome to the result when it ran", async () => {
+    const maybeConsolidate = vi.fn(async () => ({
+      ran: true,
+      pending: false,
+      clusters: 1,
+      superseded: 1,
+      skipped: null,
+    }));
+    const deps = makeDeps({ maybeConsolidate });
+    const result = await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
+      deps,
+    );
+    // No `session_id` on the input, so `guardSessionKey` falls back to `cwd`.
+    expect(maybeConsolidate).toHaveBeenCalledWith("/brains/acme", "/work/acme/app");
+    expect(result.consolidation).toEqual({
+      ran: true,
+      pending: false,
+      clusters: 1,
+      superseded: 1,
+      skipped: null,
+    });
+  });
+
+  it("passes the hook's session_id through to deps.maybeConsolidate when present", async () => {
+    const maybeConsolidate = vi.fn(async () => ({ ran: false }));
+    const deps = makeDeps({ maybeConsolidate });
+    await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl", session_id: "sess-123" },
+      deps,
+    );
+    // Same session id used by PreCompact and SessionEnd for one session collides onto one marker
+    // (#320 review fix) instead of counting the session twice.
+    expect(maybeConsolidate).toHaveBeenCalledWith("/brains/acme", "sess-123");
+  });
+
+  it("omits `consolidation` from the result when the gate wasn't due", async () => {
+    const maybeConsolidate = vi.fn(async () => ({ ran: false }));
+    const deps = makeDeps({ maybeConsolidate });
+    const result = await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
+      deps,
+    );
+    expect(result.consolidation).toBeUndefined();
+  });
+
+  it("fails open: a throwing maybeConsolidate never breaks the session or the capture result", async () => {
+    const maybeConsolidate = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const deps = makeDeps({ maybeConsolidate });
+    const result = await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
+      deps,
+    );
+    expect(result.captured).toBe(1); // the capture path is untouched by the maintenance failure
+    expect(result.consolidation).toBeUndefined();
+  });
+
+  it("is a no-op when the dep is absent (older wiring / unit tests unaffected)", async () => {
+    const deps = makeDeps();
+    const result = await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
+      deps,
+    );
+    expect(result.consolidation).toBeUndefined();
   });
 });
 
