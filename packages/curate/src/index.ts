@@ -42,7 +42,7 @@ import { renameProject, type RenameResult } from "./rename.js";
 import { captureCandidates } from "./capture.js";
 import { consolidateCanon } from "./consolidate.js";
 import { graduateToOrgBrain } from "./graduate.js";
-import { formatContext } from "./context.js";
+import { formatCompactContext, formatContext } from "./context.js";
 import { curate } from "./curate.js";
 import { computeNeighbors } from "./neighbors.js";
 import {
@@ -442,6 +442,7 @@ async function cmdContext(explicitDir: string | undefined, args: string[]): Prom
       query: { type: "string" },
       limit: { type: "string" },
       verbose: { type: "boolean" },
+      json: { type: "boolean" },
     },
     allowPositionals: false,
   });
@@ -454,6 +455,9 @@ async function cmdContext(explicitDir: string | undefined, args: string[]): Prom
   if ("skip" in resolved) {
     const why = resolved.skip === "out-of-scope" ? "is out of scope" : "has no brain";
     console.error(`[commonwealth-curate] ${cwd} ${why}; injecting nothing`);
+    // `--json` (#317) has its own bounded-array contract: [] means "nothing relevant", never
+    // "lookup failed" — the hook caller distinguishes those via the process exit code.
+    if (values.json === true) console.log("[]");
     return;
   }
   const dir = resolved.brain;
@@ -479,6 +483,13 @@ async function cmdContext(explicitDir: string | undefined, args: string[]): Prom
     ...(query !== undefined ? { query } : {}),
     ...(limit !== undefined ? { limit } : {}),
   });
+
+  // `--json` (#317): the compact `{ id, title, kind }` shape the extraction prompt's "existing
+  // notes" hint consumes, instead of the rendered-markdown injection format.
+  if (values.json === true) {
+    console.log(JSON.stringify(formatCompactContext(notes)));
+    return;
+  }
 
   const rendered = formatContext(notes);
   if (rendered.length > 0) console.log(rendered);
