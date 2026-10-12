@@ -44,6 +44,7 @@ We record significant, hard-to-reverse decisions as ADRs using a light
 | [0043](0043-external-ingestion-candidate-producer-contract.md) | External ingestion is a candidate-producer contract; connectors never write to the brain | Accepted |
 | [0044](0044-agent-assisted-ingestion.md)  | Agent-assisted ingestion: the host's own connectors are the fetch layer for OAuth sources | Accepted |
 | [0045](0045-external-intake-does-not-auto-promote.md) | External intake does not auto-promote; bulk import lands as a promotion PR | Accepted |
+| [0046](0046-periodic-consolidation-pass.md) | Periodic consolidation pass: `consolidate` moves from explicit-only to gated-automatic | Accepted |
 
 ## Process
 
