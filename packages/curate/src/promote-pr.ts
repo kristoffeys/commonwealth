@@ -7,10 +7,11 @@ import {
   findSecretsForBrain,
   listNotes,
   loadBrainConfig,
-  pathForNote,
+  loadProjectAliasMap,
   resolveWithinBrain,
   type Note,
 } from "@cmnwlth/core";
+import { canonPathFor, isUnassigned } from "./review.js";
 import { listStaged, stagedAbsPath } from "./staging.js";
 
 const pexec = promisify(execFile);
@@ -228,13 +229,19 @@ export async function promoteViaPr(
   // Resolve the selection against the CURRENT staging queue.
   const pending = await listStaged(brainDir);
   let selected: Note[];
+  const aliasMap = await loadProjectAliasMap(brainDir);
   if ("all" in selection) {
-    selected = pending;
+    selected = pending.filter((n) => !isUnassigned(n, aliasMap));
   } else {
     selected = [];
     for (const id of selection.ids) {
       const note = pending.find((n) => n.frontmatter.id === id);
       if (!note) throw new Error(`No staged note with id "${id}" to promote`);
+      if (isUnassigned(note, aliasMap)) {
+        throw new Error(
+          `Staged note "${id}" has no project; promote it locally with --project <id>`,
+        );
+      }
       selected.push(note);
     }
   }
@@ -250,7 +257,7 @@ export async function promoteViaPr(
     kind: n.frontmatter.kind,
     title: n.frontmatter.title,
     ...(n.frontmatter.source ? { source: n.frontmatter.source } : {}),
-    canonPath: pathForNote(n.frontmatter.kind, n.frontmatter.id, n.frontmatter.source),
+    canonPath: canonPathFor(n),
   }));
 
   // Secret scrub at parity with sync (#16/#98): staged notes are plain, hand-editable markdown, so

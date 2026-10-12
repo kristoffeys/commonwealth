@@ -7,6 +7,7 @@ import {
   isFeatureEnabled,
   listNotes,
   loadBrainConfig,
+  loadProjectAliasMap,
   receiptFor,
   scanOptions,
   supersedeNote,
@@ -16,7 +17,7 @@ import {
   type NewNoteInput,
 } from "@cmnwlth/core";
 import { curate, type CurateResult, type Curator } from "./curate.js";
-import { approve, reject } from "./review.js";
+import { approve, isUnassigned, reject } from "./review.js";
 import { listStaged, reassignStagedContributor } from "./staging.js";
 import { planCandidate, type AnnotatedCandidate } from "./verdict.js";
 
@@ -214,7 +215,9 @@ export async function captureCandidates(
   const promoted: string[] = [];
   const autoPromote = await isFeatureEnabled(brainDir, "autoPromote");
   if (result.staged.length > 0 && autoPromote) {
-    for (const note of result.staged) {
+    const aliasMap = await loadProjectAliasMap(brainDir);
+    // An unassigned note waits in the review queue even with autoPromote on (the inbox).
+    for (const note of result.staged.filter((n) => !isUnassigned(n, aliasMap))) {
       promoted.push(await approve(brainDir, note.frontmatter.id));
     }
   }

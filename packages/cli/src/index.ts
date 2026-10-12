@@ -186,6 +186,7 @@ function printUsage(): void {
       "                                                 secrets from ALL git history + force-push (destructive)",
       "  commonwealth pending                           list notes awaiting review",
       "  commonwealth promote   <id...> | --all [--pr]  approve staged notes into canon (--pr opens a review PR)",
+      "                         [--project <id>]        file an unassigned note under a registry project",
       "  commonwealth reject    <id...>                 discard staged notes",
       "  commonwealth registry  <show | route | allow | deny | remove | default>  brain-resolution rules",
       "  commonwealth service   <install | uninstall | status | restart>  run sync as a background service",

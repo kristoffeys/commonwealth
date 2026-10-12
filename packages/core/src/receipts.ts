@@ -63,6 +63,8 @@ export type DropCategory =
    * missing.
    */
   | "supersession-deferred"
+  /** The brain's project registry lists no project in the candidate's git org (the allowlist). */
+  | "outside-registry"
   /** A pluggable curator (ADR-0007) declined with a reason this version has no category for. */
   | "unknown";
 
@@ -104,6 +106,7 @@ export const DROP_LABELS: Record<DropCategory, string> = {
   trivia: "trivia",
   invalid: "invalid",
   "supersession-deferred": "supersession deferred",
+  "outside-registry": "outside the project registry",
   unknown: "unclassified",
 };
 
@@ -187,6 +190,14 @@ export function dropFor(category: DropCategory, ctx: DropContext = {}): DropClas
         cause: `The new note reached canon, but ${ctx.targetId ?? "the note it replaces"} was left active: another writer held the brain's sync lock, so the supersession was skipped rather than raced (#281).`,
         nextAction:
           "Nothing was lost — the new note is in canon and carries the forward `supersedes` link. Mark the older note superseded by hand, or let `commonwealth consolidate` reconcile the pair if they are near-duplicates.",
+      };
+    case "outside-registry":
+      return {
+        category,
+        recoverable: true,
+        cause: `The brain's project registry has no project in this repo's org${detail}, so nothing from it is shared here.`,
+        nextAction:
+          "If this repo belongs in this brain, add it to a project: `commonwealth project link <project> <owner/repo>`.",
       };
     case "unknown":
       return {

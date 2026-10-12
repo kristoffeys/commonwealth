@@ -142,6 +142,25 @@ describe("promote --pr", () => {
     expect(branchTree).not.toContain(`memory/${a.frontmatter.id}.md`);
   });
 
+  it("files a note under its project, and leaves unassigned notes out of --all", async () => {
+    const { persistProjectAliasMap } = await import("@cmnwlth/core");
+    await persistProjectAliasMap(brain, (m) => {
+      m.widgets = { sources: ["acme/widgets"] };
+    });
+    const a = await stageNote(brain, { ...mem("Linked fact", "acme/widgets"), project: "widgets" });
+    const b = await stageNote(brain, mem("Homeless fact", "acme/other"));
+    const record = { calls: [] as string[][] };
+
+    const result = await promoteViaPr(brain, { all: true }, stubbedIo(record));
+
+    expect(result.notes.map((n) => n.id)).toEqual([a.frontmatter.id]);
+    const branchTree = git("ls-tree", "-r", "--name-only", result.branch);
+    expect(branchTree).toContain(`widgets/memory/${a.frontmatter.id}.md`);
+    await expect(
+      promoteViaPr(brain, { ids: [b.frontmatter.id] }, stubbedIo(record)),
+    ).rejects.toThrow(/no project/);
+  });
+
   it("throws on an id that is not in the staging queue", async () => {
     await stageNote(brain, mem("Present"));
     await expect(

@@ -223,6 +223,23 @@ describe("remember", () => {
     expect(parsed.frontmatter.project).toBe("acme");
   });
 
+  it("files under the project a host names in $COMMONWEALTH_PROJECT (Relay in the vault)", async () => {
+    const { persistProjectAliasMap } = await import("@cmnwlth/core");
+    await persistProjectAliasMap(brainDir, (map) => {
+      map.lemahieu = { sources: ["weareantenna/shopware-lemahieu"], names: ["Lemahieu"] };
+    });
+    vi.stubEnv("COMMONWEALTH_SOURCE", "vault");
+    vi.stubEnv("COMMONWEALTH_PROJECT", "Lemahieu");
+
+    const result = await remember(brainDir, {
+      kind: "memory",
+      title: "Certificate groups limit choices",
+      body: "PEFC TRANS articles may only offer NON CERT and PEFC in checkout.",
+    });
+
+    expect(result.path).toMatch(/^lemahieu\/memory\//);
+  });
+
   it("makes the new note findable via a subsequent search (index refresh)", async () => {
     // Prime the index so it already exists before the write — proves remember rebuilds it.
     expect(await searchNotes(brainDir, { query: "quokka" })).toEqual([]);
