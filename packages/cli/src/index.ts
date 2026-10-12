@@ -12,6 +12,7 @@ import {
   summarizeDrops,
 } from "@cmnwlth/core";
 import { defaultAddDeps, runAdd } from "./add.js";
+import { cmdJoin, cmdPerson } from "./join.js";
 import { formatCaptureLine, readCaptureLog } from "./capture-log.js";
 import { cmdOrgBrain } from "./org-brain.js";
 import { cmdRegistry } from "./registry.js";
@@ -166,6 +167,9 @@ function printUsage(): void {
       "  commonwealth add       [<folder>...] [--brain <dir>] [--remote <url>] [--no-ci]",
       "                                                 wire folder(s) to an existing brain (allowlist +",
       "                                                 routing rule + brains/ symlink) in one go",
+      "  commonwealth join      <git-remote> [--brain <dir>]   clone a team brain and route the orgs",
+      "                                                 its project registry lists to it",
+      "  commonwealth person    merge <keep-id> <drop-id>   one person, two identities: merge them",
       "  commonwealth org-brain <set <dir> [--remote <url>] | show>   designate/show the org-brain (graduation target)",
       "  commonwealth reseed    [<repo>...] [--all]     mine repo(s) into the mapped brain and capture",
       "  commonwealth config    <list | get <k> | set <k> <v>>   read/set the brain's shared config",
@@ -265,6 +269,10 @@ export async function run(argv: string[]): Promise<number> {
       return cmdInit(rest);
     case "add":
       return cmdAdd(rest);
+    case "join":
+      return cmdJoin(rest);
+    case "person":
+      return cmdPerson(rest);
     case "org-brain":
       return cmdOrgBrain(rest);
     case "registry":

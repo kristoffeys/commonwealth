@@ -150,6 +150,8 @@ export const PersonFrontmatter = z
     name: z.string().min(1),
     /** Stable normalized identity used to make automatic contributor creation idempotent. */
     attribution_key: z.string().optional(),
+    /** Other identity keys of the same person (a second email), from `commonwealth person merge`. */
+    attribution_aliases: z.array(z.string()).optional(),
     email: z.string().email().optional(),
     org: z.string().optional(),
     role: z.string().optional(),

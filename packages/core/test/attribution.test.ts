@@ -10,7 +10,7 @@ import {
   resolveContributorIdentity,
   type ContributorIdentity,
 } from "../src/attribution.js";
-import { listNotes, writeNote } from "../src/notes.js";
+import { listNotes, overwriteNote, writeNote } from "../src/notes.js";
 
 let brainDir: string;
 
@@ -202,5 +202,55 @@ describe("person-backed responsibility", () => {
     expect(memory.frontmatter.author).toBe("Kristof Feys");
     expect(memory.frontmatter.author_ref).toBe(personId);
     expect(memory.frontmatter.relates).toContain(personId);
+  });
+});
+
+describe("mergePeople (one person, two emails)", () => {
+  const work: ContributorIdentity = {
+    name: "Kristof Feys",
+    email: "kristof@work.example",
+    key: `email-sha256:${createHash("sha256").update("kristof@work.example").digest("hex")}`,
+  };
+
+  it("moves attribution to the kept person and makes both emails resolve to it", async () => {
+    const { mergePeople } = await import("../src/attribution.js");
+    const keep = await ensureContributorPerson(brainDir, kristof);
+    const drop = await ensureContributorPerson(brainDir, work);
+    expect(drop.frontmatter.id).not.toBe(keep.frontmatter.id);
+    const keepId = keep.frontmatter.id;
+    const dropId = drop.frontmatter.id;
+    const note = await writeNote(brainDir, {
+      kind: "memory",
+      title: "Identity edge is Envoy",
+      body: "The platform edge validates ZITADEL tokens.",
+      author: "Kristof Feys",
+      authorRef: dropId,
+    });
+    // Captured notes relate their contributor (attributeNoteInputs); mirror that here.
+    await overwriteNote(brainDir, {
+      ...note,
+      frontmatter: { ...note.frontmatter, relates: [dropId] },
+    });
+
+    const { rewritten } = await mergePeople(brainDir, keepId, dropId);
+
+    expect(rewritten).toBe(1);
+    const people = await listNotes(brainDir, "person");
+    expect(people.map((p) => p.frontmatter.id)).toEqual([keepId]);
+    const [memory] = await listNotes(brainDir, "memory");
+    expect(memory!.frontmatter.author_ref).toBe(keepId);
+    expect(memory!.frontmatter.relates).toEqual([keepId]);
+    // The next capture under the second email attributes to the kept person, not a new one.
+    expect((await ensureContributorPerson(brainDir, work)).frontmatter.id).toBe(keepId);
+    expect(await listNotes(brainDir, "person")).toHaveLength(1);
+  });
+
+  it("refuses ids that are not person notes", async () => {
+    const { mergePeople } = await import("../src/attribution.js");
+    const keep = await ensureContributorPerson(brainDir, kristof);
+    await expect(mergePeople(brainDir, keep.frontmatter.id, "nobody")).rejects.toThrow(/no person/);
+    await expect(mergePeople(brainDir, keep.frontmatter.id, keep.frontmatter.id)).rejects.toThrow(
+      /two different/,
+    );
   });
 });
