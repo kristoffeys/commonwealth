@@ -190,3 +190,55 @@ describe("projectForSource", () => {
     expect(projectForSource("z", map)).toBeNull();
   });
 });
+
+describe("registry matching (project-first brain)", () => {
+  const map = {
+    o2o: { customer: "o2o Bicycle Leasing", sources: ["o2o-bicycle-leasing/*"] },
+    lemahieu: {
+      sources: ["weareantenna/shopware-lemahieu", "lemahieu-shopware"],
+      names: ["Lemahieu webshop"],
+    },
+    acme: { sources: ["weareantenna/*"] },
+  };
+
+  it("matches sources case-insensitively, exact before an org wildcard", async () => {
+    const { projectForSource } = await import("../src/projects.js");
+    expect(projectForSource("o2o-Bicycle-leasing/platform", map)).toBe("o2o");
+    expect(projectForSource("WeAreAntenna/shopware-lemahieu", map)).toBe("lemahieu");
+    expect(projectForSource("weareantenna/spardex", map)).toBe("acme");
+    expect(projectForSource("lemahieu-shopware", map)).toBe("lemahieu");
+    expect(projectForSource("vault", map)).toBeNull();
+  });
+
+  it("matches a host-given name on id, customer and names, ignoring case, punctuation and (…)", async () => {
+    const { projectForName } = await import("../src/projects.js");
+    expect(projectForName("O2O Bicycle-Leasing", map)).toBe("o2o");
+    expect(projectForName("o2o", map)).toBe("o2o");
+    expect(projectForName("lemahieu webshop (Shopware)", map)).toBe("lemahieu");
+    expect(projectForName("Spardex", map)).toBeNull();
+    expect(projectForName("()", map)).toBeNull();
+  });
+
+  it("allows everything with an empty registry, else only orgs the registry knows", async () => {
+    const { registryAllows } = await import("../src/projects.js");
+    expect(registryAllows("kristoffeys/commonwealth", {})).toBe(true);
+    expect(registryAllows("kristoffeys/commonwealth", map)).toBe(false);
+    expect(registryAllows("weareantenna/new-repo", map)).toBe(true);
+    expect(registryAllows("vault", map)).toBe(true);
+    expect(registryAllows(undefined, map)).toBe(true);
+  });
+
+  it("round-trips names through persist", async () => {
+    const { loadProjectAliasMap, persistProjectAliasMap } = await import("../src/projects.js");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-registry-"));
+    try {
+      await persistProjectAliasMap(dir, (m) => Object.assign(m, map));
+      expect((await loadProjectAliasMap(dir)).lemahieu).toEqual({
+        sources: ["lemahieu-shopware", "weareantenna/shopware-lemahieu"],
+        names: ["Lemahieu webshop"],
+      });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});

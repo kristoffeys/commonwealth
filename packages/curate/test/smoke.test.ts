@@ -491,7 +491,7 @@ describe("built binary", () => {
     await fs.rm(brain, { recursive: true, force: true });
   });
 
-  it("project adopt stamps historical notes in one commit and retires the entry (#241)", async () => {
+  it("project adopt stamps historical notes in one commit and keeps the entry (#241, ADR-0047)", async () => {
     const brain = await fs.mkdtemp(path.join(os.tmpdir(), "commonwealth-curate-adopt-cli-"));
     await initBrain(brain, { name: "adopt-cli-brain" });
     await writeNote(brain, {
@@ -535,7 +535,7 @@ describe("built binary", () => {
     const adopted = run(["project", "adopt", "acme-engagement"]);
     expect(adopted.status).toBe(0);
     expect(adopted.stdout).toContain("Adopted");
-    // The note now carries the project; the alias entry is gone; exactly one new commit; clean tree.
+    // The note now carries the project; the registry entry stays; exactly one new commit; clean tree.
     expect((await listNotes(brain, "work-state"))[0]!.frontmatter.project).toBe("acme-engagement");
     const after = Number(
       execFileSync("git", ["-C", brain, "rev-list", "--count", "HEAD"], {
@@ -547,7 +547,7 @@ describe("built binary", () => {
       execFileSync("git", ["-C", brain, "status", "--porcelain"], { encoding: "utf8" }).trim(),
     ).toBe("");
     const list = run(["project", "list"]);
-    expect(list.stdout).not.toContain("acme-engagement");
+    expect(list.stdout).toContain("acme-engagement");
 
     await fs.rm(brain, { recursive: true, force: true });
   });

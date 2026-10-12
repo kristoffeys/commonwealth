@@ -8,6 +8,7 @@ import {
   resolveContributorIdentity,
   resolveProjectManifest,
   captureSource,
+  declaredProject,
   search,
   type AskResult,
   type Frontmatter,
@@ -143,6 +144,9 @@ export async function remember(
   // through the alias map, else the note files under its source.
   const manifest = await resolveProjectManifest(process.cwd());
   const stamp = manifest ? manifestStamp(manifest) : null;
+  // The host's named project (`$COMMONWEALTH_PROJECT`) beats the manifest; `curate` matches either
+  // against the registry.
+  const project = declaredProject() ?? stamp?.project;
   const noteTags = tags ?? [];
   const stampedTags =
     stamp?.tag && !noteTags.includes(stamp.tag) ? [...noteTags, stamp.tag] : noteTags;
@@ -157,7 +161,7 @@ export async function remember(
         body,
         tags: stampedTags,
         ...(source ? { source } : {}),
-        ...(stamp ? { project: stamp.project } : {}),
+        ...(project ? { project } : {}),
       },
     ],
     undefined,

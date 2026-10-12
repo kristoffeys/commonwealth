@@ -21,8 +21,16 @@ import type { Note } from "./schema.js";
 export interface ProjectAliasEntry {
   /** Optional human/business name for the engagement (distinct from the project id key). */
   customer?: string;
-  /** The `source` values (ADR-0015) that belong to this project. */
+  /**
+   * The `source` values (ADR-0015) that belong to this project: `owner/repo` git identities, an
+   * `owner/*` wildcard for a whole org, or a bare folder name. Matched case-insensitively.
+   */
   sources: string[];
+  /**
+   * Names a host may call this project (a vault folder, a Relay project), matched on letters and
+   * digits only, case-insensitively, against `$COMMONWEALTH_PROJECT`. The id and `customer` match too.
+   */
+  names?: string[];
 }
 
 /** The brain-owned alias map: canonical project id → its {@link ProjectAliasEntry}. */
@@ -106,9 +114,24 @@ function normalizeAliasMap(raw: Record<string, unknown>): ProjectAliasMap {
       : [];
     const customer =
       typeof entry.customer === "string" && entry.customer.length > 0 ? entry.customer : undefined;
-    out[projectId] = customer ? { customer, sources } : { sources };
+    const names = Array.isArray(entry.names)
+      ? entry.names.filter((s): s is string => typeof s === "string" && s.length > 0)
+      : [];
+    out[projectId] = withOptional({ sources }, customer, names);
   }
   return out;
+}
+
+function withOptional(
+  base: { sources: string[] },
+  customer: string | undefined,
+  names: string[],
+): ProjectAliasEntry {
+  return {
+    ...(customer ? { customer } : {}),
+    ...base,
+    ...(names.length > 0 ? { names } : {}),
+  };
 }
 
 /** Brains already warned about a corrupt alias map this process, so the breadcrumb fires once each. */
@@ -173,7 +196,8 @@ function sortAliasMap(map: ProjectAliasMap): ProjectAliasMap {
   for (const projectId of Object.keys(map).sort()) {
     const entry = map[projectId]!;
     const sources = [...new Set(entry.sources)].sort();
-    out[projectId] = entry.customer ? { customer: entry.customer, sources } : { sources };
+    const names = [...new Set(entry.names ?? [])].sort();
+    out[projectId] = withOptional({ sources }, entry.customer, names);
   }
   return out;
 }
@@ -196,12 +220,60 @@ export function resolveNoteProject(note: Note, aliasMap: ProjectAliasMap): strin
   return null;
 }
 
-/** The alias-map project id whose `sources` includes `source`, or null. First match wins (sorted). */
+/**
+ * The alias-map project id that `source` belongs to, or null. Case-insensitive; an exact entry beats
+ * an `owner/*` wildcard, and within each tier the first project id in sorted order wins.
+ */
 export function projectForSource(source: string, aliasMap: ProjectAliasMap): string | null {
-  for (const projectId of Object.keys(aliasMap).sort()) {
-    if (aliasMap[projectId]!.sources.includes(source)) return projectId;
-  }
-  return null;
+  const want = source.toLowerCase();
+  const ids = Object.keys(aliasMap).sort();
+  const exact = ids.find((id) => aliasMap[id]!.sources.some((s) => s.toLowerCase() === want));
+  if (exact) return exact;
+  const owner = sourceOwner(want);
+  if (!owner) return null;
+  return (
+    ids.find((id) => aliasMap[id]!.sources.some((s) => s.toLowerCase() === `${owner}/*`)) ?? null
+  );
+}
+
+/** Letters and digits only, lowercased, ignoring a trailing `(...)`: "BE Plastics (TradeHub)" → "beplastics". */
+function nameKey(name: string): string {
+  return (name.split("(")[0] ?? "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+/**
+ * The project a host-given name refers to (`$COMMONWEALTH_PROJECT`, a manifest `project`), or null.
+ * Matches the project id, its `customer` and its `names` on {@link nameKey}; sorted id order breaks ties.
+ */
+export function projectForName(name: string, aliasMap: ProjectAliasMap): string | null {
+  const want = nameKey(name);
+  if (!want) return null;
+  return (
+    Object.keys(aliasMap)
+      .sort()
+      .find((id) => {
+        const e = aliasMap[id]!;
+        return [id, e.customer ?? "", ...(e.names ?? [])].some((n) => nameKey(n) === want);
+      }) ?? null
+  );
+}
+
+/** `owner` of an `owner/repo` source (lowercased), or null for a bare folder-name source. */
+function sourceOwner(source: string): string | null {
+  const i = source.indexOf("/");
+  return i > 0 ? source.slice(0, i).toLowerCase() : null;
+}
+
+/**
+ * Whether the registry lets a note from `source` into the brain at all (the allowlist). An empty
+ * registry allows everything (a brain that never registered projects keeps the old behavior). A
+ * populated one refuses a git identity whose owner appears in none of its sources; a bare folder
+ * name or a missing source is allowed in, and lands in the review queue unassigned.
+ */
+export function registryAllows(source: string | undefined, aliasMap: ProjectAliasMap): boolean {
+  const owner = source ? sourceOwner(source) : null;
+  if (!owner || Object.keys(aliasMap).length === 0) return true;
+  return Object.values(aliasMap).some((e) => e.sources.some((s) => sourceOwner(s) === owner));
 }
 
 /** In-place link: add `sources` to `projectId`'s entry (creating it), de-duplicated. */

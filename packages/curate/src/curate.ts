@@ -8,12 +8,15 @@ import {
   loadBrainConfig,
   loadProjectAliasMap,
   loadVectors,
+  projectForName,
   projectForSource,
+  registryAllows,
   scanOptions,
   type DropClassification,
   type Embedder,
   type NewNoteInput,
   type Note,
+  type ProjectAliasMap,
 } from "@cmnwlth/core";
 import { listStaged, stageNote } from "./staging.js";
 
@@ -223,9 +226,8 @@ export async function curate(
   // Secret-scanner tuning from the brain config (#46): entropy detection + allowlist, off by
   // default. Loaded once here and applied to every candidate's secret gate.
   const secretOpts = scanOptions(config);
-  // Alias-map link (ADR-0031/0035) applied HERE, where every capture path (CLI capture/stage, MCP
-  // remember, reclassify) converges, so a linked source always files under its project instead of
-  // a `<owner>-<repo>/` folder. An explicitly stamped `project` (manifest or caller) wins.
+  // The project registry (ADR-0031/0035) is applied HERE, where every capture path (CLI
+  // capture/stage, MCP remember, reclassify) converges. See {@link resolveCandidateProject}.
   const aliasMap = await loadProjectAliasMap(brainDir);
 
   // Semantic dedup setup (ADR-0021), only when the flag is on. Resolve the embedder (unless one
@@ -246,7 +248,20 @@ export async function curate(
     if (semanticEmbedder) canonVectors = await loadVectors(brainDir);
   }
 
-  for (const candidate of candidates) {
+  for (const raw of candidates) {
+    // Allowlist (decision 2026-10-12): a populated registry refuses repos from orgs it doesn't know,
+    // so freelance or personal repos that happen to route here never reach the shared brain.
+    const project = resolveCandidateProject(raw, aliasMap);
+    if (!project && !registryAllows(raw.source, aliasMap)) {
+      result.rejected.push({
+        candidate: raw,
+        reason: "outside-registry",
+        drop: dropFor("outside-registry", { detail: ` (${raw.source})` }),
+      });
+      continue;
+    }
+    const candidate: NewNoteInput = project ? { ...raw, project } : withoutProject(raw);
+
     // Secret gate (#16): never stage a candidate carrying a credential. Reject before
     // assess/dedupe so a secret-bearing note is neither staged nor folded into `existing`.
     // Scan the WHOLE candidate — title, body, tags AND kind-specific fields — not just
@@ -314,14 +329,7 @@ export async function curate(
     // field the schema rejects) is dropped on its own rather than aborting the whole batch and
     // discarding every other valid note in the session (#88).
     try {
-      const linked =
-        candidate.project || !candidate.source
-          ? null
-          : projectForSource(candidate.source, aliasMap);
-      const note = await stageNote(
-        brainDir,
-        linked ? { ...candidate, project: linked } : candidate,
-      );
+      const note = await stageNote(brainDir, candidate);
       result.staged.push(note);
       // Fold into the existing set so later batch entries dedupe against it too.
       existing.push(note);
@@ -336,4 +344,28 @@ export async function curate(
   }
 
   return result;
+}
+
+/**
+ * The registry project a candidate files under, or null (it then waits in the review queue
+ * unassigned). With an empty registry the old behavior holds: a declared `project` is kept as-is.
+ * With a populated registry the registry is the authority: a declared name (manifest,
+ * `$COMMONWEALTH_PROJECT`, extractor) must match a project's id, customer or names, and a source
+ * must be one of a project's sources.
+ */
+export function resolveCandidateProject(
+  candidate: NewNoteInput,
+  aliasMap: ProjectAliasMap,
+): string | null {
+  if (candidate.project) {
+    const named = projectForName(candidate.project, aliasMap);
+    if (named) return named;
+    if (Object.keys(aliasMap).length === 0) return candidate.project;
+  }
+  return candidate.source ? projectForSource(candidate.source, aliasMap) : null;
+}
+
+function withoutProject(candidate: NewNoteInput): NewNoteInput {
+  const { project: _drop, ...rest } = candidate;
+  return rest;
 }

@@ -105,8 +105,8 @@ async function seedLinkedAndCommitted(opts: { customer?: string } = {}): Promise
   expect(porcelain()).toBe(""); // clean starting point
 }
 
-describe("adoptProject — one commit, retire the entry", () => {
-  it("stamps every linked note, makes ONE commit, removes the entry, keeps derived byte-identical", async () => {
+describe("adoptProject — one commit, keep the registry entry", () => {
+  it("stamps every linked note, makes ONE commit, keeps the entry, keeps derived byte-identical", async () => {
     await seedLinkedAndCommitted();
     const derivedBefore = await snapshotDerived();
     const commitsBefore = revCount();
@@ -116,14 +116,16 @@ describe("adoptProject — one commit, retire the entry", () => {
     expect(result.skipped).toBeUndefined();
     expect(result.adopted).toHaveLength(3);
     expect(result.committed).toBe(true);
-    expect(result.entryRemoved).toBe(true);
 
     // Every affected note now carries the project frontmatter.
     for (const n of await listNotes(brain)) {
       expect(n.frontmatter.project).toBe("acme-eng");
     }
-    // The alias entry is gone.
-    expect(await loadProjectAliasMap(brain)).toEqual({});
+    // The registry entry stays (ADR-0047): it files future captures and is the allowlist.
+    expect((await loadProjectAliasMap(brain))["acme-eng"]!.sources).toEqual([
+      "acme/api",
+      "acme/web",
+    ]);
     // Exactly one new commit, and the tree is clean afterward.
     expect(revCount()).toBe(commitsBefore + 1);
     expect(porcelain()).toBe("");
@@ -204,7 +206,7 @@ describe("adoptProject — conflict safety", () => {
   });
 });
 
-describe("adoptProject — safety refusals & keptSources", () => {
+describe("adoptProject — safety refusals", () => {
   it("refuses to run on a dirty worktree", async () => {
     await seedLinkedAndCommitted();
     await fs.writeFile(path.join(brain, "notes.txt"), "uncommitted change\n");
@@ -223,23 +225,6 @@ describe("adoptProject — safety refusals & keptSources", () => {
     await seedLinkedAndCommitted();
     const result = await adoptProject(brain, "does-not-exist");
     expect(result.skipped).toContain("no project");
-  });
-
-  it("keeps the entry for sources that had zero adopted notes", async () => {
-    await writeNote(brain, ws("Web note", "acme/web"));
-    // acme/empty is linked but has no notes.
-    await persistProjectAliasMap(brain, (m) =>
-      linkSources(m, "acme-eng", ["acme/web", "acme/empty"]),
-    );
-    await regenerateDerived(brain);
-    commitAll("seed");
-
-    const result = await adoptProject(brain, "acme-eng");
-    expect(result.adopted).toHaveLength(1);
-    expect(result.entryRemoved).toBe(false);
-    expect(result.keptSources).toEqual(["acme/empty"]);
-    // The map still carries the residual link, minus the adopted source.
-    expect((await loadProjectAliasMap(brain))["acme-eng"]).toEqual({ sources: ["acme/empty"] });
   });
 
   it("writes without committing on a non-git brain", async () => {

@@ -42,6 +42,17 @@ export async function captureSource(cwd: string): Promise<string | null> {
 }
 
 /**
+ * `$COMMONWEALTH_PROJECT`: the project a host says this session is about (Relay passes the vault
+ * project's name), or null. Matched against the registry's ids, customers and `names` in `curate`;
+ * it beats a manifest because the host knows the conversation, the cwd only knows the folder.
+ */
+export function declaredProject(): string | null {
+  const name = process.env.COMMONWEALTH_PROJECT?.trim();
+  // eslint-disable-next-line no-control-regex -- reject C0 controls + DEL, like projectIdError
+  return name && !/[\u0000-\u001f\u007f]/.test(name) ? name : null;
+}
+
+/**
  * The repo's identity slug (`owner/repo` from its git `origin`) — but ONLY when there is a real
  * git origin; `null` otherwise (no repo, or a repo without an origin). Unlike
  * {@link resolveProjectSource}, this never falls back to a basename, so callers can decide between

@@ -31,6 +31,7 @@ import {
   resolveContributorIdentity,
   resolveProjectManifest,
   captureSource,
+  declaredProject,
   setFeature,
   unlinkSources,
   buildIndex,
@@ -55,7 +56,7 @@ import {
 import { checkContradiction } from "./contradiction.js";
 import { reassignStagedContributor } from "./staging.js";
 import { selectRelevant, selectRelevantDiagnostics, type RelevantHit } from "./relevance.js";
-import { approve, approveAll, listPending, reject } from "./review.js";
+import { approve, approveAll, isUnassigned, listPending, reject } from "./review.js";
 import { promoteViaPr, reconcilePromoted, type PromoteSelection } from "./promote-pr.js";
 import { addAllow, addDeny, loadUserConfig } from "./scope.js";
 import type { AnnotatedCandidate } from "./verdict.js";
@@ -146,7 +147,7 @@ function usage(): void {
       "",
       "Usage:",
       "  commonwealth-curate list [--dir <brain>]",
-      "  commonwealth-curate approve <id...> [--dir <brain>]",
+      "  commonwealth-curate approve <id...> [--project <id>] [--dir <brain>]",
       "  commonwealth-curate reject <id...> [--dir <brain>]",
       "  commonwealth-curate approve-all [--dir <brain>]",
       "  commonwealth-curate promote-pr <id...> | --all [--dir <brain>]   open a promotion PR",
@@ -214,19 +215,24 @@ async function cmdList(dir: string): Promise<void> {
   // Clear those before listing, so `status`/`pending` reflect the real, post-merge queue.
   await reconcilePromoted(dir);
   const pending = await listPending(dir);
+  const aliasMap = await loadProjectAliasMap(dir);
   for (const note of pending) {
     const fm = note.frontmatter as unknown as Record<string, unknown>;
-    const annotation = pendingIntakeAnnotation(note.frontmatter) + pendingVerdictAnnotation(fm);
+    const unassigned = isUnassigned(note, aliasMap)
+      ? `  (no project, from ${note.frontmatter.source ?? "unknown"}: promote with --project <id>)`
+      : "";
+    const annotation =
+      pendingIntakeAnnotation(note.frontmatter) + pendingVerdictAnnotation(fm) + unassigned;
     console.log(
       `${note.frontmatter.id}  [${note.frontmatter.kind}]  ${note.frontmatter.title}${annotation}`,
     );
   }
 }
 
-async function cmdApprove(dir: string, ids: string[]): Promise<void> {
+async function cmdApprove(dir: string, ids: string[], project?: string): Promise<void> {
   if (ids.length === 0) throw new Error("approve requires at least one <id>");
   for (const id of ids) {
-    const canonPath = await approve(dir, id);
+    const canonPath = await approve(dir, id, project ? { project } : {});
     console.log(canonPath);
   }
 }
@@ -367,12 +373,12 @@ async function cmdStage(dir: string, args: string[]): Promise<void> {
   // Stamp provenance + project identity the SAME way `capture` does (the meeting feature and
   // `/commonwealth:remember` reach the brain through `stage`), so a staged note from a linked repo
   // carries its `project` and — once promoted — lands under `<project>/<kind>/` (ADR-0015/0031/0035).
-  // Precedence for the stamped project: manifest `project` → alias-map link (applied in `curate`).
+  // Precedence: `$COMMONWEALTH_PROJECT` → manifest `project` → registry link (applied in `curate`).
   const cwd = process.cwd();
   const source = (await captureSource(cwd)) ?? undefined;
   const manifest = await resolveProjectManifest(cwd);
   const stamp = manifest ? manifestStamp(manifest) : null;
-  const project = stamp?.project;
+  const project = declaredProject() ?? stamp?.project;
   if (source) candidate.source = source;
   if (project) candidate.project = project;
   if (stamp?.tag) {
@@ -575,11 +581,11 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
   // fallback resolves identity at read time). An explicit per-candidate `project` is preserved.
   const manifest = await resolveProjectManifest(cwd);
   const stamp = manifest ? manifestStamp(manifest) : null;
-  // Precedence for the stamped project: explicit per-candidate `project` → manifest `project` →
-  // alias-map link (ADR-0031, applied in `curate` so every capture path gets it).
+  // Precedence for the stamped project: explicit per-candidate `project` → `$COMMONWEALTH_PROJECT` →
+  // manifest `project` → registry link (ADR-0031, applied in `curate` so every capture path gets it).
   const stamped = candidates.map((c) => {
     const withSource = c.source ? c : { ...c, source };
-    const project = withSource.project ?? stamp?.project;
+    const project = withSource.project ?? declaredProject() ?? stamp?.project;
     const tags =
       stamp?.tag && !(withSource.tags ?? []).includes(stamp.tag)
         ? [...(withSource.tags ?? []), stamp.tag]
@@ -777,7 +783,7 @@ async function cmdFeature(dir: string, args: string[]): Promise<void> {
   // positionals are just the subcommand and flag name.
   const { positionals } = parseArgs({
     args,
-    options: { dir: { type: "string" } },
+    options: { dir: { type: "string" }, project: { type: "string" } },
     allowPositionals: true,
     strict: false,
   });
@@ -1248,16 +1254,6 @@ function renderAdopt(result: AdoptResult): number {
     }
   }
 
-  if (!result.dryRun) {
-    if (result.entryRemoved) {
-      console.log("Removed the now-redundant alias entry.");
-    } else if (result.keptSources.length > 0) {
-      console.log(
-        `Kept alias entry (sources with no adopted notes): ${result.keptSources.join(", ")}`,
-      );
-    }
-  }
-
   return 0;
 }
 
@@ -1493,7 +1489,11 @@ async function main(): Promise<void> {
       await cmdList(await requireBrain());
       break;
     case "approve":
-      await cmdApprove(await requireBrain(), positionals);
+      await cmdApprove(
+        await requireBrain(),
+        positionals,
+        typeof values.project === "string" ? values.project : undefined,
+      );
       break;
     case "reject":
       await cmdReject(await requireBrain(), positionals);
