@@ -323,6 +323,45 @@ describe("realDeps() receipt IO (#96) — saveReceipt / takeReceipt round-trip",
   });
 });
 
+describe("realDeps() cursor IO (#315) — readCursor / writeCursor round-trip", () => {
+  it("reads null for a session that never extracted", async () => {
+    expect(await realDeps().readCursor("sess-fresh")).toBeNull();
+  });
+
+  it("round-trips a cursor and advances it on a later write", async () => {
+    const deps = realDeps();
+    await deps.writeCursor("sess-A", { uuid: "u1", line: 3 });
+    expect(await deps.readCursor("sess-A")).toEqual({ uuid: "u1", line: 3 });
+
+    await deps.writeCursor("sess-A", { uuid: "u2", line: 7 });
+    expect(await deps.readCursor("sess-A")).toEqual({ uuid: "u2", line: 7 });
+
+    // A cwd-shaped key with slashes is sanitized to a safe filename, not an error.
+    await deps.writeCursor("/work/app", { uuid: null, line: 1 });
+    expect(await deps.readCursor("/work/app")).toEqual({ uuid: null, line: 1 });
+  });
+
+  it("never moves the cursor backwards — the loser of an overlapping write is dropped (#315)", async () => {
+    const deps = realDeps();
+    await deps.writeCursor("sess-B", { uuid: "u9", line: 10 });
+    // PreCompact and SessionEnd can overlap; whichever computed the SMALLER range loses, even if
+    // its write lands after the winner's — real file, real rename, not a mock.
+    await deps.writeCursor("sess-B", { uuid: "u4", line: 4 });
+    expect(await deps.readCursor("sess-B")).toEqual({ uuid: "u9", line: 10 });
+    // An equal line count is not an advance either — the stored cursor is left untouched.
+    await deps.writeCursor("sess-B", { uuid: "u9-again", line: 10 });
+    expect(await deps.readCursor("sess-B")).toEqual({ uuid: "u9", line: 10 });
+  });
+
+  it("independent session keys never contend", async () => {
+    const deps = realDeps();
+    await deps.writeCursor("sess-C1", { uuid: null, line: 2 });
+    await deps.writeCursor("sess-C2", { uuid: null, line: 5 });
+    expect(await deps.readCursor("sess-C1")).toEqual({ uuid: null, line: 2 });
+    expect(await deps.readCursor("sess-C2")).toEqual({ uuid: null, line: 5 });
+  });
+});
+
 describe("realDeps().extractCandidates hardening (#104)", () => {
   it("hard-kills a wedged extraction child and reports a loud timeout failure", async () => {
     // A `claude` stub that hangs forever: without the timeout, extractCandidates would never
@@ -331,7 +370,10 @@ describe("realDeps().extractCandidates hardening (#104)", () => {
     await fs.writeFile(stub, "#!/bin/sh\nexec sleep 600\n");
     await fs.chmod(stub, 0o755);
     const transcript = path.join(tmp, "t.jsonl");
-    await fs.writeFile(transcript, `${JSON.stringify({ role: "user", content: "hi" })}\n`);
+    await fs.writeFile(
+      transcript,
+      `${JSON.stringify({ role: "user", content: "hi there friend" })}\n`,
+    );
 
     // Force the legacy path so the hang stub isn't first hit by the `--json-schema` capability
     // probe (#196) — this test isolates the extraction timeout, not the probe.
@@ -625,9 +667,11 @@ describe("realDeps().capture (real curate binary over stdin)", () => {
   it("extracts from a multi-MB transcript without E2BIG — transcript goes on stdin, not argv (#84)", async () => {
     // A transcript larger than ARG_MAX (~1MB): if it were passed as a `claude -p` argv element
     // the spawn throws E2BIG and extraction silently returns []. Piping it on stdin must work.
+    // Sized to stay under the 2MB per-chunk cap (#315) so this proves stdin delivery in ONE host
+    // call — the chunking behavior itself has its own dedicated tests in extraction.test.ts.
     const transcriptPath = path.join(tmp, "transcript.jsonl");
     const bigLine = JSON.stringify({ role: "user", content: "x".repeat(2000) }) + "\n";
-    await fs.writeFile(transcriptPath, bigLine.repeat(1600)); // ~3.3 MB, > ARG_MAX
+    await fs.writeFile(transcriptPath, bigLine.repeat(700)); // ~1.4 MB: > ARG_MAX, < the 2MB cap
 
     // Stub `claude`: read stdin, and only emit a candidate if the transcript actually arrived
     // there (proving stdin delivery). If argv were used, the spawn would have E2BIG'd instead.

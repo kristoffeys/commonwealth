@@ -207,6 +207,7 @@ describe("sessionEnd", () => {
     expect(deps.extractCandidates).toHaveBeenCalledWith({
       transcriptPath: "/tmp/t.jsonl",
       cwd: "/work/acme/app",
+      cursor: null,
     });
     expect(deps.capture).toHaveBeenCalledWith("/brains/acme", "/work/acme/app", [
       { kind: "memory", title: "T", body: "B" },
@@ -625,6 +626,157 @@ describe("sessionEnd capture log wiring (#211)", () => {
     expect(recordCapture).toHaveBeenCalledOnce();
     const { result } = recordCapture.mock.calls[0][0] as { result: Record<string, unknown> };
     expect(result).toMatchObject({ skipped: true, reason: "out-of-scope" });
+  });
+});
+
+describe("sessionEnd incremental cursor (#315) and pre-model skip gates (#316)", () => {
+  it("reads the stored cursor and threads it into extractCandidates", async () => {
+    const deps = makeDeps({ readCursor: vi.fn(async () => ({ uuid: "u1", line: 3 })) });
+    await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" }, deps);
+    // Host-prefixed (#collision fix): a legacy hook payload with no `commonwealth_host` defaults to
+    // "claude", matching `captureWorkerHost`'s own default.
+    expect(deps.readCursor).toHaveBeenCalledWith("claude:/work/acme/app");
+    expect(deps.extractCandidates).toHaveBeenCalledWith({
+      transcriptPath: "/tmp/t.jsonl",
+      cwd: "/work/acme/app",
+      cursor: { uuid: "u1", line: 3 },
+    });
+  });
+
+  it("prefers the session id over cwd as the cursor key, matching the guard/capture-mark convention", async () => {
+    const readCursor = vi.fn(async () => null);
+    const deps = makeDeps({ readCursor });
+    await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl", session_id: "sess-9" },
+      deps,
+    );
+    expect(readCursor).toHaveBeenCalledWith("claude:sess-9");
+  });
+
+  it("prefixes the cursor key with the host so Claude and Codex sharing a cwd (no session_id) never collide (#collision fix)", async () => {
+    const readCursor = vi.fn(async () => null);
+    const deps = makeDeps({ readCursor });
+    await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/claude.jsonl" }, deps);
+    await sessionEnd(
+      {
+        cwd: "/work/acme/app",
+        transcript_path: "/tmp/codex.jsonl",
+        commonwealth_host: "codex",
+      },
+      deps,
+    );
+    expect(readCursor).toHaveBeenNthCalledWith(1, "claude:/work/acme/app");
+    expect(readCursor).toHaveBeenNthCalledWith(2, "codex:/work/acme/app");
+  });
+
+  it("advances the cursor after a successful capture", async () => {
+    const writeCursor = vi.fn(async () => {});
+    const deps = makeDeps({
+      extractCandidates: vi.fn(async () => ({
+        ok: true,
+        candidates: [{ kind: "memory", title: "T", body: "B" }],
+        cursor: { uuid: "u2", line: 4 },
+      })),
+      writeCursor,
+    });
+    await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" }, deps);
+    expect(writeCursor).toHaveBeenCalledWith("claude:/work/acme/app", { uuid: "u2", line: 4 });
+  });
+
+  it("does NOT advance the cursor when the curate runtime fails (failure must not skip content)", async () => {
+    const writeCursor = vi.fn(async () => {});
+    const deps = makeDeps({
+      extractCandidates: vi.fn(async () => ({
+        ok: true,
+        candidates: [{ kind: "memory", title: "T", body: "B" }],
+        cursor: { uuid: "u2", line: 4 },
+      })),
+      capture: vi.fn(async () => ({
+        captured: 0,
+        failed: true,
+        reason: "curate-runtime",
+        code: 1,
+      })),
+      writeCursor,
+    });
+    await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" }, deps);
+    expect(writeCursor).not.toHaveBeenCalled();
+  });
+
+  it("does NOT advance the cursor on an extractor failure", async () => {
+    const writeCursor = vi.fn(async () => {});
+    const deps = makeDeps({
+      extractCandidates: vi.fn(async () => ({ ok: false, reason: "extractor-timeout" })),
+      writeCursor,
+    });
+    await sessionEnd({ cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" }, deps);
+    expect(writeCursor).not.toHaveBeenCalled();
+  });
+
+  it("falls back to full-transcript extraction (cursor: null) when no cursor dep is wired (older deps)", async () => {
+    const deps = makeDeps(); // no readCursor/writeCursor overrides
+    const result = await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
+      deps,
+    );
+    expect(deps.extractCandidates).toHaveBeenCalledWith({
+      transcriptPath: "/tmp/t.jsonl",
+      cwd: "/work/acme/app",
+      cursor: null,
+    });
+    // No writeCursor dep at all — sessionEnd must not throw, and the normal capture still lands.
+    expect(result).toEqual({
+      captured: 1,
+      notes: [{ kind: "memory", title: "T", promoted: true }],
+    });
+  });
+
+  it("a skip (#316) never calls capture, still advances the cursor, and logs the specific reason", async () => {
+    const writeCursor = vi.fn(async () => {});
+    const recordCapture = vi.fn(async () => {});
+    const deps = makeDeps({
+      extractCandidates: vi.fn(async () => ({
+        ok: true,
+        candidates: [],
+        skipped: true,
+        skipReason: "no-user-prose",
+        cursor: { uuid: "u3", line: 5 },
+      })),
+      writeCursor,
+    });
+    const result = await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
+      { ...deps, recordCapture },
+    );
+    expect(result).toEqual({ skipped: true, reason: "no-user-prose" });
+    expect(deps.capture).not.toHaveBeenCalled();
+    expect(writeCursor).toHaveBeenCalledWith("claude:/work/acme/app", { uuid: "u3", line: 5 });
+    expect(recordCapture).toHaveBeenCalledOnce();
+    const { result: logged } = recordCapture.mock.calls[0][0] as {
+      result: Record<string, unknown>;
+    };
+    // Reuses the existing "skipped" capture-log mapping (outcome=skipped, reason=<the gate reason>).
+    expect(logged).toMatchObject({ skipped: true, reason: "no-user-prose" });
+  });
+
+  it("the other skip reason (#316b, already-remembered) is threaded through the same path", async () => {
+    const writeCursor = vi.fn(async () => {});
+    const deps = makeDeps({
+      extractCandidates: vi.fn(async () => ({
+        ok: true,
+        candidates: [],
+        skipped: true,
+        skipReason: "already-remembered",
+        cursor: { uuid: "u4", line: 6 },
+      })),
+      writeCursor,
+    });
+    const result = await sessionEnd(
+      { cwd: "/work/acme/app", transcript_path: "/tmp/t.jsonl" },
+      deps,
+    );
+    expect(result).toEqual({ skipped: true, reason: "already-remembered" });
+    expect(writeCursor).toHaveBeenCalledWith("claude:/work/acme/app", { uuid: "u4", line: 6 });
   });
 });
 
