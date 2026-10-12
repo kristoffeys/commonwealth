@@ -80,6 +80,7 @@ const KEY_ORDER = [
   "author",
   "author_ref",
   "attribution_key",
+  "attribution_aliases",
   "email",
   "source",
   "project",

@@ -120,6 +120,7 @@ function matchesIdentity(note: Note, identity: ContributorIdentity): boolean {
   if (note.frontmatter.kind !== "person") return false;
   const fm = note.frontmatter;
   if (fm.attribution_key === identity.key) return true;
+  if (fm.attribution_aliases?.includes(identity.key)) return true;
   return Boolean(identity.email && fm.email?.toLowerCase() === identity.email);
 }
 
@@ -293,4 +294,61 @@ export async function attributeNoteInputs(
     };
   });
   return { personId, candidates: attributed };
+}
+
+/**
+ * Merge contributor person `dropId` into `keepId`: one human who wrote under two identities (two
+ * emails). `dropId`'s keys become `keepId`'s `attribution_aliases`, so the next capture under
+ * either email attributes to `keepId`; every note's `author_ref`, `relates` and `deciders` move
+ * over; the `dropId` note is deleted. Returns how many notes were rewritten (the person note
+ * itself excluded). Throws when either id is not a person note.
+ */
+export async function mergePeople(
+  brainDir: string,
+  keepId: string,
+  dropId: string,
+): Promise<{ rewritten: number }> {
+  if (keepId === dropId) throw new Error("merge needs two different people");
+  const notes = await listNotes(brainDir);
+  const person = (id: string): Note => {
+    const n = notes.find((x) => x.frontmatter.id === id);
+    if (!n || n.frontmatter.kind !== "person") throw new Error(`no person note "${id}"`);
+    return n;
+  };
+  const keep = person(keepId);
+  const drop = person(dropId);
+  type PersonFm = { attribution_key?: string; attribution_aliases?: string[] };
+  const keepFm = keep.frontmatter as PersonFm;
+  const dropFm = drop.frontmatter as PersonFm;
+  const aliases = [
+    ...new Set([
+      ...(keepFm.attribution_aliases ?? []),
+      ...(dropFm.attribution_key ? [dropFm.attribution_key] : []),
+      ...(dropFm.attribution_aliases ?? []),
+    ]),
+  ].filter((k) => k !== keepFm.attribution_key);
+  await overwriteNote(brainDir, {
+    ...keep,
+    frontmatter: { ...keep.frontmatter, attribution_aliases: aliases } as Note["frontmatter"],
+  });
+
+  const swap = (ids: string[] | undefined): string[] | undefined =>
+    ids ? [...new Set(ids.map((id) => (id === dropId ? keepId : id)))] : ids;
+  let rewritten = 0;
+  for (const n of notes) {
+    if (n.frontmatter.id === keepId || n.frontmatter.id === dropId) continue;
+    const fm = n.frontmatter as unknown as Record<string, unknown>;
+    const touches =
+      fm.author_ref === dropId ||
+      (fm.relates as string[] | undefined)?.includes(dropId) ||
+      (Array.isArray(fm.deciders) && (fm.deciders as string[]).includes(dropId));
+    if (!touches) continue;
+    const next: Record<string, unknown> = { ...fm, relates: swap(fm.relates as string[]) };
+    if (fm.author_ref === dropId) next.author_ref = keepId;
+    if (Array.isArray(fm.deciders)) next.deciders = swap(fm.deciders as string[]);
+    await overwriteNote(brainDir, { ...n, frontmatter: next as unknown as Note["frontmatter"] });
+    rewritten += 1;
+  }
+  await fs.rm(path.join(brainDir, drop.path));
+  return { rewritten };
 }
