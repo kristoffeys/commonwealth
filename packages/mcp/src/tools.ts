@@ -139,8 +139,8 @@ export async function remember(
   // <project>/<kind>/ like hook-captured notes. Best-effort: unresolved → unattributed.
   const source = (await captureSource(process.cwd())) ?? undefined;
   // Declared engagement identity (ADR-0031): a `.commonwealth/project.json` manifest at/above the
-  // MCP process cwd stamps `project` + a `customer:<slug>` tag; absent → identity resolves from the
-  // alias map / source-as-singleton at read time.
+  // MCP process cwd stamps `project` + a `customer:<slug>` tag; absent → `curate` links the source
+  // through the alias map, else the note files under its source.
   const manifest = await resolveProjectManifest(process.cwd());
   const stamp = manifest ? manifestStamp(manifest) : null;
   const noteTags = tags ?? [];

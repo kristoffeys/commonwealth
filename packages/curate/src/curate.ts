@@ -6,7 +6,9 @@ import {
   hasSecrets,
   listNotes,
   loadBrainConfig,
+  loadProjectAliasMap,
   loadVectors,
+  projectForSource,
   scanOptions,
   type DropClassification,
   type Embedder,
@@ -221,6 +223,10 @@ export async function curate(
   // Secret-scanner tuning from the brain config (#46): entropy detection + allowlist, off by
   // default. Loaded once here and applied to every candidate's secret gate.
   const secretOpts = scanOptions(config);
+  // Alias-map link (ADR-0031/0035) applied HERE, where every capture path (CLI capture/stage, MCP
+  // remember, reclassify) converges, so a linked source always files under its project instead of
+  // a `<owner>-<repo>/` folder. An explicitly stamped `project` (manifest or caller) wins.
+  const aliasMap = await loadProjectAliasMap(brainDir);
 
   // Semantic dedup setup (ADR-0021), only when the flag is on. Resolve the embedder (unless one
   // is injected) and load canon vectors once. Resolution is guarded: an absent/misconfigured
@@ -308,7 +314,14 @@ export async function curate(
     // field the schema rejects) is dropped on its own rather than aborting the whole batch and
     // discarding every other valid note in the session (#88).
     try {
-      const note = await stageNote(brainDir, candidate);
+      const linked =
+        candidate.project || !candidate.source
+          ? null
+          : projectForSource(candidate.source, aliasMap);
+      const note = await stageNote(
+        brainDir,
+        linked ? { ...candidate, project: linked } : candidate,
+      );
       result.staged.push(note);
       // Fold into the existing set so later batch entries dedupe against it too.
       existing.push(note);

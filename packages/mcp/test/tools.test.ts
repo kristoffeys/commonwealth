@@ -203,6 +203,26 @@ describe("remember", () => {
     expect(dup.reason).toBe("duplicate");
   });
 
+  it("files a note from a linked source under its alias-map project, not <owner>-<repo>/", async () => {
+    const { linkSources, persistProjectAliasMap } = await import("@cmnwlth/core");
+    await persistProjectAliasMap(brainDir, (map) =>
+      linkSources(map, "acme", ["acme/shop-backend"]),
+    );
+    vi.stubEnv("COMMONWEALTH_SOURCE", "acme/shop-backend");
+
+    const result = await remember(brainDir, {
+      kind: "memory",
+      title: "Orders sync nightly",
+      body: "The ERP pulls open orders from the shop backend every night at two.",
+    });
+
+    expect(result.status).toBe("promoted");
+    expect(result.path).toMatch(/^acme\/memory\//);
+    const parsed = await readNote(brainDir, result.path!);
+    expect(parsed.frontmatter.source).toBe("acme/shop-backend");
+    expect(parsed.frontmatter.project).toBe("acme");
+  });
+
   it("makes the new note findable via a subsequent search (index refresh)", async () => {
     // Prime the index so it already exists before the write — proves remember rebuilds it.
     expect(await searchNotes(brainDir, { query: "quokka" })).toEqual([]);

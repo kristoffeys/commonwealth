@@ -23,7 +23,6 @@ import {
   NOTE_KINDS,
   type NoteKind,
   persistProjectAliasMap,
-  projectForSource,
   projectIdError,
   refreshBrainStatus,
   regenerateDerived,
@@ -368,14 +367,12 @@ async function cmdStage(dir: string, args: string[]): Promise<void> {
   // Stamp provenance + project identity the SAME way `capture` does (the meeting feature and
   // `/commonwealth:remember` reach the brain through `stage`), so a staged note from a linked repo
   // carries its `project` and — once promoted — lands under `<project>/<kind>/` (ADR-0015/0031/0035).
-  // Precedence for the stamped project: manifest `project` → alias-map link → undefined.
+  // Precedence for the stamped project: manifest `project` → alias-map link (applied in `curate`).
   const cwd = process.cwd();
   const source = (await captureSource(cwd)) ?? undefined;
   const manifest = await resolveProjectManifest(cwd);
   const stamp = manifest ? manifestStamp(manifest) : null;
-  const aliasMap = await loadProjectAliasMap(dir);
-  const linkedProject = source ? (projectForSource(source, aliasMap) ?? undefined) : undefined;
-  const project = stamp?.project ?? linkedProject;
+  const project = stamp?.project;
   if (source) candidate.source = source;
   if (project) candidate.project = project;
   if (stamp?.tag) {
@@ -578,19 +575,11 @@ async function cmdCapture(explicitDir: string | undefined, args: string[]): Prom
   // fallback resolves identity at read time). An explicit per-candidate `project` is preserved.
   const manifest = await resolveProjectManifest(cwd);
   const stamp = manifest ? manifestStamp(manifest) : null;
-  // The alias map (ADR-0031) is the retroactive identity tier: a source LINKED into a project resolves
-  // to that project even without a manifest, so the captured note gets `project` stamped and — under the
-  // consolidated layout (ADR-0035) — lands under `<project>/<kind>/`. Precedence for the stamped
-  // project: explicit per-candidate `project` → manifest `project` → alias-map link → undefined.
-  const aliasMap = await loadProjectAliasMap(dir);
+  // Precedence for the stamped project: explicit per-candidate `project` → manifest `project` →
+  // alias-map link (ADR-0031, applied in `curate` so every capture path gets it).
   const stamped = candidates.map((c) => {
     const withSource = c.source ? c : { ...c, source };
-    const src = withSource.source;
-    const linkedProject =
-      typeof src === "string" && src.length > 0
-        ? (projectForSource(src, aliasMap) ?? undefined)
-        : undefined;
-    const project = withSource.project ?? stamp?.project ?? linkedProject;
+    const project = withSource.project ?? stamp?.project;
     const tags =
       stamp?.tag && !(withSource.tags ?? []).includes(stamp.tag)
         ? [...(withSource.tags ?? []), stamp.tag]
