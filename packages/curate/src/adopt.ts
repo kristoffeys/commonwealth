@@ -8,11 +8,9 @@ import {
   listNotes,
   loadProjectAliasMap,
   overwriteNote,
-  persistProjectAliasMap,
   regenerateDerived,
   RUNTIME_STATE_REL_PATHS,
   slugify,
-  unlinkSources,
   type Note,
 } from "@cmnwlth/core";
 import { listStaged } from "./staging.js";
@@ -26,9 +24,9 @@ const RUNTIME_EXCLUDES = RUNTIME_STATE_REL_PATHS.map((p) => `:(exclude)${p}`);
  * `project adopt` (ADR-0031 / #241) — the deliberate promotion of a PROVEN alias-map link into
  * permanent note frontmatter. #239 gives two identity tiers: save-time `project` frontmatter
  * (primary — new notes are self-contained) and the read-time alias map (retroactive — links
- * pre-existing notes in one reversible line). Adoption makes the map strictly transitional: once a
- * link is trusted, the identity moves ONTO the notes and the map entry retires, keeping the mental
- * model simple ("a note carries its project").
+ * pre-existing notes in one reversible line). Adoption moves a trusted link's identity ONTO the
+ * notes ("a note carries its project"); the map entry stays, because since ADR-0047 the registry
+ * also files future captures and is the allowlist.
  *
  * It is a conscious canon edit, same moral category as `consolidate`: opt-in, atomic (one commit),
  * run at a chosen quiet moment on a proven link — NOT the routine linking mechanism #239 rejected
@@ -41,9 +39,6 @@ const RUNTIME_EXCLUDES = RUNTIME_STATE_REL_PATHS.map((p) => `:(exclude)${p}`);
  *   `project` is left untouched and reported as a conflict (human eyes needed).
  * - **One reviewable commit** (git brains) naming the project + note count, with the derived index
  *   regenerated in the same pass — refuses to run on a dirty worktree. Non-git brains: writes only.
- * - **Retires the redundant entry.** Sources with ≥1 adopted note are dropped from the map (their
- *   notes now carry the project); sources with zero adopted notes are KEPT (the link still resolves
- *   future no-project captures). The whole entry goes when nothing is left to keep.
  */
 
 /** A note left untouched because its frontmatter already declares a different project. */
@@ -90,10 +85,6 @@ export interface AdoptResult {
   committed: boolean;
   /** Short sha of the adoption commit, when one was made. */
   commit?: string;
-  /** True when the alias entry was removed entirely (no zero-adopted sources remained). */
-  entryRemoved: boolean;
-  /** Sources retained in the alias entry (had zero adopted notes; the link still carries value). */
-  keptSources: string[];
   /** Set (with a reason) when the pass did nothing: no such project, dirty worktree, or lock held. */
   skipped?: string;
 }
@@ -191,8 +182,6 @@ export async function adoptProject(
     conflicts: [],
     stagedMatches: 0,
     committed: false,
-    entryRemoved: false,
-    keptSources: [],
     skipped: reason,
   });
 
@@ -268,7 +257,7 @@ export async function adoptProject(
     };
 
     if (dryRun) {
-      return { ...base, committed: false, entryRemoved: false, keptSources: [] };
+      return { ...base, committed: false };
     }
 
     // Stamp each adoptable note in place: set `project`, and add the `customer:<slug>` tag when the
@@ -284,16 +273,8 @@ export async function adoptProject(
       });
     }
 
-    // Retire the now-redundant part of the alias entry. A source with ≥1 adopted note is redundant
-    // (its notes carry the project via frontmatter, which wins); a source with zero adopted notes
-    // still resolves future no-project captures, so keep it. Drop the redundant ones; unlinkSources
-    // deletes the whole entry when none remain.
-    const adoptedSources = entry.sources.filter((s) => perSource.get(s)!.adopted > 0);
-    const keptSources = entry.sources.filter((s) => perSource.get(s)!.adopted === 0);
-    if (adoptedSources.length > 0) {
-      await persistProjectAliasMap(brainDir, (m) => unlinkSources(m, projectId, adoptedSources));
-    }
-    const entryRemoved = keptSources.length === 0;
+    // The entry stays: the registry is permanent (ADR-0047). It files future captures from these
+    // sources and is the allowlist, so retiring it would refuse or queue the next note.
 
     // Regenerate derived in the same pass. The output is byte-identical to before the adoption:
     // the router grouped these notes by the alias tier, now it groups them by the frontmatter tier,
@@ -315,8 +296,6 @@ export async function adoptProject(
       ...base,
       committed,
       ...(commit ? { commit } : {}),
-      entryRemoved,
-      keptSources,
     };
   } finally {
     if (release) await release();

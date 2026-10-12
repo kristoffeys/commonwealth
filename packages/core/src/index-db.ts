@@ -1120,16 +1120,12 @@ function commonwealthMarkdown(notes: Note[], aliasMap: ProjectAliasMap): string 
     // engagement — surface each as a provenance subhead; otherwise render flat (unchanged default).
     const sources = [...new Set(group.map(sourceOf))].sort(bySourceLabel);
 
-    // Link to each source's MOC (P3): the hub → per-project `Spardex`-style node → notes. Skip the
-    // unattributed bucket, which carries no MOC.
-    const mocLinks = sources
-      .filter((s) => s !== UNATTRIBUTED)
-      .map((s) => {
-        const name = projectDisplayName(project === UNATTRIBUTED ? s : project, aliasMap);
-        return `[[${sourceSegment(s)}/${name}|${name}]]`;
-      });
-    if (mocLinks.length > 0) {
-      lines.push(`🗂 ${mocLinks.join(" · ")}`);
+    // Link to the project's one MOC (P3), at the same `<project-segment>/<Name>.md` the MOC planner
+    // writes (ADR-0035) — not one link per source, which pointed at folders a relayout emptied.
+    // The unattributed bucket carries no MOC.
+    if (project !== UNATTRIBUTED) {
+      const name = projectDisplayName(project, aliasMap);
+      lines.push(`🗂 [[${sourceSegment(project)}/${name}|${name}]]`);
       lines.push("");
     }
 

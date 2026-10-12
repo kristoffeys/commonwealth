@@ -1254,16 +1254,6 @@ function renderAdopt(result: AdoptResult): number {
     }
   }
 
-  if (!result.dryRun) {
-    if (result.entryRemoved) {
-      console.log("Removed the now-redundant alias entry.");
-    } else if (result.keptSources.length > 0) {
-      console.log(
-        `Kept alias entry (sources with no adopted notes): ${result.keptSources.join(", ")}`,
-      );
-    }
-  }
-
   return 0;
 }
 

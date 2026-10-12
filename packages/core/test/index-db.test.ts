@@ -342,6 +342,20 @@ describe("project identity grouping (ADR-0031)", () => {
     expect(md).toContain("Kickoff scope");
   });
 
+  it("links the project's one MOC from the hub, not one MOC per source", async () => {
+    await seedTwoSources();
+    await persistProjectAliasMap(dir, (m) =>
+      linkSources(m, "acme-engagement", ["weareantenna/acme-website", "Acme Website"]),
+    );
+    await regenerateDerived(dir);
+    const md = await fs.readFile(path.join(dir, "COMMONWEALTH.md"), "utf8");
+    const mocLines = md.split("\n").filter((l) => l.startsWith("🗂"));
+    expect(mocLines).toEqual(["🗂 [[acme-engagement/Acme-engagement|Acme-engagement]]"]);
+    await expect(
+      fs.access(path.join(dir, "acme-engagement", "Acme-engagement.md")),
+    ).resolves.toBeUndefined();
+  });
+
   it("restores two sections after unlinking (derived-only, no note edits)", async () => {
     await seedTwoSources();
     await persistProjectAliasMap(dir, (m) =>
