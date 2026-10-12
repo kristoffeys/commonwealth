@@ -656,6 +656,95 @@ describe("realDeps().capture (real curate binary over stdin)", () => {
   });
 });
 
+describe("realDeps().getExistingNotes (real curate binary, #317)", () => {
+  it("splits a kebab-case project directory into words so it actually matches (#317)", async () => {
+    const brain = path.join(tmp, "brain");
+    await initBrain(brain);
+    process.env.COMMONWEALTH_AUTHOR = "Hook Author";
+    process.env.COMMONWEALTH_AUTHOR_EMAIL = "hook@example.com";
+    const deps = realDeps({ curateEntry });
+
+    // "team-second-brain" as ONE quoted phrase (the pre-fix behavior) never matches a title whose
+    // words appear in a different order/adjacency — this is the realistic case the naive
+    // `path.basename(cwd)` query was silently dead for. Splitting the dir name into words lets the
+    // core query engine's OR fallback (#209) find it via "second"/"brain".
+    await deps.capture(brain, brain, [
+      { kind: "memory", title: "Second brain onboarding notes", body: "Read this first." },
+    ]);
+
+    const project = path.join(tmp, "team-second-brain");
+    await fs.mkdir(project, { recursive: true });
+    const notes = await deps.getExistingNotes(brain, project);
+
+    expect(Array.isArray(notes)).toBe(true);
+    expect(notes.length).toBeGreaterThan(0);
+    expect(notes[0]).toMatchObject({ title: "Second brain onboarding notes", kind: "memory" });
+    expect(typeof notes[0].id).toBe("string");
+  });
+
+  it("fails open to [] when the brain has no notes or the lookup errors, never throwing (#317)", async () => {
+    const brain = path.join(tmp, "empty-brain");
+    await initBrain(brain);
+    const deps = realDeps({ curateEntry });
+    const project = path.join(tmp, "some-project");
+    await fs.mkdir(project, { recursive: true });
+
+    await expect(deps.getExistingNotes(brain, project)).resolves.toEqual([]);
+
+    // A curate runtime that can't even spawn (bad entry) must degrade to [] too — extraction then
+    // proceeds exactly as it did before #317.
+    const brokenDeps = realDeps({ curateEntry: path.join(tmp, "does-not-exist.js") });
+    await expect(brokenDeps.getExistingNotes(brain, project)).resolves.toEqual([]);
+
+    // Exit 0 with unparseable stdout must also degrade to [] (the JSON.parse catch), not throw.
+    const garbageEntry = path.join(tmp, "garbage-curate.mjs");
+    await fs.writeFile(garbageEntry, "process.stdout.write('not json');\n");
+    const garbageDeps = realDeps({ curateEntry: garbageEntry });
+    await expect(garbageDeps.getExistingNotes(brain, project)).resolves.toEqual([]);
+  });
+
+  it("queries with the user's own words only — no isMeta turns, no stopwords, Codex too (#321)", async () => {
+    const brain = path.join(tmp, "argv-brain");
+    await initBrain(brain);
+    const argvFile = path.join(tmp, "argv.json");
+    const spyEntry = path.join(tmp, "spy-curate.mjs");
+    await fs.writeFile(
+      spyEntry,
+      `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv));\nprocess.stdout.write("[]");\n`,
+    );
+    const deps = realDeps({ curateEntry: spyEntry });
+    const project = path.join(tmp, "proj");
+    await fs.mkdir(project, { recursive: true });
+    const queryFor = async (lines) => {
+      const transcript = path.join(tmp, "t.jsonl");
+      await fs.writeFile(transcript, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+      await deps.getExistingNotes(brain, project, transcript);
+      const argv = JSON.parse(await fs.readFile(argvFile, "utf8"));
+      return argv[argv.indexOf("--query") + 1];
+    };
+
+    const claudeQuery = await queryFor([
+      { type: "user", isMeta: true, message: { role: "user", content: "metaleakword" } },
+      { type: "user", message: { role: "user", content: "the migration for this ledger" } },
+    ]);
+    expect(claudeQuery).toContain("migration");
+    expect(claudeQuery).toContain("ledger");
+    expect(claudeQuery).not.toMatch(/metaleakword|\bthe\b|\bfor\b|\bthis\b/);
+
+    const codexQuery = await queryFor([
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "rotate webhook secrets" }],
+        },
+      },
+    ]);
+    expect(codexQuery).toContain("webhook");
+  });
+});
+
 describe("SessionEnd detached capture worker (#190 — survives `/clear` teardown)", () => {
   const hooksDir = fileURLToPath(new URL("../hooks", import.meta.url));
 

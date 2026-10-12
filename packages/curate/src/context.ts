@@ -38,3 +38,23 @@ export function formatContext(notes: Note[]): string {
   }
   return lines.join("\n");
 }
+
+/** One compact entry in {@link formatCompactContext} — the extraction prompt's "existing notes" hint. */
+export interface CompactNote {
+  id: string;
+  title: string;
+  kind: Note["frontmatter"]["kind"];
+}
+
+/**
+ * Render selected notes as the compact `{ id, title, kind }` shape consumed by the extraction
+ * prompt's "existing notes" hint (#317) — deliberately NOT the markdown injection format, since
+ * that carries a body snippet the prompt doesn't need and would only cost byte budget.
+ */
+export function formatCompactContext(notes: Note[]): CompactNote[] {
+  return notes.map((note) => ({
+    id: note.frontmatter.id,
+    title: note.frontmatter.title,
+    kind: note.frontmatter.kind,
+  }));
+}
