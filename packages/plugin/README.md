@@ -50,7 +50,10 @@ agents/curator.md            @commonwealth:curator advisory review/consolidation
 
 ## Runtime (vendored when present; portable npx fallback)
 
-The hooks first use `vendor/curate/index.js` when a same-platform bundle is present. Git
+The hooks first use `vendor/curate/index.js` when a same-platform bundle is present and its
+`vendor/VERSION` (written by `pnpm --filter ./packages/plugin bundle`) matches the plugin version;
+a bundle for another version is ignored, so a local directory-marketplace install never runs a
+stale build. Git
 marketplace installs do not currently include that platform-local tree: it contains
 `better-sqlite3`'s native binary, so committing one release runner's build would break other
 operating systems/architectures. They therefore use the published package via

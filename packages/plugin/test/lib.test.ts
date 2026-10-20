@@ -16,6 +16,7 @@ import {
   parseCaptureLines,
   promptCaptureIntervalMs,
   resolveSyncRuntime,
+  resolveVendored,
   sessionEnd,
   sessionStart,
   shouldCaptureNow,
@@ -1196,6 +1197,32 @@ describe("resolveSyncRuntime (ADR-0032, mirrors resolveCurateRuntime)", () => {
     expect(rt.kind).toBe("npx");
     expect(rt.command).toBe("npx");
     expect(rt.args).toEqual(["-y", "@cmnwlth/sync@9.9.9"]);
+  });
+});
+
+describe("resolveVendored: a stale vendor/ falls back to the pinned npx runtime", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "cw-vendor-"));
+    await fs.mkdir(path.join(root, ".claude-plugin"));
+    await fs.writeFile(path.join(root, ".claude-plugin", "plugin.json"), '{"version":"0.8.0"}');
+    await fs.mkdir(path.join(root, "vendor", "curate"), { recursive: true });
+    await fs.writeFile(path.join(root, "vendor", "curate", "index.js"), "");
+  });
+  afterEach(() => fs.rm(root, { recursive: true, force: true }));
+
+  it("uses the entry when vendor/VERSION matches the plugin version", async () => {
+    await fs.writeFile(path.join(root, "vendor", "VERSION"), "0.8.0\n");
+    expect(resolveVendored("curate", root)).toBe(path.join(root, "vendor", "curate", "index.js"));
+  });
+
+  it("ignores a vendor/ bundled for another version", async () => {
+    await fs.writeFile(path.join(root, "vendor", "VERSION"), "0.5.2\n");
+    expect(resolveVendored("curate", root)).toBeNull();
+  });
+
+  it("ignores a vendor/ without a VERSION stamp (bundled before the stamp existed)", () => {
+    expect(resolveVendored("curate", root)).toBeNull();
   });
 });
 

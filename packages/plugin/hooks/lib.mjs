@@ -27,7 +27,7 @@
 //   readCaptureMark(key)               -> number | null    (last prompt-capture ts for a session)
 //   writeCaptureMark(key, ts)          -> void             (record a prompt-capture ts; #194)
 
-import { existsSync, promises as fs } from "node:fs";
+import { existsSync, readFileSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1287,20 +1287,29 @@ async function run(cmd, args, { input, cwd, env, timeoutMs } = {}) {
  * @returns {object}            The `deps` object matching the contract at the top.
  */
 /**
- * The plugin's vendored curate entry (`<pluginRoot>/vendor/curate/index.js`), or null when absent.
- * When present it is the fast path for {@link realDeps} — a direct `node <entry>` with no `npx -y`
- * registry resolution — which is what makes the per-turn UserPromptSubmit hook viable (#194).
+ * The plugin's vendored entry for `pkg` (`<pluginRoot>/vendor/<pkg>/index.js`), or null when absent
+ * or stale. When present it is the fast path for {@link realDeps} — a direct `node <entry>` with no
+ * `npx -y` registry resolution — which is what makes the per-turn UserPromptSubmit hook viable (#194).
+ *
+ * `vendor/` is gitignored and platform-local, so a directory-marketplace install copies whatever the
+ * checkout last bundled. It counts only when `vendor/VERSION` (written by scripts/bundle.mjs) equals
+ * the plugin's own version; otherwise the version-pinned npx runtime runs. A bundle from 15 Sep kept
+ * shipping inside 0.7.0 and silently skipped every capture fix since (ADR-0047's registry gate).
  */
-function resolveVendoredCurate() {
+// ponytail: a version match, not a content hash. Ceiling: source changes without a version bump
+// still run the older bundle until `pnpm --filter ./packages/plugin bundle` runs again.
+export function resolveVendored(
+  pkg,
+  pluginRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), ".."),
+) {
   try {
-    const entry = path.join(
-      path.dirname(fileURLToPath(import.meta.url)),
-      "..",
-      "vendor",
-      "curate",
-      "index.js",
+    const entry = path.join(pluginRoot, "vendor", pkg, "index.js");
+    if (!existsSync(entry)) return null;
+    const bundled = readFileSync(path.join(pluginRoot, "vendor", "VERSION"), "utf8").trim();
+    const { version } = JSON.parse(
+      readFileSync(path.join(pluginRoot, ".claude-plugin", "plugin.json"), "utf8"),
     );
-    return existsSync(entry) ? entry : null;
+    return bundled === version ? entry : null;
   } catch {
     return null;
   }
@@ -1319,7 +1328,7 @@ export function resolveCurateRuntime(overrides = {}) {
   const hasExplicitEntry = Object.prototype.hasOwnProperty.call(overrides, "curateEntry");
   const explicitEntry = overrides.curateEntry;
   // An explicit null disables vendor resolution in tests that exercise the npx fallback.
-  const vendoredEntry = hasExplicitEntry ? explicitEntry : resolveVendoredCurate();
+  const vendoredEntry = hasExplicitEntry ? explicitEntry : resolveVendored("curate");
   if (vendoredEntry) {
     const kind = hasExplicitEntry ? "entry" : "vendored";
     return {
@@ -1341,26 +1350,6 @@ export function resolveCurateRuntime(overrides = {}) {
 }
 
 /**
- * The plugin's vendored sync entry (`<pluginRoot>/vendor/sync/index.js`), or null when absent. Same
- * fast path as {@link resolveVendoredCurate}: a direct `node <entry> sync --dir <brain>` with no
- * `npx -y` registry resolution. A bare git-clone install has no `vendor/`, so we fall back to npx.
- */
-function resolveVendoredSync() {
-  try {
-    const entry = path.join(
-      path.dirname(fileURLToPath(import.meta.url)),
-      "..",
-      "vendor",
-      "sync",
-      "index.js",
-    );
-    return existsSync(entry) ? entry : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Resolve the sync-once command the daemonless lifecycle hooks run (ADR-0032), mirroring
  * {@link resolveCurateRuntime}'s vendored → npx discipline (ADR-0026). The returned `args` are the
  * BASE invocation (the entry / package); callers append the subcommand + `--dir <brain>`. Reusing
@@ -1374,7 +1363,7 @@ export function resolveSyncRuntime(overrides = {}) {
   const nodeBin = overrides.nodeBin ?? process.execPath;
   const hasExplicitEntry = Object.prototype.hasOwnProperty.call(overrides, "syncEntry");
   const explicitEntry = overrides.syncEntry;
-  const vendoredEntry = hasExplicitEntry ? explicitEntry : resolveVendoredSync();
+  const vendoredEntry = hasExplicitEntry ? explicitEntry : resolveVendored("sync");
   if (vendoredEntry) {
     const kind = hasExplicitEntry ? "entry" : "vendored";
     return {

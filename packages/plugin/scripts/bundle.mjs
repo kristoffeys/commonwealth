@@ -17,7 +17,7 @@
 // cross-platform build (or npm publish with per-platform prebuilds / on-install rebuild) is
 // a LATER task — this script is enough to dogfood and run the smoke test locally and in CI.
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -156,6 +156,12 @@ function main() {
     log(`vendoring ${pkg} → ${path.relative(pluginRoot, path.join(vendorDir, pkg))}`);
     cpSync(distSrc, path.join(vendorDir, pkg), { recursive: true });
   }
+
+  // 4) Stamp the plugin version: hooks/lib.mjs ignores a vendor/ bundled for another version.
+  const { version } = JSON.parse(
+    readFileSync(path.join(pluginRoot, ".claude-plugin", "plugin.json"), "utf8"),
+  );
+  writeFileSync(path.join(vendorDir, "VERSION"), `${version}\n`);
 
   log("done. Vendored: " + PACKAGES.join(", "));
   log("Reminder: this bundle is platform-local (better-sqlite3 prebuilt binary).");
